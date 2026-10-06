@@ -1,3 +1,4 @@
+use crate::Rect;
 use std::path::PathBuf;
 
 pub type Result<T, E = Error> = std::result::Result<T, E>;
@@ -17,6 +18,9 @@ pub enum Error {
     Encode { path: PathBuf, message: String },
     #[error("invalid edits: {0}")]
     Edits(String),
+    /// A crop with no pixels left after clamping to the image.
+    #[error("crop {},{},{},{} is empty after clamping to the image", .0.x, .0.y, .0.w, .0.h)]
+    EmptyCrop(Rect),
 }
 
 impl Error {
@@ -41,6 +45,7 @@ impl Error {
             Error::Decode { .. } => "decode",
             Error::Encode { .. } => "encode",
             Error::Edits(_) => "edits",
+            Error::EmptyCrop(_) => "empty_crop",
         }
     }
 }

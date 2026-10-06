@@ -1,5 +1,6 @@
 ---
-status: ready
+status: done
+verified: [checks, behaviour, review]
 blocked_by: []
 references:
   - "Spec: ../spec.md"
@@ -11,7 +12,7 @@ references:
 
 ## Acceptance criteria
 
-- [ ] Golden tests compare `render` output to committed references with a documented tolerance and print a useful diff summary on failure
-- [ ] A documented way to regenerate golden files exists and is never triggered by a plain test run
-- [ ] `pcr render --crop` fully outside the image exits non-zero with a clear error kind; partial overlap still clamps
-- [ ] `just verify` green
+- [x] Golden tests compare `render` output to committed references with a documented tolerance and print a useful diff summary on failure
+- [x] A documented way to regenerate golden files exists and is never triggered by a plain test run
+- [x] `pcr render --crop` fully outside the image exits non-zero with a clear error kind; partial overlap still clamps
+- [x] `just verify` green

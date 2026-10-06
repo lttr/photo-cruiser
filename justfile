@@ -45,6 +45,11 @@ shot script=(root / "scripts/smoke.json") dir=fixtures name="shot":
     cargo run -q -p photo-cruiser-app -- "{{dir}}" --script "{{script}}" --shot "{{artifacts}}/{{name}}.png" --dump-state "{{artifacts}}/{{name}}.json"
     cat "{{artifacts}}/{{name}}.json"
 
+# Rewrite the render golden images (crates/core/tests/golden/) from current output.
+# Only after checking the new output is right; plain test runs never write them.
+bless-golden:
+    PC_BLESS_GOLDEN=1 cargo test -p photo-cruiser-core --test golden render_matches_golden_images
+
 # Regenerate fixtures/ (needs uv; pulls pillow + pillow-heif)
 fixtures:
     uv run -q "{{root}}/scripts/gen_fixtures.py" "{{fixtures}}"
@@ -57,6 +62,8 @@ verify: check build
     mkdir -p "{{artifacts}}"
     test "$("$pcr" list "{{fixtures}}" --json | jq .count)" = 9
     "$pcr" render "{{fixtures}}/img5.HEIC" --crop 10,20,100,50 -o "{{artifacts}}/verify-crop.png" | grep -q "100x50"
+    code=0; out=$("$pcr" render "{{fixtures}}/img1.png" --crop 400,0,50,50 -o "{{artifacts}}/verify-empty.png" --json 2>/dev/null) || code=$?
+    test "$code" = 3 && jq -e '.error.kind == "empty_crop"' <<<"$out" >/dev/null || { echo "empty crop: exit $code, $out"; exit 1; }
     "{{root}}/target/debug/photo-cruiser" "{{fixtures}}" --script "{{root}}/scripts/smoke.json" \
         --shot "{{artifacts}}/verify.png" --dump-state "{{artifacts}}/verify.json"
     jq -e '.index == 4 and .mode == "crop" and .crop == {"x":40,"y":30,"w":200,"h":150} and .errors == [] and .loading == false' \

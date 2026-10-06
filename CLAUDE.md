@@ -18,6 +18,7 @@ Use `just`. It exports `PKG_CONFIG=/usr/bin/pkg-config`, which every cargo call 
 - `just check`: fmt check, clippy with `-D warnings`, and all tests.
 - `just verify`: `check`, then CLI and real-window smoke tests with state assertions. Run it before calling work done.
 - `just test [args]`, `just cli <args>`, `just run [dir]`
+- `just bless-golden`: rewrites the `render` golden images in `crates/core/tests/golden/`. Run it only after checking that the new output is correct. Plain test runs never write them.
 - `just shot [script] [dir] [name]`: drives the real window from a JSON script and writes `<name>.png` and `<name>.json` to `/tmp/photo-cruiser/` (override with `PC_ARTIFACTS`).
 - Skills: `.claude/skills/run-app` (launch and drive) and `.claude/skills/verify-app` (evidence-based verification).
 

@@ -6,7 +6,7 @@
 //!
 //! Exit codes: 0 ok, 1 usage, 2 I/O (missing files, write/encode failures, unsupported
 //! output extension, missing `photo-cruiser` binary), 3 decode (corrupt or unsupported
-//! input image, invalid edits JSON).
+//! input image, invalid edits JSON, a crop that is empty after clamping to the image).
 
 use clap::{Parser, Subcommand};
 use photo_cruiser_core::export::{self, OutFormat};
@@ -21,7 +21,7 @@ use std::time::Instant;
 const AFTER_HELP: &str = "\
 --json prints pretty JSON to stdout; on failure {\"error\": {\"kind\", \"message\"}}.
 Exit codes: 0 ok, 1 usage, 2 I/O (incl. encode, unsupported output format),
-3 decode (incl. unsupported input, invalid edits JSON).";
+3 decode (incl. unsupported input, invalid edits JSON, crop outside the image).";
 
 #[derive(Parser)]
 #[command(name = "pcr", version, about = "Photo Cruiser command line", after_help = AFTER_HELP)]
@@ -53,7 +53,8 @@ enum Cmd {
         /// Edit stack JSON (`{"version": 1, "ops": [...]}`).
         #[arg(long)]
         edits: Option<PathBuf>,
-        /// Crop `x,y,w,h` in source pixels, appended after the edits.
+        /// Crop `x,y,w,h` in source pixels, appended after the edits. Clamped to the
+        /// image; a crop fully outside it is an `empty_crop` error.
         #[arg(long, value_parser = parse_crop)]
         crop: Option<Rect>,
         /// Downscale the result so its longer side is at most N.
@@ -103,7 +104,7 @@ impl From<Error> for Fail {
     fn from(e: Error) -> Self {
         let code = match e {
             Error::Io { .. } | Error::Encode { .. } | Error::UnsupportedOutput { .. } => 2,
-            Error::Unsupported { .. } | Error::Decode { .. } | Error::Edits(_) => 3,
+            Error::Unsupported { .. } | Error::Decode { .. } | Error::Edits(_) | Error::EmptyCrop(_) => 3,
         };
         Fail::new(code, e.kind(), e)
     }
@@ -266,7 +267,7 @@ fn write_rendered(
     // Check the output extension before the (possibly slow) decode.
     let format = OutFormat::from_path(output, quality)?;
     let src = photo_cruiser_core::decode(file)?;
-    let img = render::render(&src, edits, RenderOpts { max_side });
+    let img = render::render(&src, edits, RenderOpts { max_side })?;
     export::save(&img, output, format)?;
     let (width, height) = img.dimensions();
     if json {

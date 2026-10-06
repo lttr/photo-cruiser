@@ -105,6 +105,43 @@ fn render_crop_heic_exact() {
 }
 
 #[test]
+fn render_crop_outside_image_fails() {
+    let dir = tempfile::tempdir().unwrap();
+    let out = dir.path().join("out.png");
+    let o = out.to_str().unwrap();
+    let v = run_json(&["render", &fixture("img1.png"), "--crop", "400,10,50,50", "-o", o, "--json"], 3);
+    assert_eq!(v["error"]["kind"], "empty_crop");
+    assert!(v["error"]["message"].as_str().unwrap().contains("400,10,50,50"), "{v}");
+    assert!(!out.exists(), "nothing is written for an empty crop");
+    // Partial overlap clamps: 320x240 image, crop starts at 300 → 20 px wide.
+    let v = run_json(&["render", &fixture("img1.png"), "--crop", "300,200,50,50", "-o", o, "--json"], 0);
+    assert_eq!((v["width"].as_u64(), v["height"].as_u64()), (Some(20), Some(40)));
+}
+
+#[test]
+fn export_crop_outside_image_fails() {
+    let dir = tempfile::tempdir().unwrap();
+    let edits = dir.path().join("e.json");
+    std::fs::write(&edits, r#"{"version": 1, "ops": [{"op": "crop", "x": -100, "y": 0, "w": 50, "h": 50}]}"#)
+        .unwrap();
+    let out = dir.path().join("out.jpg");
+    let v = run_json(
+        &[
+            "export",
+            &fixture("img2.jpg"),
+            "--edits",
+            edits.to_str().unwrap(),
+            "-o",
+            out.to_str().unwrap(),
+            "--json",
+        ],
+        3,
+    );
+    assert_eq!(v["error"]["kind"], "empty_crop");
+    assert!(!out.exists());
+}
+
+#[test]
 fn render_max_side() {
     let dir = tempfile::tempdir().unwrap();
     let out = dir.path().join("out.jpg");
