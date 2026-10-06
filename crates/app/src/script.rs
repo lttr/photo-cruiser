@@ -3,7 +3,8 @@
 //! `photo-cruiser <dir> [--script steps.json] [--shot out.png] [--dump-state state.json]`
 //!
 //! 1. The window opens normally (boot opens the folder and starts decoding).
-//! 2. Each step is applied once the loader is idle (current ± 1 decoded).
+//! 2. Each step is applied once the loader is idle (the photos around the current one
+//!    decoded, no fade running).
 //!    A `quit` step ends the script early (evidence is still written).
 //! 3. Once all steps ran and the loader is idle, the current image is explicitly
 //!    allocated on the GPU (`image::allocate`; big images are otherwise uploaded

@@ -1,6 +1,6 @@
 //! Every fixture format through the real decoders. Fixtures: `just fixtures`.
 
-use photo_cruiser_core::{Error, Folder, Format, decode, probe};
+use photo_cruiser_core::{Error, Folder, Format, decode, embedded_preview, probe};
 use std::path::{Path, PathBuf};
 
 fn fixtures() -> PathBuf {
@@ -69,4 +69,24 @@ fn downscale_keeps_source_size() {
     let d = decode(&fixtures().join("img5.HEIC")).unwrap().downscale(100);
     assert_eq!(d.image.dimensions(), (100, 75));
     assert_eq!(d.source_size(), (320, 240));
+}
+
+#[test]
+fn embedded_previews() {
+    let dir = fixtures().join("previews");
+    // HEIF thumbnail item.
+    let p = embedded_preview(&dir.join("thumb.HEIC")).unwrap().expect("heic thumbnail");
+    assert_eq!((p.format, p.image.dimensions(), p.source_size()), (Format::Heic, (80, 60), (320, 240)));
+    // EXIF IFD1 thumbnail, oriented like the photo (EXIF 6: marker ends up top-right).
+    let p = embedded_preview(&dir.join("thumb-exif6.jpg")).unwrap().expect("exif thumbnail");
+    assert_eq!((p.format, p.image.dimensions(), p.source_size()), (Format::Jpeg, (60, 80), (240, 320)));
+    let px = p.image.get_pixel(56, 3).0;
+    assert!(px[0] > 150 && px[1] < 100 && px[2] < 100, "marker pixel {px:?}");
+    // 4:3 thumbnail of a 16:9 photo: rejected.
+    assert!(embedded_preview(&dir.join("letterbox.jpg")).unwrap().is_none());
+    // No thumbnail, other formats: none. Broken: error.
+    for name in ["img2.jpg", "img5.HEIC", "img1.png", "img9.webp"] {
+        assert!(embedded_preview(&fixtures().join(name)).unwrap().is_none(), "{name}");
+    }
+    assert!(embedded_preview(&fixtures().join("img12-broken.jpg")).is_err());
 }

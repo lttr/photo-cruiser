@@ -1,19 +1,31 @@
-//! The app model: folder, index, loader, crop, mode. Plain data + [`Action`] handling, no
-//! iced runtime, so it can be driven directly in tests (decode synchronously with
-//! [`decode_picture`] and feed results to [`State::finish`]).
+//! The app model: folder, index, loader, what is on screen, crop, mode. Plain data +
+//! [`Action`] handling, no iced runtime, so it can be driven directly in tests (decode
+//! synchronously with [`decode_job`] and feed results to [`State::finish`]).
+//!
+//! Switching never blanks the image area: until the new photo is decoded, its embedded
+//! preview is shown, or else the previous photo stays. Each change of the shown image
+//! cross-fades over [`State::transition`], except while the user is flipping through
+//! quickly (a held arrow key), where fades would only add lag.
 
 use crate::action::Action;
 use iced::widget::image::Handle;
 use photo_cruiser_core::crop::{CropTool, MouseKind};
 use photo_cruiser_core::geom::PixelRect;
-use photo_cruiser_core::loader::{Job, Loader};
+use photo_cruiser_core::loader::{Job, Kind, Loader};
 use photo_cruiser_core::{Folder, Point, Size};
 use serde::Serialize;
 use std::path::{Path, PathBuf};
+use std::time::{Duration, Instant};
 
 /// Longest side of the displayed (GPU) image. Real GPUs take 8192+; 4096 keeps uploads
 /// small. Crop coordinates are unaffected (always source pixels).
 pub const DEFAULT_MAX_SIDE: u32 = 4096;
+
+/// Default cross-fade between shown images. Short enough not to feel like lag.
+pub const DEFAULT_TRANSITION: Duration = Duration::from_millis(120);
+
+/// Selections closer together than this count as flipping through (no fades).
+const RAPID: Duration = Duration::from_millis(200);
 
 /// A decoded image ready for display.
 #[derive(Clone, Debug)]
@@ -31,12 +43,49 @@ impl Picture {
 
 pub type Loaded = Result<Picture, String>;
 
-/// Decode `path` for display (blocking). Errors become strings for the UI.
-pub fn decode_picture(path: &Path, max_side: u32) -> Loaded {
-    let d = photo_cruiser_core::decode::decode_max_side(path, Some(max_side))
-        .map_err(|e| e.to_string().trim_end().to_string())?;
+/// Run a loader job on `path` (blocking). Errors become strings for the UI; a preview
+/// job for a photo without an embedded preview is an `Err` too (never shown).
+pub fn decode_job(path: &Path, kind: Kind, max_side: u32) -> Loaded {
+    let msg = |e: photo_cruiser_core::Error| e.to_string().trim_end().to_string();
+    let d = match kind {
+        Kind::Full => photo_cruiser_core::decode::decode_max_side(path, Some(max_side)).map_err(msg)?,
+        Kind::Preview => {
+            photo_cruiser_core::embedded_preview(path).map_err(msg)?.ok_or("no embedded preview")?
+        }
+    };
     let (w, h) = d.image.dimensions();
     Ok(Picture { source: d.source_size(), handle: Handle::from_rgba(w, h, d.image.into_raw()) })
+}
+
+/// The image in the image area. It may lag behind the current index (the previous photo
+/// stays until the new one, or its preview, is decoded).
+#[derive(Clone, Debug)]
+pub struct Shown {
+    pub index: usize,
+    pub handle: Handle,
+    /// Full decode, not an embedded preview.
+    pub sharp: bool,
+}
+
+/// A cross-fade from `from` to [`State::shown`].
+#[derive(Clone, Debug)]
+pub struct Fade {
+    pub from: Handle,
+    pub start: Instant,
+}
+
+/// What the image area shows, relative to the current index (in the state dump).
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "lowercase")]
+pub enum Display {
+    /// Nothing (no image yet, an error or a message).
+    None,
+    /// The current photo, fully decoded.
+    Sharp,
+    /// The current photo's embedded preview.
+    Preview,
+    /// Still the previous photo; the current one is decoding.
+    Previous,
 }
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize)]
@@ -66,10 +115,22 @@ pub struct State {
     pub max_side: u32,
     /// Rejected actions and folder errors, oldest first.
     pub errors: Vec<String>,
+    pub shown: Option<Shown>,
+    pub fade: Option<Fade>,
+    /// Cross-fade duration; zero disables fades.
+    pub transition: Duration,
+    /// The last two selections (for detecting rapid flipping).
+    selected_at: [Option<Instant>; 2],
+    /// `PC_TRACE=1`: log switch latency and decode times to stderr.
+    trace: bool,
+    /// When the current index was selected, until its sharp image is shown.
+    waiting_since: Option<Instant>,
+    /// Start of each decode in flight.
+    job_started: Vec<(Job, Instant)>,
 }
 
 impl State {
-    pub fn new(max_side: u32) -> Self {
+    pub fn new(max_side: u32, transition: Duration) -> Self {
         State {
             folder: None,
             folder_error: None,
@@ -79,6 +140,13 @@ impl State {
             mode: Mode::Browse,
             max_side,
             errors: Vec::new(),
+            shown: None,
+            fade: None,
+            transition,
+            selected_at: [None; 2],
+            trace: std::env::var_os("PC_TRACE").is_some_and(|v| v != "0"),
+            waiting_since: None,
+            job_started: Vec::new(),
         }
     }
 
@@ -104,9 +172,60 @@ impl State {
         self.current()?.as_ref().ok()
     }
 
-    /// Nothing decoding and current ± 1 loaded.
+    /// Nothing decoding, the photos around the current one loaded, no fade running.
     pub fn is_idle(&self) -> bool {
-        self.loader.is_idle(self.index, self.len())
+        self.loader.is_idle(self.index, self.len()) && self.fade_progress().is_none()
+    }
+
+    pub fn display(&self) -> Display {
+        match &self.shown {
+            None => Display::None,
+            Some(s) if s.index != self.index => Display::Previous,
+            Some(s) if s.sharp => Display::Sharp,
+            Some(_) => Display::Preview,
+        }
+    }
+
+    /// The running fade: the image fading out and the progress (0..1, eased).
+    pub fn fade_progress(&self) -> Option<(&Handle, f32)> {
+        let f = self.fade.as_ref()?;
+        let t = f.start.elapsed().as_secs_f32() / self.transition.as_secs_f32();
+        (t < 1.0).then_some((&f.from, t * t * (3.0 - 2.0 * t)))
+    }
+
+    /// Show the best image available for the current index (sharp, else preview; else
+    /// keep what is shown), fading from the old one unless the user is flipping quickly.
+    fn refresh(&mut self) {
+        let target = match (self.current(), self.loader.preview(self.index)) {
+            (Some(Ok(p)), _) => (p.handle.clone(), true),
+            (Some(Err(_)), _) => {
+                (self.shown, self.fade) = (None, None);
+                return;
+            }
+            (None, Some(Ok(p))) => (p.handle.clone(), false),
+            (None, _) => return,
+        };
+        let (handle, sharp) = target;
+        if self.shown.as_ref().is_some_and(|s| s.index == self.index && s.handle.id() == handle.id()) {
+            return;
+        }
+        if self.trace
+            && let Some(t) = self.waiting_since
+        {
+            let ms = t.elapsed().as_secs_f64() * 1000.0;
+            let what = if sharp { "sharp" } else { "preview" };
+            eprintln!("trace: switch {}: {what} shown after {ms:.0} ms", self.trace_name(self.index));
+            if sharp {
+                self.waiting_since = None;
+            }
+        }
+        let rapid = match self.selected_at {
+            [Some(last), Some(before)] => last - before < RAPID && last.elapsed() < RAPID,
+            _ => false,
+        };
+        let from = self.shown.take().map(|s| s.handle).filter(|_| !rapid && !self.transition.is_zero());
+        self.fade = from.map(|from| Fade { from, start: Instant::now() });
+        self.shown = Some(Shown { index: self.index, handle, sharp });
     }
 
     fn error(&mut self, msg: String) {
@@ -159,8 +278,17 @@ impl State {
     }
 
     fn select(&mut self, index: usize) {
+        let now = Instant::now();
+        self.selected_at = [Some(now), self.selected_at[0]];
         self.index = index;
         self.crop.clear();
+        self.waiting_since = self.trace.then_some(now);
+        self.refresh();
+    }
+
+    fn trace_name(&self, index: usize) -> String {
+        let name = self.folder.as_ref().and_then(|f| f.entries.get(index)).map_or("?", |e| e.name.as_str());
+        format!("{} ({name})", index + 1)
     }
 
     /// Open a folder, or a file's folder positioned on that file. Resets everything
@@ -172,6 +300,7 @@ impl State {
             false => (path.clone(), None),
         };
         self.loader.reset();
+        (self.shown, self.fade) = (None, None);
         self.crop.clear();
         self.mode = Mode::Browse;
         self.index = 0;
@@ -202,15 +331,33 @@ impl State {
         }
     }
 
-    /// The next decode to start (at most one in flight), with the file to decode.
+    /// The next decode to start, with the file to decode, while a loader slot is free.
+    /// Call until `None`.
     pub fn next_job(&mut self) -> Option<(Job, PathBuf)> {
         let job = self.loader.next_job(self.index, self.len())?;
+        if self.trace {
+            self.job_started.push((job, Instant::now()));
+        }
         let path = self.folder.as_ref()?.entries.get(job.index)?.path.clone();
         Some((job, path))
     }
 
     pub fn finish(&mut self, job: Job, result: Loaded) {
-        self.loader.finish(job, result);
+        let fresh = self.loader.finish(job, result);
+        if self.trace {
+            let started = self.job_started.iter().position(|(j, _)| *j == job);
+            let took = started.map_or(0.0, |i| self.job_started.remove(i).1.elapsed().as_secs_f64() * 1000.0);
+            let what = match (fresh, job.kind, self.loader.preview(job.index)) {
+                (false, ..) => "dropped stale",
+                (true, Kind::Full, _) => "decoded",
+                (true, Kind::Preview, Some(Ok(_))) => "preview read",
+                (true, Kind::Preview, _) => "no preview in",
+            };
+            eprintln!("trace: {what} {} in {took:.0} ms", self.trace_name(job.index));
+        }
+        if fresh && job.index == self.index {
+            self.refresh();
+        }
     }
 
     /// Integer source-pixel selection.
@@ -260,6 +407,7 @@ impl State {
             title: self.title(),
             status: self.status(),
             loading: self.current_path().is_some() && self.current().is_none(),
+            display: self.display(),
             errors,
             window,
             shot: shot.map(|p| p.display().to_string()),
@@ -290,6 +438,7 @@ pub struct Dump {
     pub status: String,
     /// The current image is still decoding.
     pub loading: bool,
+    pub display: Display,
     pub errors: Vec<String>,
     /// Logical size of the window (from the screenshot or `window::size`).
     pub window: Option<WindowSize>,

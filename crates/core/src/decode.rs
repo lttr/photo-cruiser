@@ -141,6 +141,84 @@ pub fn decode_max_side(path: &Path, max_side: Option<u32>) -> Result<Decoded> {
     })
 }
 
+/// The photo's embedded preview, if it has one: the EXIF thumbnail of a JPEG or the
+/// thumbnail item of a HEIF/AVIF, oriented like the photo. Reads only headers and the
+/// small thumbnail, so it takes a few ms even when the full decode takes hundreds.
+/// `Ok(None)` when there is none, or when its aspect ratio doesn't match the photo
+/// (letterboxed thumbnails would jump when the full image replaces them).
+pub fn embedded_preview(path: &Path) -> Result<Option<Decoded>> {
+    let decoded = if let Some(format) = Format::heif_from_path(path) {
+        let (_ctx, handle) = heif_open(path)?;
+        let mut ids = [0; 1];
+        if handle.thumbnail_ids(&mut ids) == 0 {
+            return Ok(None);
+        }
+        let thumb = handle.thumbnail(ids[0]).map_err(|e| Error::decode(path, e))?;
+        let image = heif_rgba(path, &thumb)?;
+        Decoded { image, format, source_width: handle.width(), source_height: handle.height() }
+    } else {
+        let (format, mut decoder) = image_decoder(path)?;
+        if format != Format::Jpeg {
+            return Ok(None);
+        }
+        let (w, h) = decoder.dimensions();
+        let exif = decoder.exif_metadata().map_err(|e| Error::decode(path, e))?;
+        let Some(jpeg) = exif.as_deref().and_then(exif_thumbnail) else { return Ok(None) };
+        let Ok(mut img) = image::load_from_memory_with_format(jpeg, image::ImageFormat::Jpeg) else {
+            return Ok(None);
+        };
+        let orientation = decoder.orientation().map_err(|e| Error::decode(path, e))?;
+        let (source_width, source_height) = match orientation.to_exif() {
+            5..=8 => (h, w),
+            _ => (w, h),
+        };
+        img.apply_orientation(orientation);
+        Decoded { image: img.into_rgba8(), format, source_width, source_height }
+    };
+    let (tw, th) = decoded.image.dimensions();
+    let aspect = |w: u32, h: u32| w as f64 / h.max(1) as f64;
+    let mismatch = (aspect(tw, th) / aspect(decoded.source_width, decoded.source_height) - 1.0).abs();
+    Ok((mismatch < 0.03).then_some(decoded))
+}
+
+/// The JPEG thumbnail referenced by IFD1 of an EXIF block (a TIFF structure).
+fn exif_thumbnail(exif: &[u8]) -> Option<&[u8]> {
+    let le = match exif.get(..2)? {
+        b"II" => true,
+        b"MM" => false,
+        _ => return None,
+    };
+    let u16_at = |o: usize| {
+        let b: [u8; 2] = exif.get(o..o + 2)?.try_into().ok()?;
+        Some(if le { u16::from_le_bytes(b) } else { u16::from_be_bytes(b) })
+    };
+    let u32_at = |o: usize| {
+        let b: [u8; 4] = exif.get(o..o + 4)?.try_into().ok()?;
+        Some(if le { u32::from_le_bytes(b) } else { u32::from_be_bytes(b) })
+    };
+    let ifd0 = u32_at(4)? as usize;
+    let ifd1 = u32_at(ifd0 + 2 + 12 * u16_at(ifd0)? as usize)? as usize;
+    if ifd1 == 0 {
+        return None;
+    }
+    let (mut offset, mut length) = (None, None);
+    for i in 0..u16_at(ifd1)? as usize {
+        let entry = ifd1 + 2 + 12 * i;
+        // SHORT (3) values sit in the first two bytes of the value field.
+        let value = match u16_at(entry + 2)? {
+            3 => u16_at(entry + 8)? as usize,
+            _ => u32_at(entry + 8)? as usize,
+        };
+        match u16_at(entry)? {
+            0x0201 => offset = Some(value),
+            0x0202 => length = Some(value),
+            _ => {}
+        }
+    }
+    let (offset, length) = (offset?, length?);
+    exif.get(offset..offset.checked_add(length)?)
+}
+
 fn image_decoder(path: &Path) -> Result<(Format, impl ImageDecoder)> {
     let reader = ImageReader::open(path)
         .map_err(|e| Error::io(path, e))?
@@ -171,15 +249,23 @@ fn heif_open(path: &Path) -> Result<(libheif_rs::HeifContext<'static>, libheif_r
 }
 
 fn decode_heif(path: &Path, format: Format) -> Result<Decoded> {
-    use libheif_rs::{ColorSpace, LibHeif, RgbChroma};
     let (_ctx, handle) = heif_open(path)?;
+    let image = heif_rgba(path, &handle)?;
+    let (w, h) = image.dimensions();
+    Ok(Decoded { image, format, source_width: w, source_height: h })
+}
+
+fn heif_rgba(path: &Path, handle: &libheif_rs::ImageHandle) -> Result<RgbaImage> {
+    use libheif_rs::{ColorSpace, LibHeif, RgbChroma};
     let img = LibHeif::new()
-        .decode(&handle, ColorSpace::Rgb(RgbChroma::Rgba), None)
+        .decode(handle, ColorSpace::Rgb(RgbChroma::Rgba), None)
         .map_err(|e| Error::decode(path, e))?;
     let plane = img.planes().interleaved.ok_or_else(|| Error::decode(path, "no interleaved RGBA plane"))?;
     let (w, h, row) = (plane.width, plane.height, plane.width as usize * 4);
-    let data: Vec<u8> =
-        plane.data.chunks(plane.stride).take(h as usize).flat_map(|r| &r[..row]).copied().collect();
-    let image = RgbaImage::from_raw(w, h, data).ok_or_else(|| Error::decode(path, "short RGBA plane"))?;
-    Ok(Decoded { image, format, source_width: w, source_height: h })
+    // Row copies, not a per-byte iterator: 48 MB per 12 MP photo is slow unoptimised (dev builds).
+    let mut data = Vec::with_capacity(row * h as usize);
+    for r in plane.data.chunks(plane.stride).take(h as usize) {
+        data.extend_from_slice(&r[..row]);
+    }
+    RgbaImage::from_raw(w, h, data).ok_or_else(|| Error::decode(path, "short RGBA plane"))
 }

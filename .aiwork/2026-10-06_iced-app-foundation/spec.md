@@ -83,7 +83,8 @@ pcr app <dir> [--script s.json] [--shot out.png] [--dump-state]   # launches the
   - `theme.rs`: COSMIC RON → `Theme::custom`, with a dark fallback
 - **Actions:** a serde `Action` enum is the single entry point for behaviour: `Open(path)`, `Next`, `Prev`, `Goto(i)`, `ToggleCrop`, `SetCrop(Rect)`, `ClearCrop`, `Quit`. Keyboard, buttons, scripts, tests and a future control socket all produce `Action`s. `Message` wraps them, plus internal events (decode done, etc.).
 - **Keyboard** goes through a focused widget (the canvas overlay), not `event::listen` subscriptions, because `iced_test` doesn't feed subscriptions.
-- **Loading:** one decode in flight for the latest index, ±1 preload when idle, a generation counter per folder, and display downscaling to `max_texture_side`.
+- **Loading:** no queue; a fixed set of slots (one for the current photo's embedded preview, two for full decodes) each take the most wanted missing item when they free up. Preload is biased towards the browsing direction (+1, +2, −1, +3). A generation counter per folder, and display downscaling to `max_texture_side`.
+- **Switching:** never blank. Show the embedded preview (EXIF / HEIF thumbnail) until the full decode is ready, else keep the previous photo. Cross-fade 120 ms (`--transition MS`, 0 = off); no fade while flipping quickly (selections < 200 ms apart).
 - **Window:** set an application id (`com.lukastrumm.PhotoCruiser`, placeholder). Title: `Photo Cruiser — <folder>`. Status line: `name — i / N[ — crop W×H @ X,Y]`.
 
 ### Agent and script mode

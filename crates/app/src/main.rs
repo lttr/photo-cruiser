@@ -2,7 +2,7 @@
 //!
 //! ```text
 //! photo-cruiser [DIR] [--script steps.json] [--shot out.png] [--dump-state state.json]
-//!               [--max-side N] [--timeout SECS]
+//!               [--max-side N] [--transition MS] [--timeout SECS]
 //! ```
 //! Any of `--script/--shot/--dump-state` switches to script mode (see [`script`]).
 //! Exit codes: 0 ok, 1 runtime failure (window, writing PNG/JSON), 2 usage or bad
@@ -25,7 +25,7 @@ mod theme;
 mod view;
 
 const USAGE: &str = "usage: photo-cruiser [DIR] [--script steps.json] [--shot out.png] \
-[--dump-state state.json] [--max-side N] [--timeout SECS]";
+[--dump-state state.json] [--max-side N] [--transition MS] [--timeout SECS]";
 
 struct Args {
     cfg: app::Config,
@@ -48,6 +48,10 @@ fn parse_args(mut args: impl Iterator<Item = String>) -> Result<Args, String> {
             "--dump-state" => script.dump = Some(value("--dump-state")?.into()),
             "--max-side" => {
                 cfg.max_side = value("--max-side")?.parse().map_err(|e| format!("--max-side: {e}"))?;
+            }
+            "--transition" => {
+                let ms: u64 = value("--transition")?.parse().map_err(|e| format!("--transition: {e}"))?;
+                cfg.transition = Duration::from_millis(ms);
             }
             "--timeout" => {
                 let secs: f64 = value("--timeout")?.parse().map_err(|e| format!("--timeout: {e}"))?;

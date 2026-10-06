@@ -15,7 +15,7 @@
 use crate::action::Action;
 use crate::app::{self, Config};
 use crate::message::Message;
-use crate::state::{Effect, Mode, State, decode_picture};
+use crate::state::{Display, Effect, Mode, State, decode_job};
 use iced::futures::channel::mpsc;
 use iced::keyboard::{Key, key::Named};
 use iced::mouse::Button;
@@ -25,6 +25,7 @@ use iced_test::instruction::{Interaction, Mouse, Target};
 use iced_test::selector::{self, Candidate};
 use iced_test::{Instruction, Simulator};
 use photo_cruiser_core::geom::{PixelRect, fit_rect};
+use photo_cruiser_core::loader::Kind;
 use photo_cruiser_core::{Folder, Rect};
 use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
@@ -48,14 +49,15 @@ fn names() -> Vec<String> {
 /// Run decodes synchronously until the loader is idle.
 fn settle(s: &mut State) {
     while let Some((job, path)) = s.next_job() {
-        let r = decode_picture(&path, s.max_side);
+        let r = decode_job(&path, job.kind, s.max_side);
         s.finish(job, r);
     }
     assert!(s.is_idle());
 }
 
+/// No fades: they would make `is_idle` time-dependent.
 fn opened(path: &Path) -> State {
-    let mut s = State::new(TEST_MAX_SIDE);
+    let mut s = State::new(TEST_MAX_SIDE, Duration::ZERO);
     assert_eq!(s.apply(&Action::Open { path: path.into() }), Effect::None);
     settle(&mut s);
     s
@@ -149,6 +151,73 @@ fn update_open_resets() {
 }
 
 #[test]
+fn update_previous_photo_stays_until_decoded() {
+    let mut s = opened(&fixtures());
+    assert_eq!(s.display(), Display::Sharp);
+    // Neighbour: preloaded, shown at once.
+    s.apply(&Action::Next);
+    assert_eq!((s.display(), s.shown.as_ref().unwrap().index), (Display::Sharp, 1));
+    // Far jump: the previous photo stays (no blank, no "Loading…") until it's decoded.
+    s.apply(&Action::Goto { index: 6 });
+    assert_eq!((s.display(), s.shown.as_ref().unwrap().index), (Display::Previous, 1));
+    assert!(s.dump(None, None).loading);
+    settle(&mut s);
+    assert_eq!((s.display(), s.shown.as_ref().unwrap().index), (Display::Sharp, 6));
+    // A broken photo shows its error instead.
+    s.apply(&Action::Goto { index: 8 });
+    settle(&mut s);
+    assert_eq!(s.display(), Display::None);
+}
+
+#[test]
+fn update_embedded_preview_then_sharp() {
+    let dir = fixtures().join("previews"); // letterbox.jpg, thumb-exif6.jpg, thumb.HEIC
+    let mut s = opened(&dir);
+    for (index, preview_size) in [(1, (240, 320)), (2, (320, 240))] {
+        s.apply(&Action::Open { path: dir.clone() });
+        s.apply(&Action::Goto { index });
+        // The preview job comes first and gets its own slot.
+        let (job, path) = s.next_job().unwrap();
+        assert_eq!((job.index, job.kind), (index, Kind::Preview));
+        s.finish(job, decode_job(&path, job.kind, s.max_side));
+        assert_eq!(s.display(), Display::Preview, "{path:?}");
+        assert!(s.picture().is_none(), "no crop on a preview");
+        assert_eq!(s.loader.preview(index).unwrap().as_ref().unwrap().source, preview_size);
+        settle(&mut s);
+        assert_eq!(s.display(), Display::Sharp);
+        assert_eq!(s.picture().unwrap().source, preview_size);
+    }
+    // Aspect mismatch: no preview, the previous photo stays instead.
+    s.apply(&Action::Goto { index: 0 });
+    let (job, path) = s.next_job().unwrap();
+    assert_eq!(job.kind, Kind::Preview);
+    s.finish(job, decode_job(&path, job.kind, s.max_side));
+    assert_eq!(s.display(), Display::Previous);
+}
+
+#[test]
+fn update_fades_except_when_flipping_quickly() {
+    let mut s = opened(&fixtures());
+    s.transition = Duration::from_millis(100);
+    s.apply(&Action::Next); // preloaded: fades in at once
+    assert!(s.fade_progress().is_some());
+    assert!(!s.is_idle(), "script mode waits for the fade");
+    std::thread::sleep(Duration::from_millis(120));
+    assert!(s.fade_progress().is_none());
+    settle(&mut s);
+    // Two switches in quick succession (held key): the second one is instant.
+    s.apply(&Action::Prev);
+    s.apply(&Action::Next);
+    assert_eq!(s.display(), Display::Sharp);
+    assert!(s.fade.is_none());
+    // Zero transition: never.
+    std::thread::sleep(Duration::from_millis(250));
+    s.transition = Duration::ZERO;
+    s.apply(&Action::Prev);
+    assert!(s.fade.is_none());
+}
+
+#[test]
 fn dump_json_shape() {
     let mut s = opened(&fixtures());
     s.apply(&Action::SetCrop(Rect::new(40.4, 30.0, 200.0, 150.0)));
@@ -159,6 +228,7 @@ fn dump_json_shape() {
     assert_eq!(v["mode"], "crop");
     assert_eq!(v["crop"], serde_json::json!({"x": 40, "y": 30, "w": 200, "h": 150}));
     assert_eq!(v["loading"], false);
+    assert_eq!(v["display"], "sharp");
     assert_eq!(v["shot"], "/tmp/x.png");
     assert!(v["file"].as_str().unwrap().ends_with("img1.png"));
     assert!(v["window"].is_null());
@@ -174,7 +244,12 @@ struct Harness<P: Program<Message = Message> + 'static> {
 }
 
 fn harness() -> Harness<impl Program<Message = Message, State = app::App>> {
-    let cfg = Config { folder: Some(fixtures()), max_side: TEST_MAX_SIDE, script: None };
+    let cfg = Config {
+        folder: Some(fixtures()),
+        max_side: TEST_MAX_SIDE,
+        transition: Duration::ZERO,
+        script: None,
+    };
     Harness::new(app::application(cfg))
 }
 

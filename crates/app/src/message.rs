@@ -13,6 +13,8 @@ pub enum Message {
     /// `Ctrl+O` / toolbar: show the folder picker (interactive only, not an `Action`).
     OpenDialog,
     FolderPicked(Option<PathBuf>),
+    /// Redraw tick while a fade runs.
+    Frame,
     /// A background decode finished.
     Decoded(Job, Loaded),
     /// Mouse press/move/release over the image: source pixel (unclamped), grab tolerance

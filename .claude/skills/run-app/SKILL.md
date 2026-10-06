@@ -28,7 +28,7 @@ With `--json`, errors also print `{"error": {"kind", "message"}}` to stdout. Exi
 ## GUI: script mode (the way to drive the real window)
 
 ```bash
-target/debug/photo-cruiser <dir> --script steps.json --shot /tmp/photo-cruiser/<name>.png --dump-state /tmp/photo-cruiser/<name>.json [--timeout 30] [--max-side 4096]
+target/debug/photo-cruiser <dir> --script steps.json --shot /tmp/photo-cruiser/<name>.png --dump-state /tmp/photo-cruiser/<name>.json [--timeout 30] [--max-side 4096] [--transition 120]
 # or: just shot <script> <dir> <name>
 ```
 
@@ -52,7 +52,7 @@ Put scripts and outputs in `/tmp/photo-cruiser/` (`mkdir -p` it), never in the r
 - `set_crop` takes source pixels (after orientation), turns crop mode on, and is clamped to the image.
 - `quit` ends the script early; the shot and state files are still written.
 
-The state JSON has these fields: `folder`, `count`, `index` (0-based), `position` (`"i / N"`), `file`, `mode` (`browse`|`crop`), `crop` (`{x,y,w,h}` or null), `title`, `status`, `loading`, `errors`, `window`, `shot`.
+The state JSON has these fields: `folder`, `count`, `index` (0-based), `position` (`"i / N"`), `file`, `mode` (`browse`|`crop`), `crop` (`{x,y,w,h}` or null), `title`, `status`, `loading`, `display` (`sharp`|`preview`|`previous`|`none`: what the image area shows for the current index), `errors`, `window`, `shot`.
 
 Read the PNG with the Read tool to see the window. Mouse drags and keyboard input can't be scripted; they're covered by the `iced_test` suite (`crates/app/src/tests.rs`), which is the place to add interaction checks.
 

@@ -4,10 +4,12 @@
 use crate::action::Action;
 use crate::message::Message;
 use crate::script::{self, Runner, ScriptConfig};
-use crate::state::{DEFAULT_MAX_SIDE, Effect, Loaded, State, decode_picture};
+use crate::state::{DEFAULT_MAX_SIDE, DEFAULT_TRANSITION, Effect, Loaded, State, decode_job};
 use crate::{theme, view};
-use iced::{Task, window};
+use iced::{Subscription, Task, window};
+use photo_cruiser_core::loader::Kind;
 use std::path::PathBuf;
+use std::time::Duration;
 
 pub const APP_ID: &str = "com.lukastrumm.PhotoCruiser";
 pub const WINDOW_SIZE: iced::Size = iced::Size::new(1100.0, 850.0);
@@ -17,12 +19,14 @@ pub struct Config {
     pub folder: Option<PathBuf>,
     /// Longest side of the displayed image (GPU texture).
     pub max_side: u32,
+    /// Cross-fade between images; zero disables it.
+    pub transition: Duration,
     pub script: Option<ScriptConfig>,
 }
 
 impl Default for Config {
     fn default() -> Self {
-        Config { folder: None, max_side: DEFAULT_MAX_SIDE, script: None }
+        Config { folder: None, max_side: DEFAULT_MAX_SIDE, transition: DEFAULT_TRANSITION, script: None }
     }
 }
 
@@ -30,6 +34,7 @@ impl Default for Config {
 pub fn application(cfg: Config) -> iced::Application<impl iced::Program<State = App, Message = Message>> {
     iced::application(move || App::new(cfg.clone()), App::update, view::view)
         .title(App::title)
+        .subscription(App::subscription)
         .theme(|_: &App| theme::theme())
         .default_font(theme::get().font)
         .window(window_settings())
@@ -58,7 +63,8 @@ pub struct App {
 
 impl App {
     pub fn new(cfg: Config) -> (Self, Task<Message>) {
-        let mut app = App { state: State::new(cfg.max_side), script: cfg.script.map(Runner::new) };
+        let mut app =
+            App { state: State::new(cfg.max_side, cfg.transition), script: cfg.script.map(Runner::new) };
         if let Some(folder) = cfg.folder {
             app.state.apply(&Action::Open { path: folder });
         }
@@ -69,6 +75,14 @@ impl App {
 
     pub fn title(&self) -> String {
         self.state.title()
+    }
+
+    /// Redraw every frame while a fade runs.
+    pub fn subscription(&self) -> Subscription<Message> {
+        match self.state.fade_progress() {
+            Some(_) => window::frames().map(|_| Message::Frame),
+            None => Subscription::none(),
+        }
     }
 
     pub fn update(&mut self, message: Message) -> Task<Message> {
@@ -90,6 +104,7 @@ impl App {
                 self.state.finish(job, result);
                 Task::none()
             }
+            Message::Frame => Task::none(),
             Message::Crop(kind, p, tol) => {
                 self.state.crop_mouse(kind, p, tol);
                 Task::none()
@@ -99,17 +114,19 @@ impl App {
         Task::batch([task, self.load_next()])
     }
 
-    /// Start the next decode (current first, then ±1), if none is in flight.
+    /// Start decodes for every free loader slot (preview and current first, then neighbours).
     fn load_next(&mut self) -> Task<Message> {
-        let Some((job, path)) = self.state.next_job() else { return Task::none() };
         let max_side = self.state.max_side;
-        Task::perform(decode_async(path, max_side), move |r| Message::Decoded(job, r))
+        let tasks = std::iter::from_fn(|| self.state.next_job()).map(|(job, path)| {
+            Task::perform(decode_async(path, job.kind, max_side), move |r| Message::Decoded(job, r))
+        });
+        Task::batch(tasks.collect::<Vec<_>>())
     }
 }
 
 /// Decode on a fresh OS thread so neither the UI nor the executor block on it.
-async fn decode_async(path: PathBuf, max_side: u32) -> Loaded {
+async fn decode_async(path: PathBuf, kind: Kind, max_side: u32) -> Loaded {
     let (tx, rx) = iced::futures::channel::oneshot::channel();
-    std::thread::spawn(move || tx.send(decode_picture(&path, max_side)));
+    std::thread::spawn(move || tx.send(decode_job(&path, kind, max_side)));
     rx.await.unwrap_or_else(|_| Err("decoder thread panicked".into()))
 }

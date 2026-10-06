@@ -6,9 +6,15 @@
 
 Natural order of the photo entries (what `pcr list fixtures` must print):
   img1.png, img2.jpg, img3-exif6.jpg, img4.AVIF, img5.HEIC, img9.webp, img10.gif, img11.bmp, img12-broken.jpg
-Ignored: .hidden.jpg, notes.txt, subdir/
+Ignored: .hidden.jpg, notes.txt, subdir/, previews/
+
+previews/: photos with embedded thumbnails (80×60, a downscaled copy):
+  thumb.HEIC (HEIF thumbnail item), thumb-exif6.jpg (EXIF IFD1 thumbnail, orientation 6),
+  letterbox.jpg (16:9 photo, 4:3 thumbnail: aspect mismatch → no preview)
 """
 
+import io
+import struct
 import sys
 from pathlib import Path
 
@@ -65,4 +71,26 @@ marked(gradient(32, 32), "hidden").save(out / ".hidden.jpg")
 (out / "notes.txt").write_text("not a photo\n")
 (out / "subdir").mkdir(exist_ok=True)
 marked(gradient(32, 32), "sub").save(out / "subdir" / "nested.jpg")
+
+
+def exif_with_thumbnail(thumb: Image.Image, orientation: int) -> bytes:
+    """APP1 payload: IFD0 (orientation) + IFD1 pointing at a JPEG thumbnail (little endian)."""
+    buf = io.BytesIO()
+    thumb.save(buf, "JPEG", quality=85)
+    jpeg = buf.getvalue()
+    ifd0 = struct.pack("<H", 1) + struct.pack("<HHIHH", 0x0112, 3, 1, orientation, 0) + struct.pack("<I", 26)
+    data_at = 26 + 2 + 2 * 12 + 4
+    ifd1 = struct.pack("<H", 2) + struct.pack("<HHII", 0x0201, 4, 1, data_at)
+    ifd1 += struct.pack("<HHII", 0x0202, 4, 1, len(jpeg)) + struct.pack("<I", 0)
+    return b"Exif\x00\x00" + b"II*\x00" + struct.pack("<I", 8) + ifd0 + ifd1 + jpeg
+
+
+previews = out / "previews"
+previews.mkdir(exist_ok=True)
+heic = marked(checker(), "heic")
+heic.save(previews / "thumb.HEIC", quality=80, thumbnails=[80])
+jpg = marked(gradient(), "exif6")
+jpg.save(previews / "thumb-exif6.jpg", quality=90, exif=exif_with_thumbnail(jpg.resize((80, 60)), 6))
+wide = marked(gradient(320, 180), "16:9")
+wide.save(previews / "letterbox.jpg", quality=90, exif=exif_with_thumbnail(gradient(80, 60), 1))
 print(f"fixtures written to {out}")

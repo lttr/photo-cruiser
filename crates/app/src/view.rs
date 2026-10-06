@@ -1,14 +1,15 @@
 //! Layout: toolbar, image area (image + crop overlay stacked), status line.
-//! Widget ids used by tests: `photo` (image shown), `message` (error / empty / loading),
+//! Widget ids used by tests: `photo` (the current photo, sharp), `preview` (its embedded
+//! preview, or still the previous photo while it decodes), `message` (error / empty),
 //! `body` (the image area).
 
 use crate::action::Action;
 use crate::app::App;
 use crate::crop_overlay::Overlay;
 use crate::message::Message;
-use crate::state::Mode;
+use crate::state::{Display, Mode};
 use crate::theme;
-use iced::widget::{button, canvas, column, container, image, row, stack, text};
+use iced::widget::{button, canvas, column, container, image, row, space, stack, text};
 use iced::{Color, ContentFit, Element, Fill};
 
 const BG: Color = Color::from_rgb(0x11 as f32 / 255.0, 0x11 as f32 / 255.0, 0x11 as f32 / 255.0);
@@ -22,13 +23,30 @@ pub fn view(app: &App) -> Element<'_, Message> {
             text(s.folder_error.clone().unwrap_or_default()).size(20).into()
         }
         (Some(f), _) if f.is_empty() => text(format!("No images in {}", f.path.display())).size(20).into(),
-        (Some(_), Some(Ok(p))) => {
-            image(p.handle.clone()).content_fit(ContentFit::Contain).width(Fill).height(Fill).into()
-        }
         (Some(_), Some(Err(e))) => text(e.clone()).size(20).into(),
-        (Some(_), None) => text("Loading…").into(),
+        (Some(_), _) => match &s.shown {
+            Some(shown) => {
+                let img = |h: &image::Handle, opacity: f32| {
+                    image(h.clone())
+                        .content_fit(ContentFit::Contain)
+                        .width(Fill)
+                        .height(Fill)
+                        .opacity(opacity)
+                };
+                match s.fade_progress() {
+                    Some((from, t)) => stack![img(from, 1.0 - t), img(&shown.handle, t)].into(),
+                    None => img(&shown.handle, 1.0).into(),
+                }
+            }
+            // First image of a folder still decoding: nothing to show yet.
+            None => space().into(),
+        },
     };
-    let id = if matches!(current, Some(Ok(_))) { "photo" } else { "message" };
+    let id = match s.display() {
+        Display::Sharp => "photo",
+        Display::Preview | Display::Previous => "preview",
+        Display::None => "message",
+    };
     // The overlay is always present: it also handles the keyboard shortcuts.
     let overlay = canvas(Overlay {
         active: s.mode == Mode::Crop,
