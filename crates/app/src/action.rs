@@ -30,6 +30,10 @@ pub enum Action {
     ClearCrop,
     /// Leave crop mode (`Esc`).
     ExitCrop,
+    /// Full screen on/off (`F11`, `F`): hides the toolbar and status line.
+    ToggleFullscreen,
+    /// Leave full screen (`Esc` outside crop mode).
+    ExitFullscreen,
     Quit,
 }
 
@@ -47,12 +51,14 @@ mod tests {
         let steps = parse_script(
             r#"[{"action":"next"},{"action":"goto","index":2},{"action":"toggle_crop"},
                 {"action":"set_crop","x":40,"y":30,"w":200,"h":150},{"action":"open","path":"/tmp"},
-                {"action":"clear_crop"},{"action":"exit_crop"},{"action":"prev"},{"action":"quit"}]"#,
+                {"action":"clear_crop"},{"action":"exit_crop"},{"action":"toggle_fullscreen"},
+                {"action":"exit_fullscreen"},{"action":"prev"},{"action":"quit"}]"#,
         )
         .unwrap();
         assert_eq!(steps[1], Action::Goto { index: 2 });
         assert_eq!(steps[3], Action::SetCrop(Rect::new(40.0, 30.0, 200.0, 150.0)));
-        assert_eq!(steps.len(), 9);
+        assert_eq!(steps[7], Action::ToggleFullscreen);
+        assert_eq!(steps.len(), 11);
         let json = serde_json::to_string(&Action::SetCrop(Rect::new(1.0, 2.0, 3.0, 4.0))).unwrap();
         assert_eq!(json, r#"{"action":"set_crop","x":1.0,"y":2.0,"w":3.0,"h":4.0}"#);
         assert!(parse_script(r#"[{"action":"jump"}]"#).is_err());

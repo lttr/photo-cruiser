@@ -91,13 +91,14 @@ pub fn update(app: &mut App, event: Event) -> Task<Message> {
             let step = runner.cfg.steps[runner.next].clone();
             runner.next += 1;
             eprintln!("script: step {}: {}", runner.next, serde_json::to_string(&step).unwrap_or_default());
-            if step == Action::Quit {
+            let effect = if step == Action::Quit {
                 runner.next = runner.cfg.steps.len();
+                Task::none()
             } else {
-                app.state.apply(&step);
-            }
+                app.apply(&step)
+            };
             // `App::update` batches the decode this may need; the tick waits for it.
-            after(POLL, Event::Tick)
+            Task::batch([effect, after(POLL, Event::Tick)])
         }
         Event::Tick => match app.state.picture() {
             Some(p) => image::allocate(p.handle.clone()).map(|r| Message::Script(Event::Allocated(Some(r)))),

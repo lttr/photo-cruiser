@@ -101,6 +101,8 @@ pub enum Mode {
 pub enum Effect {
     None,
     Quit,
+    /// Put the window into (`true`) or out of full screen.
+    Fullscreen(bool),
 }
 
 #[derive(Debug)]
@@ -112,6 +114,8 @@ pub struct State {
     pub loader: Loader<Loaded>,
     pub crop: CropTool,
     pub mode: Mode,
+    /// Full screen: no toolbar or status line. The runtime mirrors it to the window.
+    pub fullscreen: bool,
     pub max_side: u32,
     /// Rejected actions and folder errors, oldest first.
     pub errors: Vec<String>,
@@ -138,6 +142,7 @@ impl State {
             loader: Loader::default(),
             crop: CropTool::default(),
             mode: Mode::Browse,
+            fullscreen: false,
             max_side,
             errors: Vec::new(),
             shown: None,
@@ -272,6 +277,15 @@ impl State {
                 self.mode = Mode::Browse;
                 self.crop.clear();
             }
+            Action::ToggleFullscreen => {
+                self.fullscreen = !self.fullscreen;
+                return Effect::Fullscreen(self.fullscreen);
+            }
+            Action::ExitFullscreen if self.fullscreen => {
+                self.fullscreen = false;
+                return Effect::Fullscreen(false);
+            }
+            Action::ExitFullscreen => {}
             Action::Quit => return Effect::Quit,
         }
         Effect::None
@@ -403,6 +417,7 @@ impl State {
             position: self.position(),
             file: self.current_path().map(|p| p.display().to_string()),
             mode: self.mode,
+            fullscreen: self.fullscreen,
             crop: self.crop_pixels(),
             title: self.title(),
             status: self.status(),
@@ -432,6 +447,7 @@ pub struct Dump {
     pub position: String,
     pub file: Option<String>,
     pub mode: Mode,
+    pub fullscreen: bool,
     /// Integer source pixels.
     pub crop: Option<PixelRect>,
     pub title: String,

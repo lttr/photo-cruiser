@@ -77,20 +77,18 @@ impl App {
         self.state.title()
     }
 
-    /// Redraw every frame while a fade runs.
+    /// Redraw every frame while a fade runs; watch resizes for full-screen changes.
     pub fn subscription(&self) -> Subscription<Message> {
-        match self.state.fade_progress() {
+        let frames = match self.state.fade_progress() {
             Some(_) => window::frames().map(|_| Message::Frame),
             None => Subscription::none(),
-        }
+        };
+        Subscription::batch([frames, window::resize_events().map(|(id, _)| Message::Resized(id))])
     }
 
     pub fn update(&mut self, message: Message) -> Task<Message> {
         let task = match message {
-            Message::Action(action) => match self.state.apply(&action) {
-                Effect::Quit => return iced::exit(),
-                Effect::None => Task::none(),
-            },
+            Message::Action(action) => self.apply(&action),
             Message::OpenDialog => {
                 let dialog = rfd::AsyncFileDialog::new().set_title("Open photo folder").pick_folder();
                 return Task::perform(dialog, |h| Message::FolderPicked(h.map(|h| h.path().into())));
@@ -105,6 +103,14 @@ impl App {
                 Task::none()
             }
             Message::Frame => Task::none(),
+            // The window manager may change the mode itself; every resize re-reads it.
+            Message::Resized(id) => {
+                return window::mode(id).map(|m| Message::WindowMode(m == window::Mode::Fullscreen));
+            }
+            Message::WindowMode(on) => {
+                self.state.fullscreen = on;
+                Task::none()
+            }
             Message::Crop(kind, p, tol) => {
                 self.state.crop_mouse(kind, p, tol);
                 Task::none()
@@ -112,6 +118,15 @@ impl App {
             Message::Script(event) => script::update(self, event),
         };
         Task::batch([task, self.load_next()])
+    }
+
+    /// Apply an action and carry out its [`Effect`] (decodes are scheduled by `update`).
+    pub fn apply(&mut self, action: &Action) -> Task<Message> {
+        match self.state.apply(action) {
+            Effect::Quit => iced::exit(),
+            Effect::Fullscreen(on) => set_fullscreen(on),
+            Effect::None => Task::none(),
+        }
     }
 
     /// Start decodes for every free loader slot (preview and current first, then neighbours).
@@ -122,6 +137,11 @@ impl App {
         });
         Task::batch(tasks.collect::<Vec<_>>())
     }
+}
+
+fn set_fullscreen(on: bool) -> Task<Message> {
+    let mode = if on { window::Mode::Fullscreen } else { window::Mode::Windowed };
+    window::latest().and_then(move |id| window::set_mode(id, mode))
 }
 
 /// Decode on a fresh OS thread so neither the UI nor the executor block on it.

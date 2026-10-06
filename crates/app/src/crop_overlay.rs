@@ -47,17 +47,18 @@ pub struct OverlayState {
     last: iced::Point,
 }
 
-pub fn key_message(key: &Key, mods: keyboard::Modifiers) -> Option<Message> {
+/// `crop`: crop mode is on (`Esc` leaves it before leaving full screen).
+pub fn key_message(key: &Key, mods: keyboard::Modifiers, crop: bool) -> Option<Message> {
+    let plain = !mods.control() && !mods.alt() && !mods.logo();
     Some(match key {
         Key::Named(Named::ArrowRight) => Action::Next.into(),
         Key::Named(Named::ArrowLeft) => Action::Prev.into(),
-        Key::Named(Named::Escape) => Action::ExitCrop.into(),
+        Key::Named(Named::Escape) if crop => Action::ExitCrop.into(),
+        Key::Named(Named::Escape) => Action::ExitFullscreen.into(),
+        Key::Named(Named::F11) => Action::ToggleFullscreen.into(),
         Key::Character(c) if mods.control() && c.eq_ignore_ascii_case("o") => Message::OpenDialog,
-        Key::Character(c)
-            if !mods.control() && !mods.alt() && !mods.logo() && c.eq_ignore_ascii_case("c") =>
-        {
-            Action::ToggleCrop.into()
-        }
+        Key::Character(c) if plain && c.eq_ignore_ascii_case("c") => Action::ToggleCrop.into(),
+        Key::Character(c) if plain && c.eq_ignore_ascii_case("f") => Action::ToggleFullscreen.into(),
         _ => return None,
     })
 }
@@ -74,7 +75,7 @@ impl canvas::Program<Message> for Overlay {
     ) -> Option<canvas::Action<Message>> {
         let (kind, pos) = match event {
             Event::Keyboard(keyboard::Event::KeyPressed { key, modifiers, .. }) => {
-                return key_message(key, *modifiers).map(canvas::Action::publish);
+                return key_message(key, *modifiers, self.active).map(canvas::Action::publish);
             }
             _ if !self.active => {
                 state.pressed = false;

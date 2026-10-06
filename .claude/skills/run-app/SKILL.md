@@ -58,7 +58,7 @@ Read the PNG with the Read tool to see the window. Mouse drags and keyboard inpu
 
 ## Interactive run (for the user)
 
-`just run [dir]` opens the window for a person to use (keys: → ← C Esc Ctrl+O). Only start it if the user asks, and kill it afterwards if you started it.
+`just run [dir]` opens the window for a person to use (keys: → ← C F/F11 Esc Ctrl+O). Only start it if the user asks, and kill it afterwards if you started it.
 
 ## Inputs
 

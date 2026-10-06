@@ -1,4 +1,5 @@
-//! Layout: toolbar, image area (image + crop overlay stacked), status line.
+//! Layout: toolbar, image area (image + crop overlay stacked), status line. Full screen
+//! shows only the image area.
 //! Widget ids used by tests: `photo` (the current photo, sharp), `preview` (its embedded
 //! preview, or still the previous photo while it decodes), `message` (error / empty),
 //! `body` (the image area).
@@ -55,9 +56,13 @@ pub fn view(app: &App) -> Element<'_, Message> {
     })
     .width(Fill)
     .height(Fill);
+    let bg = if s.fullscreen { Color::BLACK } else { BG };
     let body = container(stack![container(content).center(Fill).id(id), overlay])
         .id("body")
-        .style(|_| container::Style::default().background(BG).color(Color::WHITE));
+        .style(move |_| container::Style::default().background(bg).color(Color::WHITE));
+    if s.fullscreen {
+        return body.into();
+    }
 
     let tool = |label, suggested, msg| {
         button(text(label)).padding([6, 16]).style(theme::button(suggested)).on_press(msg)

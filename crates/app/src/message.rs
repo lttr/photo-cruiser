@@ -15,6 +15,10 @@ pub enum Message {
     FolderPicked(Option<PathBuf>),
     /// Redraw tick while a fade runs.
     Frame,
+    /// The window was resized (maybe into or out of full screen).
+    Resized(iced::window::Id),
+    /// The window's real mode after a resize: full screen or not.
+    WindowMode(bool),
     /// A background decode finished.
     Decoded(Job, Loaded),
     /// Mouse press/move/release over the image: source pixel (unclamped), grab tolerance

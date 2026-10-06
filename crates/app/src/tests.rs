@@ -123,6 +123,21 @@ fn update_set_crop_clamps_and_modes() {
 }
 
 #[test]
+fn update_fullscreen_toggle_and_exit() {
+    let mut s = opened(&fixtures());
+    assert_eq!(s.apply(&Action::ExitFullscreen), Effect::None, "already windowed");
+    assert_eq!(s.apply(&Action::ToggleFullscreen), Effect::Fullscreen(true));
+    s.apply(&Action::SetCrop(Rect::new(10.0, 10.0, 50.0, 50.0)));
+    s.apply(&Action::Next);
+    s.apply(&Action::Open { path: fixtures() });
+    assert!(s.fullscreen, "browsing, crop and open keep full screen");
+    assert_eq!(s.apply(&Action::ExitFullscreen), Effect::Fullscreen(false));
+    assert!(!s.fullscreen);
+    assert_eq!(s.apply(&Action::ToggleFullscreen), Effect::Fullscreen(true));
+    assert_eq!(s.apply(&Action::ToggleFullscreen), Effect::Fullscreen(false));
+}
+
+#[test]
 fn update_open_resets() {
     let mut s = opened(&fixtures());
     s.apply(&Action::Goto { index: 3 });
@@ -483,4 +498,34 @@ fn crop_drag_past_edge_is_clamped() {
     // Arrow keys drop the selection.
     h.keys(Key::Named(Named::ArrowLeft), 1);
     assert!(h.status().ends_with("(Esc to leave)"), "{}", h.status());
+}
+
+#[test]
+fn fullscreen_hides_bars_and_keys() {
+    let mut h = harness();
+    h.until("img1 shown", |h| h.bounds("photo").is_some());
+    let windowed = h.bounds("body").unwrap();
+    assert!(windowed.height < SIZE.height && h.has_text("Open folder"));
+
+    h.keys(Key::Character("f".into()), 1);
+    assert_eq!(h.bounds("body").unwrap(), Rectangle::with_size(SIZE), "image area fills the window");
+    assert!(!h.has_text("Open folder") && h.status().is_empty(), "bars hidden");
+    h.keys(Key::Named(Named::ArrowRight), 1); // keys still work
+    h.keys(Key::Named(Named::F11), 1);
+    assert_eq!(h.status(), "img2.jpg — 2 / 9");
+
+    h.keys(Key::Named(Named::F11), 1);
+    assert!(!h.has_text("Open folder"));
+
+    // Crop in full screen: Esc leaves crop mode first, then full screen.
+    h.keys(Key::Character("c".into()), 1);
+    let fit = h.fit((320, 240)); // img2.jpg
+    h.drag(Point::new(fit.x, fit.y), Point::new(fit.x + fit.w / 2.0, fit.y + fit.h / 2.0));
+    h.keys(Key::Named(Named::F11), 1);
+    assert_close(parse_crop(&h.status()), [160.0, 120.0, 0.0, 0.0]);
+    h.keys(Key::Named(Named::F11), 1);
+    h.keys(Key::Named(Named::Escape), 1);
+    assert!(!h.has_text("Open folder"), "first Esc only leaves crop mode");
+    h.keys(Key::Named(Named::Escape), 1);
+    assert_eq!(h.status(), "img2.jpg — 2 / 9");
 }
