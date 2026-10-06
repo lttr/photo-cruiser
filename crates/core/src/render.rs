@@ -1,0 +1,73 @@
+//! CPU reference pipeline: decoded pixels + edit stack → output pixels. This
+//! implementation defines correctness; a GPU preview must match it.
+
+use crate::decode::Decoded;
+use crate::edit::{EditStack, Op};
+use image::RgbaImage;
+
+#[derive(Clone, Copy, Debug, Default)]
+pub struct RenderOpts {
+    /// Downscale the result so its longer side is at most this.
+    pub max_side: Option<u32>,
+}
+
+/// Apply `edits` to `src`. Rectangles are in source pixels and are mapped onto
+/// `src.image` if it was decoded downscaled.
+pub fn render(src: &Decoded, edits: &EditStack, opts: RenderOpts) -> RgbaImage {
+    let k = 1.0 / src.source_scale();
+    let mut img = src.image.clone();
+    for op in &edits.ops {
+        match op {
+            Op::Crop(r) => {
+                let scaled = crate::Rect::new(r.x * k, r.y * k, r.w * k, r.h * k);
+                if let Some(p) = scaled.to_pixels(img.dimensions()) {
+                    img = image::imageops::crop_imm(&img, p.x, p.y, p.w, p.h).to_image();
+                }
+            }
+        }
+    }
+    match opts.max_side {
+        Some(m) => {
+            Decoded { source_width: img.width(), source_height: img.height(), image: img, format: src.format }
+                .downscale(m)
+                .image
+        }
+        None => img,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::Rect;
+    use crate::decode::Format;
+
+    fn gradient(w: u32, h: u32) -> Decoded {
+        let image = RgbaImage::from_fn(w, h, |x, y| image::Rgba([x as u8, y as u8, 0, 255]));
+        Decoded { image, format: Format::Png, source_width: w, source_height: h }
+    }
+
+    #[test]
+    fn crop_exact_pixels() {
+        let edits = EditStack::default().with(Op::Crop(Rect::new(10.0, 20.0, 30.0, 40.0)));
+        let out = render(&gradient(100, 100), &edits, RenderOpts::default());
+        assert_eq!(out.dimensions(), (30, 40));
+        assert_eq!(out.get_pixel(0, 0).0, [10, 20, 0, 255]);
+        assert_eq!(out.get_pixel(29, 39).0, [39, 59, 0, 255]);
+    }
+
+    #[test]
+    fn crop_on_downscaled_source() {
+        let d = gradient(200, 100).downscale(100);
+        assert_eq!(d.image.dimensions(), (100, 50));
+        let edits = EditStack::default().with(Op::Crop(Rect::new(100.0, 0.0, 100.0, 100.0)));
+        assert_eq!(render(&d, &edits, RenderOpts::default()).dimensions(), (50, 50));
+    }
+
+    #[test]
+    fn max_side_and_out_of_bounds_crop() {
+        let edits = EditStack::default().with(Op::Crop(Rect::new(500.0, 500.0, 10.0, 10.0)));
+        let out = render(&gradient(100, 60), &edits, RenderOpts { max_side: Some(50) });
+        assert_eq!(out.dimensions(), (50, 30));
+    }
+}

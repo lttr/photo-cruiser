@@ -1,0 +1,8 @@
+[
+  { "action": "next" },
+  { "action": "next" },
+  { "action": "next" },
+  { "action": "next" },
+  { "action": "toggle_crop" },
+  { "action": "set_crop", "x": 40, "y": 30, "w": 200, "h": 150 }
+]
