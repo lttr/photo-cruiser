@@ -19,6 +19,7 @@ mod crop_overlay;
 mod grid;
 mod message;
 mod script;
+mod settings;
 mod state;
 #[cfg(test)]
 mod tests;
@@ -71,6 +72,8 @@ fn parse_args(mut args: impl Iterator<Item = String>) -> Result<Args, String> {
     }
     if scripted {
         cfg.script = Some(script);
+    } else {
+        cfg.settings = settings::default_path();
     }
     Ok(Args { cfg, timeout })
 }

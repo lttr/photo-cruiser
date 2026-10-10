@@ -11,6 +11,8 @@
 //!
 //! [`Thumbs`] does the same for the thumbnails of a grid: the visible ones first, then a
 //! margin around them, with their own slots so they never hold up a full decode.
+//! [`Sizes`] probes every photo's size (headers only, in chunks) for layouts that need
+//! all aspect ratios up front.
 
 use std::collections::HashMap;
 use std::ops::Range;
@@ -129,22 +131,31 @@ impl<T> Loader<T> {
     }
 }
 
-/// Thumbnail decodes running at once.
-pub const THUMB_SLOTS: usize = 3;
+/// Thumbnail decodes running at once: all cores but two (for the UI and the photo
+/// loader), between 2 and 8.
+pub fn thumb_slots() -> usize {
+    static SLOTS: std::sync::OnceLock<usize> = std::sync::OnceLock::new();
+    *SLOTS.get_or_init(|| {
+        std::thread::available_parallelism().map_or(2, |n| n.get().saturating_sub(2)).clamp(2, 8)
+    })
+}
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct ThumbJob {
     pub generation: u64,
     pub index: usize,
+    /// Longest side to decode at.
+    pub side: u32,
 }
 
 /// Thumbnails of one folder. Wanted: the visible indices in order, then outwards (one
-/// below, one above, ...) for as many again on each side. Finished thumbnails are kept
-/// until [`Thumbs::reset`].
+/// below, one above, ...) for as many again on each side. Finished thumbnails are kept,
+/// with the side they were decoded at, until [`Thumbs::reset`]; asking for a bigger side
+/// decodes them again but keeps the smaller ones available meanwhile.
 #[derive(Debug)]
 pub struct Thumbs<T> {
     generation: u64,
-    done: HashMap<usize, T>,
+    done: HashMap<usize, (u32, T)>,
     in_flight: Vec<usize>,
 }
 
@@ -162,20 +173,25 @@ impl<T> Thumbs<T> {
         self.in_flight.clear();
     }
 
+    /// The thumbnail of `index`, whatever its side.
     pub fn get(&self, index: usize) -> Option<&T> {
-        self.done.get(&index)
+        self.done.get(&index).map(|(_, t)| t)
     }
 
-    /// A thumbnail to decode, if a slot is free and something wanted is missing. Call
-    /// until it returns `None`.
-    pub fn next_job(&mut self, visible: Range<usize>, len: usize) -> Option<ThumbJob> {
-        if self.in_flight.len() >= THUMB_SLOTS {
+    /// Decoded at `side` or bigger.
+    fn has(&self, index: usize, side: u32) -> bool {
+        self.done.get(&index).is_some_and(|(s, _)| *s >= side)
+    }
+
+    /// A thumbnail to decode at `side`, if a slot is free and something wanted is missing
+    /// (or smaller). Call until it returns `None`.
+    pub fn next_job(&mut self, visible: Range<usize>, len: usize, side: u32) -> Option<ThumbJob> {
+        if self.in_flight.len() >= thumb_slots() {
             return None;
         }
-        let index =
-            wanted(visible, len).find(|i| !self.done.contains_key(i) && !self.in_flight.contains(i))?;
+        let index = wanted(visible, len).find(|i| !self.has(*i, side) && !self.in_flight.contains(i))?;
         self.in_flight.push(index);
-        Some(ThumbJob { generation: self.generation, index })
+        Some(ThumbJob { generation: self.generation, index, side })
     }
 
     /// Store a finished job's result. Returns false (and drops it) if the job is stale.
@@ -184,13 +200,13 @@ impl<T> Thumbs<T> {
             return false;
         }
         self.in_flight.retain(|i| *i != job.index);
-        self.done.insert(job.index, result);
+        self.done.insert(job.index, (job.side, result));
         true
     }
 
-    /// Nothing running and every visible thumbnail is done.
-    pub fn is_idle(&self, visible: Range<usize>, len: usize) -> bool {
-        self.in_flight.is_empty() && (visible.start..visible.end.min(len)).all(|i| self.done.contains_key(&i))
+    /// Nothing running and every visible thumbnail is done at `side`.
+    pub fn is_idle(&self, visible: Range<usize>, len: usize, side: u32) -> bool {
+        self.in_flight.is_empty() && (visible.start..visible.end.min(len)).all(|i| self.has(i, side))
     }
 }
 
@@ -199,6 +215,78 @@ fn wanted(visible: Range<usize>, len: usize) -> impl Iterator<Item = usize> {
     let margin = end - start;
     let around = (0..margin).flat_map(move |k| [end.checked_add(k), start.checked_sub(k + 1)]);
     (start..end).chain(around.flatten().filter(move |i| *i < len))
+}
+
+/// Size probes running at once (each a chunk of [`SIZE_CHUNK`] photos).
+pub const SIZE_SLOTS: usize = 2;
+/// Photos per size probe job.
+pub const SIZE_CHUNK: usize = 32;
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct SizeJob {
+    pub generation: u64,
+    pub items: Range<usize>,
+}
+
+/// Displayed sizes (width, height) of the photos of one folder, probed from the start in
+/// chunks. A size can also be filled in early (from a decoded thumbnail). Unreadable
+/// photos stay `None`.
+#[derive(Debug, Default)]
+pub struct Sizes {
+    generation: u64,
+    sizes: Vec<Option<(u32, u32)>>,
+    /// Start of the first chunk not yet handed out.
+    next: usize,
+    in_flight: usize,
+}
+
+impl Sizes {
+    /// Forget everything (new folder of `len` photos). Results of older jobs will be ignored.
+    pub fn reset(&mut self, len: usize) {
+        self.generation += 1;
+        self.sizes = vec![None; len];
+        (self.next, self.in_flight) = (0, 0);
+    }
+
+    pub fn get(&self, index: usize) -> Option<(u32, u32)> {
+        self.sizes.get(index).copied().flatten()
+    }
+
+    pub fn set(&mut self, index: usize, size: (u32, u32)) {
+        if let Some(s) = self.sizes.get_mut(index) {
+            *s = Some(size);
+        }
+    }
+
+    /// The next chunk to probe, if a slot is free and photos are left. Call until `None`.
+    pub fn next_job(&mut self) -> Option<SizeJob> {
+        if self.in_flight >= SIZE_SLOTS || self.next >= self.sizes.len() {
+            return None;
+        }
+        let items = self.next..(self.next + SIZE_CHUNK).min(self.sizes.len());
+        (self.next, self.in_flight) = (items.end, self.in_flight + 1);
+        Some(SizeJob { generation: self.generation, items })
+    }
+
+    /// Store a finished chunk (one result per item; `None` = unreadable, a size already
+    /// known stays). Returns false (and drops it) if the job is stale.
+    pub fn finish(&mut self, job: &SizeJob, results: &[Option<(u32, u32)>]) -> bool {
+        if job.generation != self.generation {
+            return false;
+        }
+        self.in_flight -= 1;
+        for (i, r) in job.items.clone().zip(results) {
+            if let Some(size) = r {
+                self.sizes[i] = Some(*size);
+            }
+        }
+        true
+    }
+
+    /// Every chunk probed.
+    pub fn is_done(&self) -> bool {
+        self.next >= self.sizes.len() && self.in_flight == 0
+    }
 }
 
 #[cfg(test)]
@@ -261,12 +349,12 @@ mod tests {
     fn thumbs_visible_first_then_around() {
         let mut t = Thumbs::default();
         let mut order = vec![];
-        while let Some(j) = t.next_job(4..6, 9) {
+        while let Some(j) = t.next_job(4..6, 9, 256) {
             order.push(j.index);
             t.finish(j, ());
         }
         assert_eq!(order, [4, 5, 6, 3, 7, 2]);
-        assert!(t.is_idle(4..6, 9) && !t.is_idle(0..2, 9));
+        assert!(t.is_idle(4..6, 9, 256) && !t.is_idle(0..2, 9, 256));
         // Clamped to the folder.
         assert_eq!(wanted(0..20, 3).collect::<Vec<_>>(), [0, 1, 2]);
     }
@@ -274,15 +362,30 @@ mod tests {
     #[test]
     fn thumbs_slots_and_stale() {
         let mut t = Thumbs::<u8>::default();
-        let jobs: Vec<_> = std::iter::from_fn(|| t.next_job(0..10, 10)).collect();
-        assert_eq!(jobs.len(), THUMB_SLOTS);
-        assert!(!t.is_idle(0..1, 10));
+        let jobs: Vec<_> = std::iter::from_fn(|| t.next_job(0..10, 10, 256)).collect();
+        assert_eq!(jobs.len(), thumb_slots());
+        assert!(!t.is_idle(0..1, 10, 256));
         t.reset();
         assert!(!t.finish(jobs[0], 1));
         assert!(t.get(0).is_none());
-        let j = t.next_job(0..1, 10).unwrap();
+        let j = t.next_job(0..1, 10, 256).unwrap();
         assert!(t.finish(j, 2));
         assert_eq!(t.get(0), Some(&2));
+    }
+
+    #[test]
+    fn thumbs_bigger_side_redecodes() {
+        let mut t = Thumbs::<u32>::default();
+        let j = t.next_job(0..1, 1, 256).unwrap();
+        t.finish(j, 256);
+        assert!(t.is_idle(0..1, 1, 256) && !t.is_idle(0..1, 1, 512));
+        // Bigger: decoded again, the small one is shown meanwhile.
+        let j = t.next_job(0..1, 1, 512).unwrap();
+        assert_eq!((j.index, j.side, t.get(0)), (0, 512, Some(&256)));
+        t.finish(j, 512);
+        // Smaller again: the big one will do.
+        assert!(t.next_job(0..1, 1, 256).is_none());
+        assert_eq!(t.get(0), Some(&512));
     }
 
     #[test]
@@ -295,5 +398,27 @@ mod tests {
         assert!(l.preview(0).is_none());
         assert!(l.finish(new, 2));
         assert_eq!(l.preview(0), Some(&2));
+    }
+
+    #[test]
+    fn sizes_in_chunks_stale_dropped() {
+        let mut s = Sizes::default();
+        s.reset(SIZE_CHUNK + 5);
+        s.set(1, (3, 2));
+        let a = s.next_job().unwrap();
+        let b = s.next_job().unwrap();
+        assert_eq!((a.items.clone(), b.items.clone()), (0..SIZE_CHUNK, SIZE_CHUNK..SIZE_CHUNK + 5));
+        assert_eq!(s.next_job(), None);
+        assert!(!s.is_done());
+        let mut results = vec![Some((4, 3)); SIZE_CHUNK];
+        results[1] = None;
+        assert!(s.finish(&a, &results));
+        assert_eq!((s.get(0), s.get(1), s.get(SIZE_CHUNK)), (Some((4, 3)), Some((3, 2)), None));
+        s.reset(2);
+        assert!(!s.finish(&b, &[Some((1, 1)); 5]), "stale");
+        assert_eq!(s.get(0), None);
+        let c = s.next_job().unwrap();
+        assert!(s.finish(&c, &[None, Some((1, 1))]));
+        assert!(s.is_done() && s.next_job().is_none());
     }
 }

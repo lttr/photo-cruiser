@@ -84,6 +84,8 @@ fn embedded_previews() {
     assert!(px[0] > 150 && px[1] < 100 && px[2] < 100, "marker pixel {px:?}");
     // 4:3 thumbnail of a 16:9 photo: rejected.
     assert!(embedded_preview(&dir.join("letterbox.jpg")).unwrap().is_none());
+    // 80×64 thumbnail of a 4:3 photo (6.7% off): too far off for the photo view.
+    assert!(embedded_preview(&dir.join("rounded.jpg")).unwrap().is_none());
     // No thumbnail, other formats: none. Broken: error.
     for name in ["img2.jpg", "img5.HEIC", "img1.png", "img9.webp"] {
         assert!(embedded_preview(&fixtures().join(name)).unwrap().is_none(), "{name}");
@@ -100,6 +102,12 @@ fn thumbnails() {
     // Too small for a 256 px box: full decode, downscaled; orientation applied.
     let t = thumbnail(&dir.join("thumb-exif6.jpg"), 256).unwrap();
     assert_eq!((t.image.dimensions(), t.source_size()), ((192, 256), (240, 320)));
+    // Slightly off aspect ratio: still used for the grid, resized to the photo's 4:3.
+    let t = thumbnail(&dir.join("rounded.jpg"), 100).unwrap();
+    assert_eq!((t.image.dimensions(), t.source_size()), ((80, 60), (320, 240)));
+    // Far off (letterboxed): full decode.
+    let t = thumbnail(&dir.join("letterbox.jpg"), 100).unwrap();
+    assert_eq!((t.image.dimensions(), t.source_size()), ((100, 56), (320, 180)));
     let t = thumbnail(&fixtures().join("img1.png"), 64).unwrap();
     assert_eq!(t.image.dimensions(), (64, 48));
     assert!(thumbnail(&fixtures().join("img12-broken.jpg"), 64).is_err());

@@ -10,7 +10,8 @@ Ignored: .hidden.jpg, notes.txt, subdir/, previews/
 
 previews/: photos with embedded thumbnails (80×60, a downscaled copy):
   thumb.HEIC (HEIF thumbnail item), thumb-exif6.jpg (EXIF IFD1 thumbnail, orientation 6),
-  letterbox.jpg (16:9 photo, 4:3 thumbnail: aspect mismatch → no preview)
+  letterbox.jpg (16:9 photo, 4:3 thumbnail: aspect mismatch → no preview),
+  rounded.jpg (4:3 photo, 80×64 thumbnail like a phone's: no preview, but a grid thumbnail)
 """
 
 import io
@@ -93,4 +94,6 @@ jpg = marked(gradient(), "exif6")
 jpg.save(previews / "thumb-exif6.jpg", quality=90, exif=exif_with_thumbnail(jpg.resize((80, 60)), 6))
 wide = marked(gradient(320, 180), "16:9")
 wide.save(previews / "letterbox.jpg", quality=90, exif=exif_with_thumbnail(gradient(80, 60), 1))
+rounded = marked(gradient(), "4:3")
+rounded.save(previews / "rounded.jpg", quality=90, exif=exif_with_thumbnail(rounded.resize((80, 64)), 1))
 print(f"fixtures written to {out}")

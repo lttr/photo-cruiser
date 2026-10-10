@@ -5,6 +5,7 @@
 //! `{"action": "set_crop", "x": 40, "y": 30, "w": 200, "h": 150}`,
 //! `{"action": "open", "path": "fixtures"}`, `{"action": "show_photo", "index": 2}`.
 
+use crate::grid::Layout;
 use photo_cruiser_core::Rect;
 use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
@@ -50,8 +51,14 @@ pub enum Action {
     ToggleMenu,
     /// Hide the menu (`Esc`, click outside it).
     CloseMenu,
-    /// Show/hide file names in the status line and the grid (`N`, menu). Off at start.
+    /// Show/hide file names in the status line and the grid (`N`, menu). Off at first start, then remembered.
     ToggleNames,
+    /// Grid: the next layout, small → big thumbnails → justified (`Z`, menu). Small at first start, then remembered.
+    NextLayout,
+    /// Grid: this layout (`"small"`, `"big"`, `"justified"`).
+    SetLayout {
+        layout: Layout,
+    },
     /// Show/hide the keyboard shortcuts (`?`, `F1`, menu). Any other action closes it.
     ToggleHelp,
     Quit,
@@ -75,7 +82,8 @@ mod tests {
                 {"action":"exit_fullscreen"},{"action":"prev"},{"action":"quit"},
                 {"action":"toggle_menu"},{"action":"close_menu"},{"action":"toggle_help"},
                 {"action":"first"},{"action":"last"},{"action":"up"},{"action":"down"},
-                {"action":"show_photo"},{"action":"show_photo","index":3},{"action":"show_grid"},{"action":"toggle_names"}]"#,
+                {"action":"show_photo"},{"action":"show_photo","index":3},{"action":"show_grid"},{"action":"toggle_names"},
+                {"action":"next_layout"},{"action":"set_layout","layout":"justified"}]"#,
         )
         .unwrap();
         assert_eq!(steps[1], Action::Goto { index: 2 });
@@ -86,7 +94,9 @@ mod tests {
         assert_eq!(steps[18], Action::ShowPhoto { index: None });
         assert_eq!(steps[19], Action::ShowPhoto { index: Some(3) });
         assert_eq!(steps[21], Action::ToggleNames);
-        assert_eq!(steps.len(), 22);
+        assert_eq!(steps[22], Action::NextLayout);
+        assert_eq!(steps[23], Action::SetLayout { layout: Layout::Justified });
+        assert_eq!(steps.len(), 24);
         let json = serde_json::to_string(&Action::SetCrop(Rect::new(1.0, 2.0, 3.0, 4.0))).unwrap();
         assert_eq!(json, r#"{"action":"set_crop","x":1.0,"y":2.0,"w":3.0,"h":4.0}"#);
         assert!(parse_script(r#"[{"action":"jump"}]"#).is_err());

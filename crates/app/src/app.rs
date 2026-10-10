@@ -4,7 +4,10 @@
 use crate::action::Action;
 use crate::message::Message;
 use crate::script::{self, Runner, ScriptConfig};
-use crate::state::{DEFAULT_MAX_SIDE, DEFAULT_TRANSITION, Effect, Loaded, State, decode_job, thumb_job};
+use crate::settings::Settings;
+use crate::state::{
+    DEFAULT_MAX_SIDE, DEFAULT_TRANSITION, Effect, Loaded, State, decode_job, size_job, thumb_job,
+};
 use crate::{theme, view};
 use iced::widget::operation::AbsoluteOffset;
 use iced::{Subscription, Task, window};
@@ -22,11 +25,19 @@ pub struct Config {
     /// Cross-fade between images; zero disables it.
     pub transition: Duration,
     pub script: Option<ScriptConfig>,
+    /// Settings file to start from and keep up to date (`None`: defaults, nothing saved).
+    pub settings: Option<PathBuf>,
 }
 
 impl Default for Config {
     fn default() -> Self {
-        Config { folder: None, max_side: DEFAULT_MAX_SIDE, transition: DEFAULT_TRANSITION, script: None }
+        Config {
+            folder: None,
+            max_side: DEFAULT_MAX_SIDE,
+            transition: DEFAULT_TRANSITION,
+            script: None,
+            settings: None,
+        }
     }
 }
 
@@ -63,16 +74,26 @@ pub struct App {
     /// restarted app can reopen it.
     resume: Option<PathBuf>,
     resumed: Option<PathBuf>,
+    /// The settings file and what it holds.
+    settings: Option<(PathBuf, Settings)>,
 }
 
 impl App {
     pub fn new(cfg: Config) -> (Self, Task<Message>) {
+        let settings = cfg.settings.map(|path| {
+            let s = Settings::load(&path);
+            (path, s)
+        });
         let mut app = App {
             state: State::new(cfg.max_side, cfg.transition),
             script: cfg.script.map(Runner::new),
             resume: std::env::var_os("PC_RESUME_FILE").map(PathBuf::from),
             resumed: None,
+            settings,
         };
+        if let Some((_, s)) = &app.settings {
+            (app.state.layout, app.state.names) = (s.layout, s.names);
+        }
         if let Some(folder) = cfg.folder {
             app.state.apply(&Action::Open { path: folder });
         }
@@ -115,6 +136,10 @@ impl App {
                 self.state.finish_thumb(job, result);
                 Task::none()
             }
+            Message::Sizes(job, sizes) => {
+                self.state.finish_sizes(&job, &sizes);
+                Task::none()
+            }
             Message::Body(size) => {
                 self.state.body = Some(size);
                 Task::none()
@@ -139,6 +164,7 @@ impl App {
             Message::Script(event) => script::update(self, event),
         };
         self.write_resume();
+        self.write_settings();
         let scroll = match self.state.scroll.take() {
             Some(y) => iced::widget::operation::scroll_to("grid", AbsoluteOffset { x: None, y: Some(y) }),
             None => Task::none(),
@@ -154,6 +180,18 @@ impl App {
         }
     }
 
+    /// Save the settings when they changed.
+    fn write_settings(&mut self) {
+        let Some((path, saved)) = &mut self.settings else { return };
+        let now = Settings { layout: self.state.layout, names: self.state.names };
+        if now != *saved {
+            if let Err(e) = now.save(path) {
+                eprintln!("photo-cruiser: cannot save {}: {e}", path.display());
+            }
+            *saved = now;
+        }
+    }
+
     /// Apply an action and carry out its [`Effect`] (decodes are scheduled by `update`).
     pub fn apply(&mut self, action: &Action) -> Task<Message> {
         match self.state.apply(action) {
@@ -164,17 +202,24 @@ impl App {
     }
 
     /// Start decodes for every free loader slot (preview and current first, then neighbours),
-    /// and thumbnails for every free thumbnail slot.
+    /// thumbnails for every free thumbnail slot, and size probes for the justified layout.
     fn load_next(&mut self) -> Task<Message> {
         let max_side = self.state.max_side;
         let mut tasks: Vec<_> = std::iter::from_fn(|| self.state.next_job())
             .map(|(job, path)| {
                 let decode = move || decode_job(&path, job.kind, max_side);
-                Task::perform(on_thread(decode), move |r| Message::Decoded(job, r))
+                Task::perform(on_thread(decode), move |r| Message::Decoded(job, r.unwrap_or_else(panicked)))
             })
             .collect();
         tasks.extend(std::iter::from_fn(|| self.state.next_thumb_job()).map(|(job, path)| {
-            Task::perform(on_thread(move || thumb_job(&path)), move |r| Message::Thumb(job, r))
+            let decode = move || thumb_job(&path, job.side);
+            Task::perform(on_thread(decode), move |r| Message::Thumb(job, r.unwrap_or_else(panicked)))
+        }));
+        tasks.extend(std::iter::from_fn(|| self.state.next_size_job()).map(|(job, paths)| {
+            let n = paths.len();
+            Task::perform(on_thread(move || size_job(&paths)), move |r| {
+                Message::Sizes(job.clone(), r.unwrap_or_else(|| vec![None; n]))
+            })
         }));
         Task::batch(tasks)
     }
@@ -185,9 +230,14 @@ fn set_fullscreen(on: bool) -> Task<Message> {
     window::latest().and_then(move |id| window::set_mode(id, mode))
 }
 
-/// Decode on a fresh OS thread so neither the UI nor the executor block on it.
-async fn on_thread(decode: impl FnOnce() -> Loaded + Send + 'static) -> Loaded {
+/// Decode on a fresh OS thread so neither the UI nor the executor block on it. `None` if
+/// the thread panicked.
+async fn on_thread<T: Send + 'static>(work: impl FnOnce() -> T + Send + 'static) -> Option<T> {
     let (tx, rx) = iced::futures::channel::oneshot::channel();
-    std::thread::spawn(move || tx.send(decode()));
-    rx.await.unwrap_or_else(|_| Err("decoder thread panicked".into()))
+    std::thread::spawn(move || tx.send(work()));
+    rx.await.ok()
+}
+
+fn panicked() -> Loaded {
+    Err("decoder thread panicked".into())
 }

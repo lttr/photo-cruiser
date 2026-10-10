@@ -9,10 +9,11 @@
 use crate::action::Action;
 use crate::app::App;
 use crate::crop_overlay::{Modes, Overlay, SHORTCUTS};
-use crate::grid::{BOX, CELL_PAD, CELL_W, GAP, LABEL, PAD, cell_h};
+use crate::grid::LABEL;
 use crate::message::Message;
 use crate::state::{Display, Mode, State, View, tilde};
 use crate::theme;
+use iced::alignment::Horizontal;
 use iced::widget::{
     button, canvas, column, container, image, mouse_area, opaque, row, scrollable, space, stack, text,
 };
@@ -134,6 +135,7 @@ pub fn view(app: &App) -> Element<'_, Message> {
                 "N",
                 Action::ToggleNames.into()
             ),
+            item(s.layout.next().label(), "Z", Action::NextLayout.into()),
             item("Keyboard shortcuts", "?", Action::ToggleHelp.into()),
         ]
         .width(220),
@@ -146,41 +148,61 @@ pub fn view(app: &App) -> Element<'_, Message> {
     stack![main, mouse_area(layer).on_press(Action::CloseMenu.into())].into()
 }
 
-/// Every photo of the folder as a thumbnail in fixed-size cells, the current one
-/// highlighted. A click opens the photo.
+/// Every photo of the folder as a thumbnail, in the rows of [`State::grid`], the current
+/// one highlighted. A click opens the photo. Square cells frame the thumbnail with padding
+/// (the selection shows there) and put the name under it; unpadded (justified) cells
+/// fill with the photo and draw the selection and the name over it.
 fn grid<'a>(s: &'a State) -> Element<'a, Message> {
     let Some(folder) = &s.folder else { return space().into() };
-    let cols = s.columns();
-    let cell = |(i, entry): (usize, &'a photo_cruiser_core::Entry)| -> Element<'a, Message> {
+    let g = s.grid();
+    let m = g.margins;
+    let below = s.layout.label_below();
+    let label = if s.names && below { LABEL } else { 0.0 };
+    let cell = |i: usize, w: f32, h: f32| -> Element<'a, Message> {
+        let (image_w, image_h) = (w - 2.0 * m.cell, h - 2.0 * m.cell - label);
+        let fit = if below { ContentFit::Contain } else { ContentFit::Cover };
         let thumb: Element<_> = match s.thumbs.get(i) {
-            Some(Ok(p)) => {
-                image(p.handle.clone()).content_fit(ContentFit::Contain).width(Fill).height(Fill).into()
-            }
+            Some(Ok(p)) => image(p.handle.clone()).content_fit(fit).width(Fill).height(Fill).into(),
             Some(Err(_)) => text("Cannot decode").size(12).style(theme::dim).into(),
             None => space().into(),
         };
-        let mut content = column![container(thumb).center(BOX)];
-        if s.names {
-            let name = text(entry.name.as_str()).size(12).wrapping(text::Wrapping::None);
-            content =
-                content.push(container(name).center_x(BOX).height(LABEL).align_bottom(LABEL).clip(true));
-        }
         let selected = i == s.index;
+        let name = || text(folder.entries[i].name.as_str()).size(12).wrapping(text::Wrapping::None);
+        let thumb = container(thumb).center_x(image_w).center_y(image_h);
+        let content: Element<_> = if below {
+            let mut content = column![thumb];
+            if s.names {
+                content = content
+                    .push(container(name()).center_x(image_w).height(LABEL).align_bottom(LABEL).clip(true));
+            }
+            content.into()
+        } else {
+            let mut layers = stack![thumb];
+            if s.names {
+                let strip = container(name()).padding([2, 6]).width(Fill).clip(true).style(theme::scrim);
+                layers = layers.push(container(strip).height(Fill).align_bottom(Fill));
+            }
+            if selected {
+                layers = layers.push(container(space()).width(Fill).height(Fill).style(theme::frame));
+            }
+            layers.into()
+        };
         let cell = button(content)
-            .padding(CELL_PAD)
-            .width(CELL_W)
-            .height(cell_h(s.names))
-            .style(theme::cell(selected))
+            .padding(m.cell)
+            .width(w)
+            .height(h)
+            .style(theme::cell(selected, below))
             .on_press(Action::ShowPhoto { index: Some(i) }.into());
         let cell = container(cell);
         if selected { cell.id("selected").into() } else { cell.into() }
     };
-    let mut cells = folder.entries.iter().enumerate().map(cell).peekable();
-    let mut rows = Vec::new();
-    while cells.peek().is_some() {
-        rows.push(row(cells.by_ref().take(cols)).spacing(GAP).into());
-    }
-    scrollable(container(column(rows).spacing(GAP)).padding(PAD).center_x(Fill))
+    let rows = g
+        .rows
+        .into_iter()
+        .map(|r| row(r.items.zip(r.widths).map(|(i, w)| cell(i, w, r.h))).spacing(m.gap).into());
+    // Square cells are centred; justified rows start on the left (the scrollbar's on the right).
+    let side = if below { Horizontal::Center } else { Horizontal::Left };
+    scrollable(container(column(rows).spacing(m.gap)).padding(m.pad).width(Fill).align_x(side))
         .id("grid")
         .on_scroll(|v| Message::GridScrolled(v.absolute_offset().y))
         .width(Fill)

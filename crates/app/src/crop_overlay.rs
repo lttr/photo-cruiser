@@ -76,6 +76,7 @@ pub const SHORTCUTS: &[(&str, &str)] = &[
     ("C", "Crop on / off"),
     ("F  F11", "Full screen on / off"),
     ("N", "File names on / off"),
+    ("Z", "Grid: small / big thumbnails / justified"),
     ("F10", "Menu"),
     ("?  F1", "Keyboard shortcuts"),
     ("Esc", "Close menu, leave crop, leave full screen, back to the grid"),
@@ -123,6 +124,7 @@ pub fn key_message(key: &Key, modified: &Key, mods: keyboard::Modifiers, m: Mode
         Key::Character(c) if plain && c.eq_ignore_ascii_case("c") => Action::ToggleCrop.into(),
         Key::Character(c) if plain && c.eq_ignore_ascii_case("f") => Action::ToggleFullscreen.into(),
         Key::Character(c) if plain && c.eq_ignore_ascii_case("n") => Action::ToggleNames.into(),
+        Key::Character(c) if plain && c.eq_ignore_ascii_case("z") => Action::NextLayout.into(),
         _ => return None,
     })
 }

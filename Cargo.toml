@@ -34,5 +34,10 @@ all = { level = "warn", priority = -1 }
 [profile.dev.package."*"]
 opt-level = 2
 
+# Pixel loops (downscaling, rendering) are generic `image` code compiled into core, so
+# they'd run unoptimized in dev builds otherwise.
+[profile.dev.package.photo-cruiser-core]
+opt-level = 2
+
 [profile.release]
 strip = true

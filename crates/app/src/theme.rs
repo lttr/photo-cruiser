@@ -6,7 +6,6 @@
 use iced::widget::{button as btn, container, text};
 use iced::{Background, Border, Color, Font, Shadow, Theme, Vector, theme::Palette};
 use serde::Deserialize;
-use std::path::PathBuf;
 use std::sync::OnceLock;
 
 #[derive(Deserialize, Clone, Copy)]
@@ -77,9 +76,7 @@ fn color(c: Rgba) -> Color {
 
 /// Read `~/.config/cosmic/<id>/v1/<key>` as RON.
 fn read<T: for<'de> Deserialize<'de>>(id: &str, key: &str) -> Option<T> {
-    let base = std::env::var_os("XDG_CONFIG_HOME")
-        .map(PathBuf::from)
-        .or_else(|| std::env::var_os("HOME").map(|h| PathBuf::from(h).join(".config")))?;
+    let base = crate::settings::config_dir()?;
     let text = std::fs::read_to_string(base.join("cosmic").join(id).join("v1").join(key)).ok()?;
     ron::from_str(&text).ok()
 }
@@ -146,9 +143,14 @@ pub fn flat(active: bool) -> impl Fn(&Theme, btn::Status) -> btn::Style {
 }
 
 /// A grid cell: an accent border when `selected` (the current photo), a tint on hover.
-pub fn cell(selected: bool) -> impl Fn(&Theme, btn::Status) -> btn::Style {
+/// Unpadded (justified) cells are plain: the photo covers them.
+pub fn cell(selected: bool, padded: bool) -> impl Fn(&Theme, btn::Status) -> btn::Style {
     move |_, status| {
         let t = get();
+        if !padded {
+            // Unpadded: the photo is all there is (selection: [`frame`]).
+            return btn::Style { text_color: color(t.background.on), ..btn::Style::default() };
+        }
         let bg = match status {
             btn::Status::Pressed => Some(t.button.pressed),
             btn::Status::Hovered => Some(t.button.hover),
@@ -162,6 +164,21 @@ pub fn cell(selected: bool) -> impl Fn(&Theme, btn::Status) -> btn::Style {
             border: Border { color: border, width: 2.0, radius: 8.into() },
             ..btn::Style::default()
         }
+    }
+}
+
+/// The selection, drawn over an unpadded thumbnail.
+pub fn frame(_: &Theme) -> container::Style {
+    let border = Border { color: color(get().accent.base), width: 3.0, radius: 0.into() };
+    container::Style { border, ..container::Style::default() }
+}
+
+/// Text over a photo: white on a dark translucent strip.
+pub fn scrim(_: &Theme) -> container::Style {
+    container::Style {
+        background: Some(Color::from_rgba(0.0, 0.0, 0.0, 0.55).into()),
+        text_color: Some(Color::WHITE),
+        ..container::Style::default()
     }
 }
 

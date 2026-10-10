@@ -11,6 +11,7 @@ pub mod edit;
 pub mod error;
 pub mod export;
 pub mod geom;
+pub mod justified;
 pub mod loader;
 pub mod render;
 pub mod source;

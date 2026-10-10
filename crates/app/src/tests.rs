@@ -15,8 +15,10 @@
 use crate::action::Action;
 use crate::app::{self, Config};
 use crate::crop_overlay::Modes;
+use crate::grid::Layout;
 use crate::message::Message;
-use crate::state::{Display, Effect, Mode, State, View, decode_job, thumb_job};
+use crate::settings::Settings;
+use crate::state::{Display, Effect, Mode, State, View, decode_job, size_job, thumb_job};
 use iced::futures::channel::mpsc;
 use iced::keyboard::{Key, key::Named};
 use iced::mouse::Button;
@@ -47,14 +49,17 @@ fn names() -> Vec<String> {
 // ---------------------------------------------------------------------------------------
 // Pure update tests
 
-/// Run decodes (and grid thumbnails) synchronously until the loader is idle.
+/// Run decodes (and grid thumbnails, size probes) synchronously until the loader is idle.
 fn settle(s: &mut State) {
+    while let Some((job, paths)) = s.next_size_job() {
+        s.finish_sizes(&job, &size_job(&paths));
+    }
     while let Some((job, path)) = s.next_job() {
         let r = decode_job(&path, job.kind, s.max_side);
         s.finish(job, r);
     }
     while let Some((job, path)) = s.next_thumb_job() {
-        s.finish_thumb(job, thumb_job(&path));
+        s.finish_thumb(job, thumb_job(&path, job.side));
     }
     assert!(s.is_idle());
 }
@@ -192,9 +197,9 @@ fn update_previous_photo_stays_until_decoded() {
 
 #[test]
 fn update_embedded_preview_then_sharp() {
-    let dir = fixtures().join("previews"); // letterbox.jpg, thumb-exif6.jpg, thumb.HEIC
+    let dir = fixtures().join("previews"); // letterbox.jpg, rounded.jpg, thumb-exif6.jpg, thumb.HEIC
     let mut s = opened(&dir);
-    for (index, preview_size) in [(1, (240, 320)), (2, (320, 240))] {
+    for (index, preview_size) in [(2, (240, 320)), (3, (320, 240))] {
         s.apply(&Action::Open { path: dir.clone() });
         s.apply(&Action::Goto { index });
         // The preview job comes first and gets its own slot.
@@ -248,7 +253,7 @@ fn update_grid_view() {
     assert_eq!(s.dump(None, None).view, View::Grid);
 
     s.body = Some(Size::new(850.0, 700.0)); // 4 columns: rows 0–3, 4–7, 8
-    assert_eq!(s.columns(), 4);
+    assert_eq!(s.grid().rows[0].items.len(), 4);
     s.apply(&Action::Down);
     s.apply(&Action::Next);
     assert_eq!(s.index, 5);
@@ -345,6 +350,7 @@ fn bare_harness() -> Harness<impl Program<Message = Message, State = app::App>> 
         max_side: TEST_MAX_SIDE,
         transition: Duration::ZERO,
         script: None,
+        settings: None,
     };
     Harness::new(app::application(cfg))
 }
@@ -750,6 +756,92 @@ fn names_hidden_by_default_and_toggled_with_n() {
     assert_eq!(h.status(), "1 / 9", "photo view: no name either");
     h.keys(Key::Character("n".into()), 1);
     assert_eq!(h.status(), "img1.png · 1 / 9");
+}
+
+#[test]
+fn layouts_cycled_with_z() {
+    let mut s = opened(&fixtures());
+    let small = s.thumbs.get(1).unwrap().as_ref().unwrap().handle.clone();
+    s.apply(&Action::NextLayout);
+    assert_eq!((s.layout, s.dump(None, None).layout), (Layout::Big, Layout::Big));
+    // Re-decoded bigger; the small ones stay until then.
+    assert!(!s.is_idle());
+    assert_eq!(s.thumbs.get(1).unwrap().as_ref().unwrap().handle, small);
+    settle(&mut s);
+    let big = s.thumbs.get(1).unwrap().as_ref().unwrap().handle.clone();
+    assert_ne!(big, small);
+
+    // Justified: same thumbnails, but every size is probed first.
+    s.apply(&Action::NextLayout);
+    assert_eq!(s.layout, Layout::Justified);
+    assert!(!s.is_idle() && s.next_thumb_job().is_none());
+    settle(&mut s);
+    assert_eq!(s.thumbs.get(1).unwrap().as_ref().unwrap().handle, big);
+    assert_eq!((s.sizes.get(2), s.sizes.get(8)), (Some((240, 320)), None), "oriented; broken");
+    let g = s.grid();
+    let width = |i: usize| {
+        let r = &g.rows[g.row_of(i).unwrap()];
+        r.widths[i - r.items.start]
+    };
+    assert!(width(2) < width(1), "the portrait photo is narrower");
+    assert_eq!(g.rows.iter().map(|r| r.items.len()).sum::<usize>(), 9);
+    s.apply(&Action::Down);
+    assert_eq!(s.index, g.rows[1].items.start);
+    settle(&mut s);
+
+    // Back to small: the big thumbnails do, nothing to decode.
+    s.apply(&Action::NextLayout);
+    assert_eq!(s.layout, Layout::Small);
+    assert!(s.next_thumb_job().is_none() && s.is_idle());
+    s.apply(&Action::SetLayout { layout: Layout::Justified });
+    assert_eq!(s.layout, Layout::Justified);
+
+    let mut h = bare_harness();
+    let image = |r: Rectangle| (r.width - 12.0, r.height - 12.0);
+    let cell = image(h.bounds("selected").unwrap());
+    h.keys(Key::Character("z".into()), 1);
+    assert_eq!(image(h.bounds("selected").unwrap()), (2.0 * cell.0, 2.0 * cell.1));
+    h.keys(Key::Character("z".into()), 1);
+    // Once sizes are probed, the selected photo (4:3) and, two to the right, the portrait
+    // one are shown at their aspect ratios.
+    // No cell padding: the cell is the photo.
+    let aspect = |h: &mut Harness<_>| {
+        let r = h.bounds("selected").unwrap();
+        r.width / r.height
+    };
+    h.until("sizes probed", |h| (aspect(h) - 4.0 / 3.0).abs() < 0.01);
+    assert_eq!(h.bounds("selected").unwrap().position(), Point::new(4.0, 4.0));
+    h.keys(Key::Named(Named::ArrowRight), 2);
+    assert!((aspect(&mut h) - 3.0 / 4.0).abs() < 0.01);
+    h.keys(Key::Character("z".into()), 1);
+    h.keys(Key::Named(Named::ArrowLeft), 2);
+    assert_eq!(image(h.bounds("selected").unwrap()), cell);
+}
+
+#[test]
+fn layout_and_names_remembered_in_settings() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("settings.json");
+    let with_settings = || {
+        let cfg = Config {
+            folder: Some(fixtures()),
+            max_side: TEST_MAX_SIDE,
+            transition: Duration::ZERO,
+            script: None,
+            settings: Some(path.clone()),
+        };
+        Harness::new(app::application(cfg))
+    };
+    let mut h = with_settings();
+    let small = h.bounds("selected").unwrap();
+    assert!(!path.exists(), "nothing written until something changes");
+    h.keys(Key::Character("z".into()), 1);
+    h.keys(Key::Character("n".into()), 1);
+    assert_eq!(Settings::load(&path), Settings { layout: Layout::Big, names: true });
+    // A new run starts big, with names.
+    let h = with_settings();
+    assert!(h.bounds("selected").unwrap().width > small.width);
+    assert!(h.status().starts_with("img1.png · "), "{}", h.status());
 }
 
 #[test]

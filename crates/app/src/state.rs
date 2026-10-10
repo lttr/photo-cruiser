@@ -10,14 +10,15 @@
 //!
 //! Opening a folder shows the grid of all its photos; the grid's selection is the current
 //! index, so the photo view opens on it and returns to it. Thumbnails load only while the
-//! grid shows, visible ones first.
+//! grid shows, visible ones first. The justified layout also needs every photo's size:
+//! those are probed (headers only) in the background, the layout settling as they come.
 
 use crate::action::Action;
 use crate::grid;
 use iced::widget::image::Handle;
 use photo_cruiser_core::crop::{CropTool, MouseKind};
 use photo_cruiser_core::geom::PixelRect;
-use photo_cruiser_core::loader::{Job, Kind, Loader, ThumbJob, Thumbs};
+use photo_cruiser_core::loader::{Job, Kind, Loader, SizeJob, Sizes, ThumbJob, Thumbs};
 use photo_cruiser_core::{Folder, Point, Size};
 use serde::Serialize;
 use std::ops::Range;
@@ -65,11 +66,15 @@ pub fn decode_job(path: &Path, kind: Kind, max_side: u32) -> Loaded {
 }
 
 /// Decode a grid thumbnail of `path` (blocking).
-pub fn thumb_job(path: &Path) -> Loaded {
-    let d = photo_cruiser_core::thumbnail(path, grid::THUMB_SIDE)
-        .map_err(|e| e.to_string().trim_end().to_string())?;
+pub fn thumb_job(path: &Path, side: u32) -> Loaded {
+    let d = photo_cruiser_core::thumbnail(path, side).map_err(|e| e.to_string().trim_end().to_string())?;
     let (w, h) = d.image.dimensions();
     Ok(Picture { source: d.source_size(), handle: Handle::from_rgba(w, h, d.image.into_raw()) })
+}
+
+/// Probe the displayed sizes of `paths` (blocking); `None` for unreadable ones.
+pub fn size_job(paths: &[PathBuf]) -> Vec<Option<(u32, u32)>> {
+    paths.iter().map(|p| photo_cruiser_core::probe(p).ok().map(|p| (p.width, p.height))).collect()
 }
 
 /// The image area's size before the overlay has reported it (the default window minus
@@ -144,6 +149,8 @@ pub struct State {
     pub loader: Loader<Loaded>,
     pub view: View,
     pub thumbs: Thumbs<Loaded>,
+    /// Photo sizes, for the justified layout.
+    pub sizes: Sizes,
     /// Size of the image / grid area, as last reported by the overlay.
     pub body: Option<iced::Size>,
     /// Vertical scroll position of the grid.
@@ -158,8 +165,10 @@ pub struct State {
     pub menu: bool,
     /// The keyboard shortcuts panel is showing.
     pub help: bool,
-    /// File names are shown (status line, grid labels). Off by default.
+    /// File names are shown (status line, grid labels). Off by default; remembered between runs.
     pub names: bool,
+    /// How the grid arranges thumbnails. Small at first start, then remembered.
+    pub layout: grid::Layout,
     pub max_side: u32,
     /// Rejected actions and folder errors, oldest first.
     pub errors: Vec<String>,
@@ -186,6 +195,7 @@ impl State {
             loader: Loader::default(),
             view: View::Grid,
             thumbs: Thumbs::default(),
+            sizes: Sizes::default(),
             body: None,
             grid_offset: 0.0,
             scroll: None,
@@ -195,6 +205,7 @@ impl State {
             menu: false,
             help: false,
             names: false,
+            layout: grid::Layout::default(),
             max_side,
             errors: Vec::new(),
             shown: None,
@@ -229,33 +240,34 @@ impl State {
         self.current()?.as_ref().ok()
     }
 
-    /// Nothing decoding, the photos around the current one loaded, no fade running, and in
-    /// the grid every visible thumbnail loaded.
+    /// Nothing decoding, the photos around the current one loaded, no fade running, in the
+    /// grid every visible thumbnail loaded, and for the justified layout every size probed.
     pub fn is_idle(&self) -> bool {
-        let thumbs = self.view != View::Grid || self.thumbs.is_idle(self.visible(), self.len());
-        self.loader.is_idle(self.index, self.len()) && self.fade_progress().is_none() && thumbs
+        let side = self.layout.thumb_side();
+        let thumbs = self.view != View::Grid || self.thumbs.is_idle(self.visible(), self.len(), side);
+        let sizes = self.layout != grid::Layout::Justified || self.sizes.is_done();
+        self.loader.is_idle(self.index, self.len()) && self.fade_progress().is_none() && thumbs && sizes
     }
 
     pub fn body_size(&self) -> iced::Size {
         self.body.unwrap_or(DEFAULT_BODY)
     }
 
-    /// Columns of the grid at the current size.
-    pub fn columns(&self) -> usize {
-        grid::columns(self.body_size().width)
+    /// The grid's rows at the current size. Photos of unknown size count as 3:2.
+    pub fn grid(&self) -> grid::Grid {
+        let aspect = |i| self.sizes.get(i).map_or(grid::DEFAULT_ASPECT, |(w, h)| w as f32 / h.max(1) as f32);
+        grid::Grid::new(self.layout, self.body_size().width, self.names, self.len(), aspect)
     }
 
     /// Indices of the photos in the grid rows on screen.
     pub fn visible(&self) -> Range<usize> {
-        grid::visible(self.body_size(), grid::cell_h(self.names), self.grid_offset, self.len())
+        self.grid().visible(self.grid_offset, self.body_size().height)
     }
 
     /// In the grid, scroll so the current photo is fully visible.
     fn reveal(&mut self) {
-        let row = self.index / self.columns();
         if self.view == View::Grid
-            && let Some(y) =
-                grid::reveal(row, grid::cell_h(self.names), self.grid_offset, self.body_size().height)
+            && let Some(y) = self.grid().reveal(self.index, self.grid_offset, self.body_size().height)
         {
             self.grid_offset = y;
             self.scroll = Some(y);
@@ -334,16 +346,9 @@ impl State {
                 }
             }
             Action::Up | Action::Down if self.view == View::Photo => {}
-            Action::Up => {
-                if let Some(i) = self.index.checked_sub(self.columns()) {
+            Action::Up | Action::Down => {
+                if let Some(i) = self.grid().vertical(self.index, *action == Action::Down) {
                     self.select(i);
-                }
-            }
-            Action::Down => {
-                let cols = self.columns();
-                // From the row above the last, a short last row still takes you down.
-                if self.index / cols + 1 < self.len().div_ceil(cols) {
-                    self.select((self.index + cols).min(self.len() - 1));
                 }
             }
             Action::ShowPhoto { index } => match index {
@@ -410,6 +415,14 @@ impl State {
                 // Rows change height: keep the current photo in view.
                 self.reveal();
             }
+            Action::NextLayout | Action::SetLayout { .. } => {
+                self.layout = match action {
+                    Action::SetLayout { layout } => *layout,
+                    _ => self.layout.next(),
+                };
+                // Rows and columns change: keep the current photo in view.
+                self.reveal();
+            }
             Action::ToggleMenu | Action::CloseMenu | Action::ToggleHelp => {}
             Action::Quit => return Effect::Quit,
         }
@@ -441,6 +454,7 @@ impl State {
         };
         self.loader.reset();
         self.thumbs.reset();
+        self.sizes.reset(0);
         self.view = if file.is_some() { View::Photo } else { View::Grid };
         self.grid_offset = 0.0;
         self.scroll = Some(0.0);
@@ -454,6 +468,7 @@ impl State {
                 if let Some(file) = file {
                     self.index = folder.entries.iter().position(|e| e.path == file).unwrap_or(0);
                 }
+                self.sizes.reset(folder.len());
                 self.folder = Some(folder);
             }
             Err(e) => {
@@ -486,19 +501,46 @@ impl State {
         Some((job, path))
     }
 
-    /// The next grid thumbnail to decode, while the grid shows and a slot is free. Call
-    /// until `None`.
+    /// The next grid thumbnail to decode (`job.side` is the side to decode at), while the
+    /// grid shows and a slot is free. Call until `None`.
     pub fn next_thumb_job(&mut self) -> Option<(ThumbJob, PathBuf)> {
         if self.view != View::Grid {
             return None;
         }
-        let job = self.thumbs.next_job(self.visible(), self.len())?;
+        let job = self.thumbs.next_job(self.visible(), self.len(), self.layout.thumb_side())?;
         let path = self.folder.as_ref()?.entries.get(job.index)?.path.clone();
         Some((job, path))
     }
 
     pub fn finish_thumb(&mut self, job: ThumbJob, result: Loaded) {
-        self.thumbs.finish(job, result);
+        // The thumbnail knows its photo's size: no need to wait for the probe.
+        let source = result.as_ref().ok().map(|p| p.source);
+        if self.thumbs.finish(job, result)
+            && let Some(size) = source
+            && self.sizes.get(job.index).is_none()
+        {
+            self.sizes.set(job.index, size);
+        }
+    }
+
+    /// The next chunk of photo sizes to probe, while the justified layout is on and a slot
+    /// is free. Call until `None`.
+    pub fn next_size_job(&mut self) -> Option<(SizeJob, Vec<PathBuf>)> {
+        if self.layout != grid::Layout::Justified {
+            return None;
+        }
+        let job = self.sizes.next_job()?;
+        let entries = &self.folder.as_ref()?.entries[job.items.clone()];
+        let paths = entries.iter().map(|e| e.path.clone()).collect();
+        Some((job, paths))
+    }
+
+    /// The justified rows reflow as sizes come in: a current photo on screen stays there.
+    pub fn finish_sizes(&mut self, job: &SizeJob, results: &[Option<(u32, u32)>]) {
+        let shown = self.visible().contains(&self.index);
+        if self.sizes.finish(job, results) && shown {
+            self.reveal();
+        }
     }
 
     pub fn finish(&mut self, job: Job, result: Loaded) {
@@ -571,6 +613,7 @@ impl State {
             menu: self.menu,
             help: self.help,
             names: self.names,
+            layout: self.layout,
             crop: self.crop_pixels(),
             title: self.title(),
             status: self.status(),
@@ -605,6 +648,7 @@ pub struct Dump {
     pub menu: bool,
     pub help: bool,
     pub names: bool,
+    pub layout: grid::Layout,
     /// Integer source pixels.
     pub crop: Option<PixelRect>,
     pub title: String,

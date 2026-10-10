@@ -147,6 +147,12 @@ pub fn decode_max_side(path: &Path, max_side: Option<u32>) -> Result<Decoded> {
 /// `Ok(None)` when there is none, or when its aspect ratio doesn't match the photo
 /// (letterboxed thumbnails would jump when the full image replaces them).
 pub fn embedded_preview(path: &Path) -> Result<Option<Decoded>> {
+    preview_within(path, 0.03)
+}
+
+/// [`embedded_preview`] whose aspect ratio may differ from the photo's by `tolerance`
+/// (relative).
+fn preview_within(path: &Path, tolerance: f64) -> Result<Option<Decoded>> {
     let decoded = if let Some(format) = Format::heif_from_path(path) {
         let (_ctx, handle) = heif_open(path)?;
         let mut ids = [0; 1];
@@ -178,17 +184,26 @@ pub fn embedded_preview(path: &Path) -> Result<Option<Decoded>> {
     let (tw, th) = decoded.image.dimensions();
     let aspect = |w: u32, h: u32| w as f64 / h.max(1) as f64;
     let mismatch = (aspect(tw, th) / aspect(decoded.source_width, decoded.source_height) - 1.0).abs();
-    Ok((mismatch < 0.03).then_some(decoded))
+    Ok((mismatch < tolerance).then_some(decoded))
 }
 
 /// A small image for a grid of photos, longest side at most `max_side`. Uses the
 /// embedded preview when it is at least half that size (a few ms), else decodes the
-/// whole photo and downscales it.
+/// whole photo and downscales it. The preview's aspect ratio may be off by up to 8%
+/// (phones round thumbnail sides to multiples of 16, e.g. 128×176 for 3000×4000); it
+/// is resized to the photo's aspect ratio.
 pub fn thumbnail(path: &Path, max_side: u32) -> Result<Decoded> {
-    if let Some(p) = embedded_preview(path)? {
+    if let Some(mut p) = preview_within(path, 0.08)? {
         let (w, h) = p.image.dimensions();
-        if w.max(h) * 2 >= max_side {
-            return Ok(p.downscale(max_side));
+        let long = w.max(h);
+        if long * 2 >= max_side {
+            let (sw, sh) = p.source_size();
+            let k = long.min(max_side) as f64 / sw.max(sh) as f64;
+            let (nw, nh) = (((sw as f64 * k).round() as u32).max(1), ((sh as f64 * k).round() as u32).max(1));
+            if (nw, nh) != (w, h) {
+                p.image = image::imageops::thumbnail(&p.image, nw, nh);
+            }
+            return Ok(p);
         }
     }
     decode_max_side(path, Some(max_side))
