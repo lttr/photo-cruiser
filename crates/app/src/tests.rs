@@ -704,6 +704,24 @@ fn shortcuts_panel() {
 }
 
 #[test]
+fn about_panel() {
+    let mut h = harness();
+    h.until("img1 shown", |h| h.bounds("photo").is_some());
+    let about = || Some(Target::Text("About Photo Cruiser".into()));
+    h.click_menu_button();
+    h.run(Interaction::Mouse(Mouse::Click { button: Button::Left, target: about() }));
+    assert!(h.bounds("about").is_some() && h.bounds("menu").is_none(), "opens from the menu");
+    assert!(h.has_text(&format!("Version {}", env!("CARGO_PKG_VERSION"))));
+    h.keys(Key::Named(Named::Escape), 1);
+    assert!(h.bounds("about").is_none(), "Esc closes it");
+    h.click_menu_button();
+    h.run(Interaction::Mouse(Mouse::Click { button: Button::Left, target: about() }));
+    let target = Some(Target::Point(Point::new(5.0, 5.0)));
+    h.run(Interaction::Mouse(Mouse::Click { button: Button::Left, target }));
+    assert!(h.bounds("about").is_none(), "a click outside closes it");
+}
+
+#[test]
 fn grid_click_keys_and_back() {
     let mut h = grid_harness();
     assert!(h.bounds("grid").is_some() && h.bounds("photo").is_none());

@@ -20,9 +20,10 @@ pub const EDGE: f32 = 8.0;
 /// What decides the meaning of a key.
 #[derive(Clone, Copy, Debug, Default)]
 pub struct Modes {
-    /// The menu or the shortcuts panel is open (`Esc` closes it first).
+    /// The menu, the shortcuts or the About panel is open (`Esc` closes it first).
     pub menu: bool,
     pub help: bool,
+    pub about: bool,
     pub crop: bool,
     pub fullscreen: bool,
     /// The grid shows (not a single photo).
@@ -114,6 +115,7 @@ pub fn key_message(key: &Key, modified: &Key, mods: keyboard::Modifiers, m: Mode
         Key::Named(Named::Enter) if m.grid => Action::ShowPhoto { index: None }.into(),
         Key::Named(Named::Escape) if m.menu => Action::CloseMenu.into(),
         Key::Named(Named::Escape) if m.help => Action::ToggleHelp.into(),
+        Key::Named(Named::Escape) if m.about => Action::ToggleAbout.into(),
         Key::Named(Named::Escape) if m.crop => Action::ExitCrop.into(),
         Key::Named(Named::Escape) if m.fullscreen || m.grid => Action::ExitFullscreen.into(),
         Key::Named(Named::Escape) => Action::ShowGrid.into(),

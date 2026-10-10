@@ -61,6 +61,8 @@ pub enum Action {
     },
     /// Show/hide the keyboard shortcuts (`?`, `F1`, menu). Any other action closes it.
     ToggleHelp,
+    /// Show/hide the About panel (menu). Any other action closes it.
+    ToggleAbout,
     Quit,
 }
 
@@ -83,7 +85,7 @@ mod tests {
                 {"action":"toggle_menu"},{"action":"close_menu"},{"action":"toggle_help"},
                 {"action":"first"},{"action":"last"},{"action":"up"},{"action":"down"},
                 {"action":"show_photo"},{"action":"show_photo","index":3},{"action":"show_grid"},{"action":"toggle_names"},
-                {"action":"next_layout"},{"action":"set_layout","layout":"justified"}]"#,
+                {"action":"next_layout"},{"action":"set_layout","layout":"justified"},{"action":"toggle_about"}]"#,
         )
         .unwrap();
         assert_eq!(steps[1], Action::Goto { index: 2 });
@@ -96,7 +98,8 @@ mod tests {
         assert_eq!(steps[21], Action::ToggleNames);
         assert_eq!(steps[22], Action::NextLayout);
         assert_eq!(steps[23], Action::SetLayout { layout: Layout::Justified });
-        assert_eq!(steps.len(), 24);
+        assert_eq!(steps[24], Action::ToggleAbout);
+        assert_eq!(steps.len(), 25);
         let json = serde_json::to_string(&Action::SetCrop(Rect::new(1.0, 2.0, 3.0, 4.0))).unwrap();
         assert_eq!(json, r#"{"action":"set_crop","x":1.0,"y":2.0,"w":3.0,"h":4.0}"#);
         assert!(parse_script(r#"[{"action":"jump"}]"#).is_err());

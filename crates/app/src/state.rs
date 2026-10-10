@@ -165,6 +165,8 @@ pub struct State {
     pub menu: bool,
     /// The keyboard shortcuts panel is showing.
     pub help: bool,
+    /// The About panel is showing.
+    pub about: bool,
     /// File names are shown (status line, grid labels). Off by default; remembered between runs.
     pub names: bool,
     /// How the grid arranges thumbnails. Small at first start, then remembered.
@@ -204,6 +206,7 @@ impl State {
             fullscreen: false,
             menu: false,
             help: false,
+            about: false,
             names: false,
             layout: grid::Layout::default(),
             max_side,
@@ -333,6 +336,7 @@ impl State {
     pub fn apply(&mut self, action: &Action) -> Effect {
         self.menu = matches!(action, Action::ToggleMenu) && !self.menu;
         self.help = matches!(action, Action::ToggleHelp) && !self.help;
+        self.about = matches!(action, Action::ToggleAbout) && !self.about;
         match action {
             Action::Open { path } => self.open(path),
             Action::Next => {
@@ -423,7 +427,7 @@ impl State {
                 // Rows and columns change: keep the current photo in view.
                 self.reveal();
             }
-            Action::ToggleMenu | Action::CloseMenu | Action::ToggleHelp => {}
+            Action::ToggleMenu | Action::CloseMenu | Action::ToggleHelp | Action::ToggleAbout => {}
             Action::Quit => return Effect::Quit,
         }
         Effect::None
@@ -612,6 +616,7 @@ impl State {
             fullscreen: self.fullscreen,
             menu: self.menu,
             help: self.help,
+            about: self.about,
             names: self.names,
             layout: self.layout,
             crop: self.crop_pixels(),
@@ -647,6 +652,7 @@ pub struct Dump {
     pub fullscreen: bool,
     pub menu: bool,
     pub help: bool,
+    pub about: bool,
     pub names: bool,
     pub layout: grid::Layout,
     /// Integer source pixels.

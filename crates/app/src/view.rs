@@ -4,7 +4,7 @@
 //! Widget ids used by tests: `photo` (the current photo, sharp), `preview` (its embedded
 //! preview, or still the previous photo while it decodes), `message` (error / empty),
 //! `grid` (the thumbnails' scrollable), `selected` (the current photo's grid cell),
-//! `body` (the image area), `menu-button`, `menu`, `help` (shortcuts panel).
+//! `body` (the image area), `menu-button`, `menu`, `help` (shortcuts panel), `about`.
 
 use crate::action::Action;
 use crate::app::App;
@@ -62,6 +62,7 @@ pub fn view(app: &App) -> Element<'_, Message> {
         modes: Modes {
             menu: s.menu,
             help: s.help,
+            about: s.about,
             crop: s.mode == Mode::Crop,
             fullscreen: s.fullscreen,
             grid,
@@ -110,6 +111,23 @@ pub fn view(app: &App) -> Element<'_, Message> {
         let layer = container(opaque(panel)).center(Fill);
         return stack![main, mouse_area(layer).on_press(Action::ToggleHelp.into())].into();
     }
+    if s.about {
+        let panel = container(
+            column![
+                image(app.icon.clone()).width(96).height(96),
+                text("Photo Cruiser").size(22),
+                text(format!("Version {}", env!("CARGO_PKG_VERSION"))).style(theme::dim),
+                text("Fast photo browser and editor"),
+            ]
+            .spacing(8)
+            .align_x(Center),
+        )
+        .padding([24, 40])
+        .style(theme::menu)
+        .id("about");
+        let layer = container(opaque(panel)).center(Fill);
+        return stack![main, mouse_area(layer).on_press(Action::ToggleAbout.into())].into();
+    }
     if !s.menu {
         return main.into();
     }
@@ -137,6 +155,7 @@ pub fn view(app: &App) -> Element<'_, Message> {
             ),
             item(s.layout.next().label(), "Z", Action::NextLayout.into()),
             item("Keyboard shortcuts", "?", Action::ToggleHelp.into()),
+            item("About Photo Cruiser", "", Action::ToggleAbout.into()),
         ]
         .width(220),
     )

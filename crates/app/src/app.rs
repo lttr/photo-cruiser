@@ -16,6 +16,17 @@ use std::time::Duration;
 
 pub const APP_ID: &str = "com.lukastrumm.PhotoCruiser";
 pub const WINDOW_SIZE: iced::Size = iced::Size::new(1100.0, 850.0);
+/// The app icon, rendered from the SVG (`resources/icons/hicolor/scalable/apps/`).
+const ICON_PNG: &[u8] =
+    include_bytes!("../../../resources/icons/hicolor/256x256/apps/com.lukastrumm.PhotoCruiser.png");
+
+/// The icon as RGBA pixels: width, height, data.
+fn icon_rgba() -> (u32, u32, Vec<u8>) {
+    let img = image::load_from_memory_with_format(ICON_PNG, image::ImageFormat::Png)
+        .expect("bundled icon is a valid PNG")
+        .into_rgba8();
+    (img.width(), img.height(), img.into_raw())
+}
 
 #[derive(Clone, Debug)]
 pub struct Config {
@@ -56,8 +67,11 @@ pub fn application(cfg: Config) -> iced::Application<impl iced::Program<State = 
 }
 
 fn window_settings() -> window::Settings {
+    let (w, h, rgba) = icon_rgba();
     window::Settings {
         size: WINDOW_SIZE,
+        // Used on X11 and Windows; Wayland takes the icon from the desktop entry (app id).
+        icon: window::icon::from_rgba(rgba, w, h).ok(),
         #[cfg(target_os = "linux")]
         platform_specific: window::settings::PlatformSpecific {
             application_id: APP_ID.into(),
@@ -76,6 +90,8 @@ pub struct App {
     resumed: Option<PathBuf>,
     /// The settings file and what it holds.
     settings: Option<(PathBuf, Settings)>,
+    /// The app icon, shown in the About panel.
+    pub icon: iced::widget::image::Handle,
 }
 
 impl App {
@@ -90,6 +106,10 @@ impl App {
             resume: std::env::var_os("PC_RESUME_FILE").map(PathBuf::from),
             resumed: None,
             settings,
+            icon: {
+                let (w, h, rgba) = icon_rgba();
+                iced::widget::image::Handle::from_rgba(w, h, rgba)
+            },
         };
         if let Some((_, s)) = &app.settings {
             (app.state.layout, app.state.names) = (s.layout, s.names);
@@ -119,7 +139,7 @@ impl App {
         let task = match message {
             Message::Action(action) => self.apply(&action),
             Message::OpenDialog => {
-                (self.state.menu, self.state.help) = (false, false);
+                (self.state.menu, self.state.help, self.state.about) = (false, false, false);
                 let dialog = rfd::AsyncFileDialog::new().set_title("Open photo folder").pick_folder();
                 return Task::perform(dialog, |h| Message::FolderPicked(h.map(|h| h.path().into())));
             }
