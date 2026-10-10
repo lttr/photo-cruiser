@@ -13,7 +13,7 @@ description: Verify a change to Photo Cruiser with evidence (tests, CLI output, 
 just verify
 ```
 
-This runs `just check` (fmt, clippy `-D warnings`, all tests), then a CLI smoke test, then the real-window smoke script (`scripts/smoke.json` on `fixtures/`), and asserts the state JSON (index 4, crop mode, crop 200×150 @ 40,30, no errors, not loading). It must print `verify ok`. Then **Read `/tmp/photo-cruiser/verify.png`**: img5.HEIC (checkerboard) should be dimmed to about 50% outside a sharp-edged selection, with the status line `img5.HEIC — 5 / 9 — crop 200×150 @ 40,30`.
+This runs `just check` (fmt, clippy `-D warnings`, all tests), then a CLI smoke test, then the real-window smoke script (`scripts/smoke.json` on `fixtures/`, headless through `scripts/headless.sh`), and asserts the state JSON (index 4, crop mode, crop 200×150 @ 40,30, no errors, not loading). It must print `verify ok`. Then **Read `/tmp/photo-cruiser/verify.png`**: img5.HEIC (checkerboard) should be dimmed to about 50% outside a sharp-edged selection, with the status line `img5.HEIC — 5 / 9 — crop 200×150 @ 40,30`.
 
 ## 2. Change-specific evidence
 
@@ -21,7 +21,7 @@ Pick whatever the change touches:
 
 - **core logic** (geom, crop, loader, edit, render, decode): add or extend a unit test in the module, or in `crates/core/tests/fixtures.rs` for anything that touches real files. Add the fixture to `scripts/gen_fixtures.py` if a new one is needed, then run `just fixtures`.
 - **CLI**: add a test in `crates/cli/tests/cli.rs` (`assert_cmd`) covering the exit code and the JSON shape. Run the command once by hand and show its output.
-- **GUI behaviour or rendering**: write a script in `/tmp/photo-cruiser/<name>.json` that reaches the state, run it (see the `run-app` skill), then:
+- **GUI behaviour or rendering**: write a script in `/tmp/photo-cruiser/<name>.json` that reaches the state, run it headless (`just shot`, or `scripts/headless.sh`; see the `run-app` skill), then:
   - check the state JSON fields with `jq -e`;
   - **Read the PNG**, and describe what you see and whether it matches what you expected;
   - for mouse or keyboard behaviour, add an `iced_test` case in `crates/app/src/tests.rs`. Script mode can't send input events.
@@ -39,5 +39,6 @@ Pick whatever the change touches:
 ## Never
 
 - Use OS input injection (`wtype`, `xdotool`) or take desktop screenshots.
+- Open a visible window for verification. Verification is headless; visible windows are only for when the user asks to see the app.
 - Leave windows open.
 - Claim GUI behaviour works on the strength of unit tests alone, when a shot or an `iced_test` case could show it.

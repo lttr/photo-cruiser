@@ -18,7 +18,7 @@ check:
 test *args:
     cargo test --workspace {{args}}
 
-# Launch the GUI on a folder (default: fixtures/)
+# Launch the GUI on a folder (default: fixtures/). Always a visible window.
 [no-cd]
 run dir=fixtures:
     cargo run -q -p photo-cruiser-app -- "{{dir}}"
@@ -28,11 +28,13 @@ run dir=fixtures:
 cli *args:
     cargo run -q -p photo-cruiser-cli -- {{args}}
 
-# Drive the real GUI window with a script; writes <artifacts>/<name>.png + .json
+# Drive the real GUI window with a script; writes <artifacts>/<name>.png + .json.
+# Runs in a headless compositor; PC_HEADLESS=0 shows the window.
 [no-cd]
 shot script=(root / "scripts/smoke.json") dir=fixtures name="shot":
     mkdir -p "{{artifacts}}"
-    cargo run -q -p photo-cruiser-app -- "{{dir}}" --script "{{script}}" --shot "{{artifacts}}/{{name}}.png" --dump-state "{{artifacts}}/{{name}}.json"
+    cargo build -q -p photo-cruiser-app
+    "{{root}}/scripts/headless.sh" "{{root}}/target/debug/photo-cruiser" "{{dir}}" --script "{{script}}" --shot "{{artifacts}}/{{name}}.png" --dump-state "{{artifacts}}/{{name}}.json"
     cat "{{artifacts}}/{{name}}.json"
 
 # Rewrite the render golden images (crates/core/tests/golden/) from current output.
@@ -44,7 +46,7 @@ bless-golden:
 fixtures:
     uv run -q "{{root}}/scripts/gen_fixtures.py" "{{fixtures}}"
 
-# Full verification: check + CLI smoke + real-window smoke shot with state assertions
+# Full verification: check + CLI smoke + real-window smoke shot (headless) with state assertions
 verify: check
     #!/usr/bin/env bash
     set -euo pipefail
@@ -55,7 +57,7 @@ verify: check
     "$pcr" render "{{fixtures}}/img5.HEIC" --crop 10,20,100,50 -o "{{artifacts}}/verify-crop.png" | grep -q "100x50"
     code=0; out=$("$pcr" render "{{fixtures}}/img1.png" --crop 400,0,50,50 -o "{{artifacts}}/verify-empty.png" --json 2>/dev/null) || code=$?
     test "$code" = 3 && jq -e '.error.kind == "empty_crop"' <<<"$out" >/dev/null || { echo "empty crop: exit $code, $out"; exit 1; }
-    "{{root}}/target/debug/photo-cruiser" "{{fixtures}}" --script "{{root}}/scripts/smoke.json" \
+    "{{root}}/scripts/headless.sh" "{{root}}/target/debug/photo-cruiser" "{{fixtures}}" --script "{{root}}/scripts/smoke.json" \
         --shot "{{artifacts}}/verify.png" --dump-state "{{artifacts}}/verify.json"
     jq -e '.index == 4 and .mode == "crop" and .crop == {"x":40,"y":30,"w":200,"h":150} and .errors == [] and .loading == false' \
         "{{artifacts}}/verify.json" >/dev/null || { cat "{{artifacts}}/verify.json"; exit 1; }

@@ -10,7 +10,8 @@ description: Launch and drive Photo Cruiser (the iced GUI `photo-cruiser` and th
 ## Hard rules
 
 - **Never** use `wtype`, `xdotool`, `ydotool` or any other OS input injection, and **never** take a desktop screenshot. Drive the GUI only through script mode, below.
-- Script mode exits on its own. Kill any window you start without a script (`just run`) as soon as you've finished with it. Never leave windows open.
+- Your own runs are headless: wrap every GUI command in `scripts/headless.sh` (`just shot` and `just verify` already do). A visible window is only for when the user asks to see the app; see "Interactive run".
+- Script mode exits on its own. Kill any window you start without a script (`just run`) as soon as you've finished with it, unless the user is using it.
 - Personal photos (`~/sandbox/photo-cruiser/test-formats`, `test-photos`) are read-only inputs. Never copy them into the repo.
 
 ## CLI (fastest; no window)
@@ -28,9 +29,11 @@ With `--json`, errors also print `{"error": {"kind", "message"}}` to stdout. Exi
 ## GUI: script mode (the way to drive the real window)
 
 ```bash
-target/debug/photo-cruiser <dir> --script steps.json --shot /tmp/photo-cruiser/<name>.png --dump-state /tmp/photo-cruiser/<name>.json [--timeout 30] [--max-side 4096] [--transition 120]
+scripts/headless.sh target/debug/photo-cruiser <dir> --script steps.json --shot /tmp/photo-cruiser/<name>.png --dump-state /tmp/photo-cruiser/<name>.json [--timeout 30] [--max-side 4096] [--transition 120]
 # or: just shot <script> <dir> <name>
 ```
+
+`scripts/headless.sh` starts a private headless sway (1600×1000 output, own runtime dir), points the app at it with `WAYLAND_DISPLAY`, and tears it down afterwards. The window is real (real wgpu, real compositor), just not on the desktop, and the in-app screenshot is identical. It passes the app's exit code through. `PC_HEADLESS=0` makes it a no-op.
 
 It opens the real window and applies each action, waiting until the image and its neighbours have decoded before the next step. Then it uploads the current image to the GPU and takes an in-app `window::screenshot`, writes the state JSON, and exits. Exit codes: 0 ok (rejected actions and broken images are recorded in `errors`, not as failures), 1 runtime failure, 2 bad args or script, 3 timeout.
 
@@ -58,7 +61,12 @@ Read the PNG with the Read tool to see the window. Mouse drags and keyboard inpu
 
 ## Interactive run (for the user)
 
-`just run [dir]` opens the window for a person to use (keys: → ← C F/F11 Esc Ctrl+O). Only start it if the user asks, and kill it afterwards if you started it.
+When the user asks to open, show or launch the app for them, open a visible window on their desktop:
+
+- `just run [dir]` for them to use (keys: → ← C F/F11 Esc Ctrl+O). Start it in the background and leave it open; they close it. Kill it only if they ask.
+- `PC_HEADLESS=0 just shot <script> <dir> <name>` to show them a scripted state. The window closes by itself after the shot.
+
+Never open a visible window for your own checks.
 
 ## Inputs
 

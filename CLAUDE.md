@@ -17,15 +17,17 @@ Use `just` (or plain `cargo`). `.cargo/config.toml` sets `PKG_CONFIG=/usr/bin/pk
 
 - `just check`: fmt check, clippy with `-D warnings`, and all tests.
 - `just verify`: `check`, then CLI and real-window smoke tests with state assertions. Run it before calling work done.
+- `scripts/headless.sh <cmd>` runs a GUI command against a private headless sway, so no window reaches the desktop. `just verify` and `just shot` use it; `PC_HEADLESS=0` turns it off. `just run` is always a visible window.
 - `just test [args]`, `just cli <args>`, `just run [dir]`
 - `just bless-golden`: rewrites the `render` golden images in `crates/core/tests/golden/`. Run it only after checking that the new output is correct. Plain test runs never write them.
-- `just shot [script] [dir] [name]`: drives the real window from a JSON script and writes `<name>.png` and `<name>.json` to `/tmp/photo-cruiser/` (override with `PC_ARTIFACTS`).
+- `just shot [script] [dir] [name]`: drives the real window (headless) from a JSON script and writes `<name>.png` and `<name>.json` to `/tmp/photo-cruiser/` (override with `PC_ARTIFACTS`).
 - Skills: `.claude/skills/run-app` (launch and drive) and `.claude/skills/verify-app` (evidence-based verification).
 
 ## Agent rules
 
 - **Never** use `wtype`, `xdotool` or any other OS input injection; it once sent keys to the user's Firefox. **Never** take full-desktop screenshots. For evidence, use script mode (`--shot`, `--dump-state`), `iced_test` snapshots, and CLI output.
 - Scratch files (scripts, shots, renders) go to `/tmp/photo-cruiser/`, never into the repo.
-- Close every window you launch. Script mode exits on its own; kill anything else.
+- Your own checks run headless (`just verify`, `just shot`, or `scripts/headless.sh`). Open a visible window (`just run`, or `PC_HEADLESS=0 just shot …`) only when the user asks to see the app.
+- Close every window you launch. Script mode exits on its own; kill anything else, unless the user opened it to use it.
 - Use `trash-put`, not `rm`.
 - Personal photos (`~/sandbox/photo-cruiser/test-photos`, `test-formats`) are fine for local checks. Never commit or copy them into the repo. Large sets are opt-in through `PC_PHOTOS`.
