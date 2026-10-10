@@ -19,6 +19,7 @@ Use `just` (or plain `cargo`). `.cargo/config.toml` sets `PKG_CONFIG=/usr/bin/pk
 - `just verify`: `check`, then CLI and real-window smoke tests with state assertions. Run it before calling work done.
 - `scripts/headless.sh <cmd>` runs a GUI command against a private headless sway, so no window reaches the desktop. `just verify` and `just shot` use it; `PC_HEADLESS=0` turns it off. `just run` is always a visible window.
 - `just test [args]`, `just cli <args>`, `just run [dir]`
+- `just dev [dir]`: visible window for the user to play with changes live. It rebuilds on every save under `crates/` and restarts on the same photo (`PC_RESUME_FILE`). A failed build keeps the old window. Script: `scripts/dev.sh`.
 - `just bless-golden`: rewrites the `render` golden images in `crates/core/tests/golden/`. Run it only after checking that the new output is correct. Plain test runs never write them.
 - `just shot [script] [dir] [name]`: drives the real window (headless) from a JSON script and writes `<name>.png` and `<name>.json` to `/tmp/photo-cruiser/` (override with `PC_ARTIFACTS`).
 - Skills: `.claude/skills/run-app` (launch and drive) and `.claude/skills/verify-app` (evidence-based verification).

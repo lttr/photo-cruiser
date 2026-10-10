@@ -23,6 +23,11 @@ test *args:
 run dir=fixtures:
     cargo run -q -p photo-cruiser-app -- "{{dir}}"
 
+# Live development: visible window that rebuilds and restarts on the same photo on every save
+[no-cd]
+dev dir=fixtures:
+    "{{root}}/scripts/dev.sh" "{{dir}}"
+
 # Run the CLI: `just cli list fixtures --json`
 [no-cd]
 cli *args:
