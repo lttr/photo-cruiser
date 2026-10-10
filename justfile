@@ -72,16 +72,16 @@ verify: check
         "{{artifacts}}/verify-grid.json" >/dev/null || { cat "{{artifacts}}/verify-grid.json"; exit 1; }
     echo "verify ok: {{artifacts}}/verify.png {{artifacts}}/verify-grid.png"
 
-# Release build of the GUI and the CLI (run before `sudo just install`)
+# Release build of the GUI and the CLI (run before `just install`)
 build-release:
     cargo build --release --locked -p photo-cruiser-app -p photo-cruiser-cli
 
 appid := "com.lukastrumm.PhotoCruiser"
-# System-wide by default; `just prefix=~/.local install` for the current user only (no sudo).
-prefix := "/usr/local"
+# Current user by default; `sudo just prefix=/usr/local install` for all users.
+prefix := home_directory() / ".local"
 share := prefix / "share"
 
-# Install the binaries, desktop entry and icon (`just build-release` first; needs sudo for /usr/local)
+# Install the binaries, desktop entry and icon (`just build-release` first)
 install:
     #!/usr/bin/env bash
     set -euo pipefail

@@ -26,11 +26,11 @@ just check               # fmt, clippy, tests
 
 ```sh
 just build-release
-sudo just install      # /usr/local: photo-cruiser, pcr, desktop entry, icon
-sudo just uninstall
+just install      # ~/.local: photo-cruiser, pcr, desktop entry, icon
+just uninstall
 ```
 
-`just prefix=$HOME/.local install` installs for the current user only, without sudo.
+`sudo just prefix=/usr/local install` installs for all users.
 
 ## Keys
 
