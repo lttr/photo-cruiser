@@ -3,7 +3,7 @@
 //!
 //! JSON form (internally tagged): `{"action": "next"}`, `{"action": "goto", "index": 3}`,
 //! `{"action": "set_crop", "x": 40, "y": 30, "w": 200, "h": 150}`,
-//! `{"action": "open", "path": "fixtures"}`.
+//! `{"action": "open", "path": "fixtures"}`, `{"action": "show_photo", "index": 2}`.
 
 use photo_cruiser_core::Rect;
 use serde::{Deserialize, Serialize};
@@ -24,7 +24,17 @@ pub enum Action {
     Goto {
         index: usize,
     },
-    /// Enter/leave crop mode (`C`). Clears the selection.
+    /// Grid: the photo one row up / down (`↑`/`↓`, `k`/`j`). Ignored in the photo view.
+    Up,
+    Down,
+    /// Show one photo (`Enter` or a click in the grid): `index`, or the current one.
+    ShowPhoto {
+        #[serde(default)]
+        index: Option<usize>,
+    },
+    /// Back to the grid of all photos (`Esc` in the photo view). Leaves crop mode.
+    ShowGrid,
+    /// Enter/leave crop mode (`C`). Clears the selection. From the grid: crops the current photo.
     ToggleCrop,
     /// Set the selection in source pixels (clamped to the image); turns crop mode on.
     SetCrop(Rect),
@@ -40,6 +50,8 @@ pub enum Action {
     ToggleMenu,
     /// Hide the menu (`Esc`, click outside it).
     CloseMenu,
+    /// Show/hide file names in the status line and the grid (`N`, menu). Off at start.
+    ToggleNames,
     /// Show/hide the keyboard shortcuts (`?`, `F1`, menu). Any other action closes it.
     ToggleHelp,
     Quit,
@@ -62,7 +74,8 @@ mod tests {
                 {"action":"clear_crop"},{"action":"exit_crop"},{"action":"toggle_fullscreen"},
                 {"action":"exit_fullscreen"},{"action":"prev"},{"action":"quit"},
                 {"action":"toggle_menu"},{"action":"close_menu"},{"action":"toggle_help"},
-                {"action":"first"},{"action":"last"}]"#,
+                {"action":"first"},{"action":"last"},{"action":"up"},{"action":"down"},
+                {"action":"show_photo"},{"action":"show_photo","index":3},{"action":"show_grid"},{"action":"toggle_names"}]"#,
         )
         .unwrap();
         assert_eq!(steps[1], Action::Goto { index: 2 });
@@ -70,7 +83,10 @@ mod tests {
         assert_eq!(steps[7], Action::ToggleFullscreen);
         assert_eq!(steps[11], Action::ToggleMenu);
         assert_eq!(steps[14], Action::First);
-        assert_eq!(steps.len(), 16);
+        assert_eq!(steps[18], Action::ShowPhoto { index: None });
+        assert_eq!(steps[19], Action::ShowPhoto { index: Some(3) });
+        assert_eq!(steps[21], Action::ToggleNames);
+        assert_eq!(steps.len(), 22);
         let json = serde_json::to_string(&Action::SetCrop(Rect::new(1.0, 2.0, 3.0, 4.0))).unwrap();
         assert_eq!(json, r#"{"action":"set_crop","x":1.0,"y":2.0,"w":3.0,"h":4.0}"#);
         assert!(parse_script(r#"[{"action":"jump"}]"#).is_err());

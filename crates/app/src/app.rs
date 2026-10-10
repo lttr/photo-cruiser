@@ -4,10 +4,10 @@
 use crate::action::Action;
 use crate::message::Message;
 use crate::script::{self, Runner, ScriptConfig};
-use crate::state::{DEFAULT_MAX_SIDE, DEFAULT_TRANSITION, Effect, Loaded, State, decode_job};
+use crate::state::{DEFAULT_MAX_SIDE, DEFAULT_TRANSITION, Effect, Loaded, State, decode_job, thumb_job};
 use crate::{theme, view};
+use iced::widget::operation::AbsoluteOffset;
 use iced::{Subscription, Task, window};
-use photo_cruiser_core::loader::Kind;
 use std::path::PathBuf;
 use std::time::Duration;
 
@@ -111,6 +111,18 @@ impl App {
                 self.state.finish(job, result);
                 Task::none()
             }
+            Message::Thumb(job, result) => {
+                self.state.finish_thumb(job, result);
+                Task::none()
+            }
+            Message::Body(size) => {
+                self.state.body = Some(size);
+                Task::none()
+            }
+            Message::GridScrolled(y) => {
+                self.state.grid_offset = y;
+                Task::none()
+            }
             Message::Frame => Task::none(),
             // The window manager may change the mode itself; every resize re-reads it.
             Message::Resized(id) => {
@@ -127,7 +139,11 @@ impl App {
             Message::Script(event) => script::update(self, event),
         };
         self.write_resume();
-        Task::batch([task, self.load_next()])
+        let scroll = match self.state.scroll.take() {
+            Some(y) => iced::widget::operation::scroll_to("grid", AbsoluteOffset { x: None, y: Some(y) }),
+            None => Task::none(),
+        };
+        Task::batch([task, scroll, self.load_next()])
     }
 
     fn write_resume(&mut self) {
@@ -147,13 +163,20 @@ impl App {
         }
     }
 
-    /// Start decodes for every free loader slot (preview and current first, then neighbours).
+    /// Start decodes for every free loader slot (preview and current first, then neighbours),
+    /// and thumbnails for every free thumbnail slot.
     fn load_next(&mut self) -> Task<Message> {
         let max_side = self.state.max_side;
-        let tasks = std::iter::from_fn(|| self.state.next_job()).map(|(job, path)| {
-            Task::perform(decode_async(path, job.kind, max_side), move |r| Message::Decoded(job, r))
-        });
-        Task::batch(tasks.collect::<Vec<_>>())
+        let mut tasks: Vec<_> = std::iter::from_fn(|| self.state.next_job())
+            .map(|(job, path)| {
+                let decode = move || decode_job(&path, job.kind, max_side);
+                Task::perform(on_thread(decode), move |r| Message::Decoded(job, r))
+            })
+            .collect();
+        tasks.extend(std::iter::from_fn(|| self.state.next_thumb_job()).map(|(job, path)| {
+            Task::perform(on_thread(move || thumb_job(&path)), move |r| Message::Thumb(job, r))
+        }));
+        Task::batch(tasks)
     }
 }
 
@@ -163,8 +186,8 @@ fn set_fullscreen(on: bool) -> Task<Message> {
 }
 
 /// Decode on a fresh OS thread so neither the UI nor the executor block on it.
-async fn decode_async(path: PathBuf, kind: Kind, max_side: u32) -> Loaded {
+async fn on_thread(decode: impl FnOnce() -> Loaded + Send + 'static) -> Loaded {
     let (tx, rx) = iced::futures::channel::oneshot::channel();
-    std::thread::spawn(move || tx.send(decode_job(&path, kind, max_side)));
+    std::thread::spawn(move || tx.send(decode()));
     rx.await.unwrap_or_else(|_| Err("decoder thread panicked".into()))
 }

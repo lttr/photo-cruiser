@@ -181,6 +181,19 @@ pub fn embedded_preview(path: &Path) -> Result<Option<Decoded>> {
     Ok((mismatch < 0.03).then_some(decoded))
 }
 
+/// A small image for a grid of photos, longest side at most `max_side`. Uses the
+/// embedded preview when it is at least half that size (a few ms), else decodes the
+/// whole photo and downscales it.
+pub fn thumbnail(path: &Path, max_side: u32) -> Result<Decoded> {
+    if let Some(p) = embedded_preview(path)? {
+        let (w, h) = p.image.dimensions();
+        if w.max(h) * 2 >= max_side {
+            return Ok(p.downscale(max_side));
+        }
+    }
+    decode_max_side(path, Some(max_side))
+}
+
 /// The JPEG thumbnail referenced by IFD1 of an EXIF block (a TIFF structure).
 fn exif_thumbnail(exif: &[u8]) -> Option<&[u8]> {
     let le = match exif.get(..2)? {

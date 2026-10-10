@@ -64,6 +64,10 @@ verify: check
     test "$code" = 3 && jq -e '.error.kind == "empty_crop"' <<<"$out" >/dev/null || { echo "empty crop: exit $code, $out"; exit 1; }
     "{{root}}/scripts/headless.sh" "{{root}}/target/debug/photo-cruiser" "{{fixtures}}" --script "{{root}}/scripts/smoke.json" \
         --shot "{{artifacts}}/verify.png" --dump-state "{{artifacts}}/verify.json"
-    jq -e '.index == 4 and .mode == "crop" and .crop == {"x":40,"y":30,"w":200,"h":150} and .errors == [] and .loading == false' \
+    jq -e '.index == 4 and .view == "photo" and .mode == "crop" and .crop == {"x":40,"y":30,"w":200,"h":150} and .errors == [] and .loading == false' \
         "{{artifacts}}/verify.json" >/dev/null || { cat "{{artifacts}}/verify.json"; exit 1; }
-    echo "verify ok: {{artifacts}}/verify.png {{artifacts}}/verify.json"
+    "{{root}}/scripts/headless.sh" "{{root}}/target/debug/photo-cruiser" "{{fixtures}}" --script "{{root}}/scripts/grid.json" \
+        --shot "{{artifacts}}/verify-grid.png" --dump-state "{{artifacts}}/verify-grid.json"
+    jq -e '.index == 1 and .view == "grid" and .errors == [] and .loading == false' \
+        "{{artifacts}}/verify-grid.json" >/dev/null || { cat "{{artifacts}}/verify-grid.json"; exit 1; }
+    echo "verify ok: {{artifacts}}/verify.png {{artifacts}}/verify-grid.png"

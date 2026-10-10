@@ -8,8 +8,12 @@
 //! neighbours, biased towards the browsing direction (+1, +2, −1, +3 when going forward).
 //! A generation counter drops results from an old folder. The loader does no I/O itself;
 //! the caller runs each [`Job`] wherever it likes and reports back with [`Loader::finish`].
+//!
+//! [`Thumbs`] does the same for the thumbnails of a grid: the visible ones first, then a
+//! margin around them, with their own slots so they never hold up a full decode.
 
 use std::collections::HashMap;
+use std::ops::Range;
 
 /// Full decodes running at once. Two keep the current photo from waiting long behind a
 /// stale neighbour on a held key, without starving the UI of CPU.
@@ -125,6 +129,78 @@ impl<T> Loader<T> {
     }
 }
 
+/// Thumbnail decodes running at once.
+pub const THUMB_SLOTS: usize = 3;
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct ThumbJob {
+    pub generation: u64,
+    pub index: usize,
+}
+
+/// Thumbnails of one folder. Wanted: the visible indices in order, then outwards (one
+/// below, one above, ...) for as many again on each side. Finished thumbnails are kept
+/// until [`Thumbs::reset`].
+#[derive(Debug)]
+pub struct Thumbs<T> {
+    generation: u64,
+    done: HashMap<usize, T>,
+    in_flight: Vec<usize>,
+}
+
+impl<T> Default for Thumbs<T> {
+    fn default() -> Self {
+        Thumbs { generation: 0, done: HashMap::new(), in_flight: Vec::new() }
+    }
+}
+
+impl<T> Thumbs<T> {
+    /// Forget everything (new folder). Results of older jobs will be ignored.
+    pub fn reset(&mut self) {
+        self.generation += 1;
+        self.done.clear();
+        self.in_flight.clear();
+    }
+
+    pub fn get(&self, index: usize) -> Option<&T> {
+        self.done.get(&index)
+    }
+
+    /// A thumbnail to decode, if a slot is free and something wanted is missing. Call
+    /// until it returns `None`.
+    pub fn next_job(&mut self, visible: Range<usize>, len: usize) -> Option<ThumbJob> {
+        if self.in_flight.len() >= THUMB_SLOTS {
+            return None;
+        }
+        let index =
+            wanted(visible, len).find(|i| !self.done.contains_key(i) && !self.in_flight.contains(i))?;
+        self.in_flight.push(index);
+        Some(ThumbJob { generation: self.generation, index })
+    }
+
+    /// Store a finished job's result. Returns false (and drops it) if the job is stale.
+    pub fn finish(&mut self, job: ThumbJob, result: T) -> bool {
+        if job.generation != self.generation {
+            return false;
+        }
+        self.in_flight.retain(|i| *i != job.index);
+        self.done.insert(job.index, result);
+        true
+    }
+
+    /// Nothing running and every visible thumbnail is done.
+    pub fn is_idle(&self, visible: Range<usize>, len: usize) -> bool {
+        self.in_flight.is_empty() && (visible.start..visible.end.min(len)).all(|i| self.done.contains_key(&i))
+    }
+}
+
+fn wanted(visible: Range<usize>, len: usize) -> impl Iterator<Item = usize> {
+    let (start, end) = (visible.start.min(len), visible.end.min(len));
+    let margin = end - start;
+    let around = (0..margin).flat_map(move |k| [end.checked_add(k), start.checked_sub(k + 1)]);
+    (start..end).chain(around.flatten().filter(move |i| *i < len))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -179,6 +255,34 @@ mod tests {
         assert_eq!(l.next_job(5, 10).unwrap().index, 5);
         assert!(l.get(0).is_none());
         assert!(!l.is_idle(5, 10));
+    }
+
+    #[test]
+    fn thumbs_visible_first_then_around() {
+        let mut t = Thumbs::default();
+        let mut order = vec![];
+        while let Some(j) = t.next_job(4..6, 9) {
+            order.push(j.index);
+            t.finish(j, ());
+        }
+        assert_eq!(order, [4, 5, 6, 3, 7, 2]);
+        assert!(t.is_idle(4..6, 9) && !t.is_idle(0..2, 9));
+        // Clamped to the folder.
+        assert_eq!(wanted(0..20, 3).collect::<Vec<_>>(), [0, 1, 2]);
+    }
+
+    #[test]
+    fn thumbs_slots_and_stale() {
+        let mut t = Thumbs::<u8>::default();
+        let jobs: Vec<_> = std::iter::from_fn(|| t.next_job(0..10, 10)).collect();
+        assert_eq!(jobs.len(), THUMB_SLOTS);
+        assert!(!t.is_idle(0..1, 10));
+        t.reset();
+        assert!(!t.finish(jobs[0], 1));
+        assert!(t.get(0).is_none());
+        let j = t.next_job(0..1, 10).unwrap();
+        assert!(t.finish(j, 2));
+        assert_eq!(t.get(0), Some(&2));
     }
 
     #[test]

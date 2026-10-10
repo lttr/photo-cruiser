@@ -1,7 +1,8 @@
 //! Transparent canvas stacked over the image area. It draws the crop dimming and is the
 //! app's input layer: keys and mouse events become [`Message`]s here (a widget, not an
 //! `event::listen` subscription, so `iced_test` can drive it). The crop state machine
-//! itself is `photo_cruiser_core::crop::CropTool`, in source pixels.
+//! itself is `photo_cruiser_core::crop::CropTool`, in source pixels. It also reports the
+//! area's size, which the grid layout needs ([`Message::Body`]).
 
 use crate::action::Action;
 use crate::message::Message;
@@ -16,16 +17,27 @@ use photo_cruiser_core::{Point, Rect, Size};
 /// Grab distance around the selection edges, in logical window pixels.
 pub const EDGE: f32 = 8.0;
 
-/// What the overlay needs to know; rebuilt on every `view`.
-pub struct Overlay {
-    pub active: bool,
+/// What decides the meaning of a key.
+#[derive(Clone, Copy, Debug, Default)]
+pub struct Modes {
     /// The menu or the shortcuts panel is open (`Esc` closes it first).
     pub menu: bool,
     pub help: bool,
+    pub crop: bool,
+    pub fullscreen: bool,
+    /// The grid shows (not a single photo).
+    pub grid: bool,
+}
+
+/// What the overlay needs to know; rebuilt on every `view`.
+pub struct Overlay {
+    pub modes: Modes,
     /// Selection in source pixels.
     pub selection: Option<Rect>,
     /// Source size of the shown image, if any.
     pub image: Option<Size>,
+    /// The area's size as the state knows it; a different one is reported.
+    pub body: Option<iced::Size>,
 }
 
 fn rect(r: Rectangle) -> Rect {
@@ -33,6 +45,10 @@ fn rect(r: Rectangle) -> Rect {
 }
 
 impl Overlay {
+    fn active(&self) -> bool {
+        self.modes.crop && !self.modes.grid
+    }
+
     fn map(&self, bounds: Rectangle) -> Option<ViewMap> {
         Some(ViewMap::new(rect(bounds), self.image?))
     }
@@ -52,34 +68,33 @@ pub struct OverlayState {
 
 /// Every shortcut, for the shortcuts panel. Keep in sync with [`key_message`].
 pub const SHORTCUTS: &[(&str, &str)] = &[
-    ("→  ←   l  h   j  k", "Next / previous photo"),
+    ("→  ←   l  h", "Next / previous photo"),
+    ("↓  ↑   j  k", "Grid: row down / up; photo: next / previous"),
     ("Home  End   g  G", "First / last photo"),
+    ("Enter", "Grid: open the photo"),
     ("Ctrl+O", "Open folder"),
     ("C", "Crop on / off"),
     ("F  F11", "Full screen on / off"),
+    ("N", "File names on / off"),
     ("F10", "Menu"),
     ("?  F1", "Keyboard shortcuts"),
-    ("Esc", "Close menu, leave crop, leave full screen"),
+    ("Esc", "Close menu, leave crop, leave full screen, back to the grid"),
 ];
 
 /// `key` ignores Shift, `modified` doesn't (Shift+/ is `/` and `?`): symbols like `?` are
-/// matched on `modified`. `menu`/`help`/`crop`: the menu / shortcuts panel is open, crop
-/// mode is on. `Esc` closes the menu or panel, then leaves crop mode, then full screen.
-pub fn key_message(
-    key: &Key,
-    modified: &Key,
-    mods: keyboard::Modifiers,
-    menu: bool,
-    help: bool,
-    crop: bool,
-) -> Option<Message> {
+/// matched on `modified`. `Esc` closes the menu or panel, then leaves crop mode, then full
+/// screen, then goes back from the photo to the grid.
+pub fn key_message(key: &Key, modified: &Key, mods: keyboard::Modifiers, m: Modes) -> Option<Message> {
     let plain = !mods.control() && !mods.alt() && !mods.logo();
+    let (down, up) = if m.grid { (Action::Down, Action::Up) } else { (Action::Next, Action::Prev) };
     // Symbols and vim keys (g vs G) by what was typed.
     if let (true, Key::Character(c)) = (plain, modified) {
         let action = match c.as_str() {
             "?" => Some(Action::ToggleHelp),
-            "l" | "j" => Some(Action::Next),
-            "h" | "k" => Some(Action::Prev),
+            "l" => Some(Action::Next),
+            "h" => Some(Action::Prev),
+            "j" => Some(down.clone()),
+            "k" => Some(up.clone()),
             "g" => Some(Action::First),
             "G" => Some(Action::Last),
             _ => None,
@@ -91,18 +106,23 @@ pub fn key_message(
     Some(match key {
         Key::Named(Named::ArrowRight) => Action::Next.into(),
         Key::Named(Named::ArrowLeft) => Action::Prev.into(),
+        Key::Named(Named::ArrowDown) => down.into(),
+        Key::Named(Named::ArrowUp) => up.into(),
         Key::Named(Named::Home) => Action::First.into(),
         Key::Named(Named::End) => Action::Last.into(),
-        Key::Named(Named::Escape) if menu => Action::CloseMenu.into(),
-        Key::Named(Named::Escape) if help => Action::ToggleHelp.into(),
-        Key::Named(Named::Escape) if crop => Action::ExitCrop.into(),
-        Key::Named(Named::Escape) => Action::ExitFullscreen.into(),
+        Key::Named(Named::Enter) if m.grid => Action::ShowPhoto { index: None }.into(),
+        Key::Named(Named::Escape) if m.menu => Action::CloseMenu.into(),
+        Key::Named(Named::Escape) if m.help => Action::ToggleHelp.into(),
+        Key::Named(Named::Escape) if m.crop => Action::ExitCrop.into(),
+        Key::Named(Named::Escape) if m.fullscreen || m.grid => Action::ExitFullscreen.into(),
+        Key::Named(Named::Escape) => Action::ShowGrid.into(),
         Key::Named(Named::F11) => Action::ToggleFullscreen.into(),
         Key::Named(Named::F10) => Action::ToggleMenu.into(),
         Key::Named(Named::F1) => Action::ToggleHelp.into(),
         Key::Character(c) if mods.control() && c.eq_ignore_ascii_case("o") => Message::OpenDialog,
         Key::Character(c) if plain && c.eq_ignore_ascii_case("c") => Action::ToggleCrop.into(),
         Key::Character(c) if plain && c.eq_ignore_ascii_case("f") => Action::ToggleFullscreen.into(),
+        Key::Character(c) if plain && c.eq_ignore_ascii_case("n") => Action::ToggleNames.into(),
         _ => return None,
     })
 }
@@ -119,10 +139,12 @@ impl canvas::Program<Message> for Overlay {
     ) -> Option<canvas::Action<Message>> {
         let (kind, pos) = match event {
             Event::Keyboard(keyboard::Event::KeyPressed { key, modified_key, modifiers, .. }) => {
-                return key_message(key, modified_key, *modifiers, self.menu, self.help, self.active)
-                    .map(canvas::Action::publish);
+                return key_message(key, modified_key, *modifiers, self.modes).map(canvas::Action::publish);
             }
-            _ if !self.active => {
+            Event::Window(iced::window::Event::RedrawRequested(_)) if self.body != Some(bounds.size()) => {
+                return Some(canvas::Action::publish(Message::Body(bounds.size())));
+            }
+            _ if !self.active() => {
                 state.pressed = false;
                 return None;
             }
@@ -151,7 +173,7 @@ impl canvas::Program<Message> for Overlay {
         bounds: Rectangle,
         _cursor: Cursor,
     ) -> Vec<Geometry> {
-        let (Some(sel), Some(img), true) = (self.selection, self.image, self.active) else { return vec![] };
+        let (Some(sel), Some(img), true) = (self.selection, self.image, self.active()) else { return vec![] };
         let mut frame = Frame::new(renderer, bounds.size());
         let m = ViewMap::new(Rect::with_size(Size::new(bounds.width, bounds.height)), img);
         let (fit, s) = (m.fit, m.rect_to_view(sel));
@@ -173,8 +195,10 @@ impl canvas::Program<Message> for Overlay {
     }
 
     fn mouse_interaction(&self, _state: &OverlayState, bounds: Rectangle, cursor: Cursor) -> Interaction {
-        let Some((p, tol)) =
-            cursor.position_over(bounds).filter(|_| self.active).and_then(|pos| self.to_source(bounds, pos))
+        let Some((p, tol)) = cursor
+            .position_over(bounds)
+            .filter(|_| self.active())
+            .and_then(|pos| self.to_source(bounds, pos))
         else {
             return Interaction::default();
         };

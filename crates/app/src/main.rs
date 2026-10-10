@@ -16,6 +16,7 @@ use std::time::Duration;
 mod action;
 mod app;
 mod crop_overlay;
+mod grid;
 mod message;
 mod script;
 mod state;

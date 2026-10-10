@@ -145,6 +145,26 @@ pub fn flat(active: bool) -> impl Fn(&Theme, btn::Status) -> btn::Style {
     }
 }
 
+/// A grid cell: an accent border when `selected` (the current photo), a tint on hover.
+pub fn cell(selected: bool) -> impl Fn(&Theme, btn::Status) -> btn::Style {
+    move |_, status| {
+        let t = get();
+        let bg = match status {
+            btn::Status::Pressed => Some(t.button.pressed),
+            btn::Status::Hovered => Some(t.button.hover),
+            _ if selected => Some(t.button.base),
+            _ => None,
+        };
+        let border = if selected { color(t.accent.base) } else { Color::TRANSPARENT };
+        btn::Style {
+            background: bg.map(|c| Background::Color(color(c))),
+            text_color: color(t.background.on),
+            border: Border { color: border, width: 2.0, radius: 8.into() },
+            ..btn::Style::default()
+        }
+    }
+}
+
 /// The menu panel: a slightly lighter card over the image.
 pub fn menu(_: &Theme) -> container::Style {
     let t = get();

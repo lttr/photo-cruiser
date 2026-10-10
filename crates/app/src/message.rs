@@ -3,7 +3,7 @@ use crate::script;
 use crate::state::Loaded;
 use photo_cruiser_core::Point;
 use photo_cruiser_core::crop::MouseKind;
-use photo_cruiser_core::loader::Job;
+use photo_cruiser_core::loader::{Job, ThumbJob};
 use std::path::PathBuf;
 
 #[derive(Clone, Debug)]
@@ -21,6 +21,12 @@ pub enum Message {
     WindowMode(bool),
     /// A background decode finished.
     Decoded(Job, Loaded),
+    /// A grid thumbnail finished.
+    Thumb(ThumbJob, Loaded),
+    /// The image / grid area has a new size (reported by the overlay when it draws).
+    Body(iced::Size),
+    /// The grid was scrolled to this vertical offset.
+    GridScrolled(f32),
     /// Mouse press/move/release over the image: source pixel (unclamped), grab tolerance
     /// in source pixels.
     Crop(MouseKind, Point, f32),

@@ -16,7 +16,7 @@ pub mod render;
 pub mod source;
 
 pub use catalog::{Entry, Folder};
-pub use decode::{Decoded, Format, Probe, decode, embedded_preview, probe};
+pub use decode::{Decoded, Format, Probe, decode, embedded_preview, probe, thumbnail};
 pub use edit::{EditStack, Op};
 pub use error::{Error, Result};
 pub use geom::{Point, Rect, Size};

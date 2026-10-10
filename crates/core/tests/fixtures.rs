@@ -1,6 +1,6 @@
 //! Every fixture format through the real decoders. Fixtures: `just fixtures`.
 
-use photo_cruiser_core::{Error, Folder, Format, decode, embedded_preview, probe};
+use photo_cruiser_core::{Error, Folder, Format, decode, embedded_preview, probe, thumbnail};
 use std::path::{Path, PathBuf};
 
 fn fixtures() -> PathBuf {
@@ -89,4 +89,18 @@ fn embedded_previews() {
         assert!(embedded_preview(&fixtures().join(name)).unwrap().is_none(), "{name}");
     }
     assert!(embedded_preview(&fixtures().join("img12-broken.jpg")).is_err());
+}
+
+#[test]
+fn thumbnails() {
+    let dir = fixtures().join("previews");
+    // Big enough embedded preview (80×60 for a 100 px box): used as is.
+    let t = thumbnail(&dir.join("thumb.HEIC"), 100).unwrap();
+    assert_eq!((t.image.dimensions(), t.source_size()), ((80, 60), (320, 240)));
+    // Too small for a 256 px box: full decode, downscaled; orientation applied.
+    let t = thumbnail(&dir.join("thumb-exif6.jpg"), 256).unwrap();
+    assert_eq!((t.image.dimensions(), t.source_size()), ((192, 256), (240, 320)));
+    let t = thumbnail(&fixtures().join("img1.png"), 64).unwrap();
+    assert_eq!(t.image.dimensions(), (64, 48));
+    assert!(thumbnail(&fixtures().join("img12-broken.jpg"), 64).is_err());
 }

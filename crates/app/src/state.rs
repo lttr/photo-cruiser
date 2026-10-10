@@ -1,4 +1,5 @@
-//! The app model: folder, index, loader, what is on screen, crop, mode. Plain data +
+//! The app model: folder, index, loader, what is on screen, crop, mode, grid or single
+//! photo view. Plain data +
 //! [`Action`] handling, no iced runtime, so it can be driven directly in tests (decode
 //! synchronously with [`decode_job`] and feed results to [`State::finish`]).
 //!
@@ -6,14 +7,20 @@
 //! preview is shown, or else the previous photo stays. Each change of the shown image
 //! cross-fades over [`State::transition`], except while the user is flipping through
 //! quickly (a held arrow key), where fades would only add lag.
+//!
+//! Opening a folder shows the grid of all its photos; the grid's selection is the current
+//! index, so the photo view opens on it and returns to it. Thumbnails load only while the
+//! grid shows, visible ones first.
 
 use crate::action::Action;
+use crate::grid;
 use iced::widget::image::Handle;
 use photo_cruiser_core::crop::{CropTool, MouseKind};
 use photo_cruiser_core::geom::PixelRect;
-use photo_cruiser_core::loader::{Job, Kind, Loader};
+use photo_cruiser_core::loader::{Job, Kind, Loader, ThumbJob, Thumbs};
 use photo_cruiser_core::{Folder, Point, Size};
 use serde::Serialize;
+use std::ops::Range;
 use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
 
@@ -57,6 +64,18 @@ pub fn decode_job(path: &Path, kind: Kind, max_side: u32) -> Loaded {
     Ok(Picture { source: d.source_size(), handle: Handle::from_rgba(w, h, d.image.into_raw()) })
 }
 
+/// Decode a grid thumbnail of `path` (blocking).
+pub fn thumb_job(path: &Path) -> Loaded {
+    let d = photo_cruiser_core::thumbnail(path, grid::THUMB_SIDE)
+        .map_err(|e| e.to_string().trim_end().to_string())?;
+    let (w, h) = d.image.dimensions();
+    Ok(Picture { source: d.source_size(), handle: Handle::from_rgba(w, h, d.image.into_raw()) })
+}
+
+/// The image area's size before the overlay has reported it (the default window minus
+/// the footer).
+const DEFAULT_BODY: iced::Size = iced::Size::new(1100.0, 815.0);
+
 /// The image in the image area. It may lag behind the current index (the previous photo
 /// stays until the new one, or its preview, is decoded).
 #[derive(Clone, Debug)]
@@ -88,6 +107,17 @@ pub enum Display {
     Previous,
 }
 
+/// What the image area shows.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "lowercase")]
+pub enum View {
+    /// Thumbnails of every photo in the folder; the current one is selected.
+    #[default]
+    Grid,
+    /// The current photo, large.
+    Photo,
+}
+
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "lowercase")]
 pub enum Mode {
@@ -112,6 +142,14 @@ pub struct State {
     pub folder_error: Option<String>,
     pub index: usize,
     pub loader: Loader<Loaded>,
+    pub view: View,
+    pub thumbs: Thumbs<Loaded>,
+    /// Size of the image / grid area, as last reported by the overlay.
+    pub body: Option<iced::Size>,
+    /// Vertical scroll position of the grid.
+    pub grid_offset: f32,
+    /// A scroll position the runtime should move the grid to (taken by the app).
+    pub scroll: Option<f32>,
     pub crop: CropTool,
     pub mode: Mode,
     /// Full screen: no status line. The runtime mirrors it to the window.
@@ -120,6 +158,8 @@ pub struct State {
     pub menu: bool,
     /// The keyboard shortcuts panel is showing.
     pub help: bool,
+    /// File names are shown (status line, grid labels). Off by default.
+    pub names: bool,
     pub max_side: u32,
     /// Rejected actions and folder errors, oldest first.
     pub errors: Vec<String>,
@@ -144,11 +184,17 @@ impl State {
             folder_error: None,
             index: 0,
             loader: Loader::default(),
+            view: View::Grid,
+            thumbs: Thumbs::default(),
+            body: None,
+            grid_offset: 0.0,
+            scroll: None,
             crop: CropTool::default(),
             mode: Mode::Browse,
             fullscreen: false,
             menu: false,
             help: false,
+            names: false,
             max_side,
             errors: Vec::new(),
             shown: None,
@@ -183,9 +229,37 @@ impl State {
         self.current()?.as_ref().ok()
     }
 
-    /// Nothing decoding, the photos around the current one loaded, no fade running.
+    /// Nothing decoding, the photos around the current one loaded, no fade running, and in
+    /// the grid every visible thumbnail loaded.
     pub fn is_idle(&self) -> bool {
-        self.loader.is_idle(self.index, self.len()) && self.fade_progress().is_none()
+        let thumbs = self.view != View::Grid || self.thumbs.is_idle(self.visible(), self.len());
+        self.loader.is_idle(self.index, self.len()) && self.fade_progress().is_none() && thumbs
+    }
+
+    pub fn body_size(&self) -> iced::Size {
+        self.body.unwrap_or(DEFAULT_BODY)
+    }
+
+    /// Columns of the grid at the current size.
+    pub fn columns(&self) -> usize {
+        grid::columns(self.body_size().width)
+    }
+
+    /// Indices of the photos in the grid rows on screen.
+    pub fn visible(&self) -> Range<usize> {
+        grid::visible(self.body_size(), grid::cell_h(self.names), self.grid_offset, self.len())
+    }
+
+    /// In the grid, scroll so the current photo is fully visible.
+    fn reveal(&mut self) {
+        let row = self.index / self.columns();
+        if self.view == View::Grid
+            && let Some(y) =
+                grid::reveal(row, grid::cell_h(self.names), self.grid_offset, self.body_size().height)
+        {
+            self.grid_offset = y;
+            self.scroll = Some(y);
+        }
     }
 
     pub fn display(&self) -> Display {
@@ -259,6 +333,38 @@ impl State {
                     self.select(self.index - 1);
                 }
             }
+            Action::Up | Action::Down if self.view == View::Photo => {}
+            Action::Up => {
+                if let Some(i) = self.index.checked_sub(self.columns()) {
+                    self.select(i);
+                }
+            }
+            Action::Down => {
+                let cols = self.columns();
+                // From the row above the last, a short last row still takes you down.
+                if self.index / cols + 1 < self.len().div_ceil(cols) {
+                    self.select((self.index + cols).min(self.len() - 1));
+                }
+            }
+            Action::ShowPhoto { index } => match index {
+                Some(i) if *i >= self.len() => {
+                    self.error(format!("show_photo {i}: out of range ({} images)", self.len()));
+                }
+                _ => {
+                    self.view = View::Photo;
+                    if let Some(i) = index {
+                        self.select(*i);
+                    }
+                }
+            },
+            Action::ShowGrid => {
+                self.view = View::Grid;
+                self.mode = Mode::Browse;
+                self.crop.clear();
+                // The grid's scrollable is new (at the top): bring the current photo into view.
+                self.grid_offset = 0.0;
+                self.reveal();
+            }
             Action::First if self.len() > 0 => self.select(0),
             Action::Last if self.len() > 0 => self.select(self.len() - 1),
             Action::First | Action::Last => {}
@@ -270,11 +376,13 @@ impl State {
                 }
             }
             Action::ToggleCrop => {
+                self.view = View::Photo;
                 self.mode = if self.mode == Mode::Crop { Mode::Browse } else { Mode::Crop };
                 self.crop.clear();
             }
             Action::SetCrop(rect) => match self.picture().map(Picture::source_size) {
                 Some(size) => {
+                    self.view = View::Photo;
                     self.mode = Mode::Crop;
                     self.crop.set(*rect, size);
                     if self.crop.selection.is_none() {
@@ -297,6 +405,11 @@ impl State {
                 return Effect::Fullscreen(false);
             }
             Action::ExitFullscreen => {}
+            Action::ToggleNames => {
+                self.names = !self.names;
+                // Rows change height: keep the current photo in view.
+                self.reveal();
+            }
             Action::ToggleMenu | Action::CloseMenu | Action::ToggleHelp => {}
             Action::Quit => return Effect::Quit,
         }
@@ -310,6 +423,7 @@ impl State {
         self.crop.clear();
         self.waiting_since = self.trace.then_some(now);
         self.refresh();
+        self.reveal();
     }
 
     fn trace_name(&self, index: usize) -> String {
@@ -317,8 +431,8 @@ impl State {
         format!("{} ({name})", index + 1)
     }
 
-    /// Open a folder, or a file's folder positioned on that file. Resets everything
-    /// except the error log.
+    /// Open a folder (in the grid), or a file's folder positioned on that file (in the photo
+    /// view). Resets everything except the error log and full screen.
     fn open(&mut self, path: &Path) {
         let path = path.canonicalize().unwrap_or_else(|_| path.to_path_buf());
         let (dir, file) = match path.is_file() {
@@ -326,6 +440,10 @@ impl State {
             false => (path.clone(), None),
         };
         self.loader.reset();
+        self.thumbs.reset();
+        self.view = if file.is_some() { View::Photo } else { View::Grid };
+        self.grid_offset = 0.0;
+        self.scroll = Some(0.0);
         (self.shown, self.fade) = (None, None);
         self.crop.clear();
         self.mode = Mode::Browse;
@@ -368,6 +486,21 @@ impl State {
         Some((job, path))
     }
 
+    /// The next grid thumbnail to decode, while the grid shows and a slot is free. Call
+    /// until `None`.
+    pub fn next_thumb_job(&mut self) -> Option<(ThumbJob, PathBuf)> {
+        if self.view != View::Grid {
+            return None;
+        }
+        let job = self.thumbs.next_job(self.visible(), self.len())?;
+        let path = self.folder.as_ref()?.entries.get(job.index)?.path.clone();
+        Some((job, path))
+    }
+
+    pub fn finish_thumb(&mut self, job: ThumbJob, result: Loaded) {
+        self.thumbs.finish(job, result);
+    }
+
     pub fn finish(&mut self, job: Job, result: Loaded) {
         let fresh = self.loader.finish(job, result);
         if self.trace {
@@ -398,10 +531,14 @@ impl State {
         }
     }
 
-    /// `name · i / N[ · crop W×H @ X,Y]`; empty without a current file.
+    /// `[name · ]i / N[ · crop W×H @ X,Y]` (the name only while names are shown); empty
+    /// without a current file.
     pub fn status(&self) -> String {
         let Some(name) = self.current_name() else { return String::new() };
-        let mut s = format!("{name} · {}", self.position());
+        let mut s = match self.names {
+            true => format!("{name} · {}", self.position()),
+            false => self.position(),
+        };
         if let Some(px) = self.crop_pixels() {
             s += &format!(" · crop {px}");
         } else if self.mode == Mode::Crop {
@@ -428,10 +565,12 @@ impl State {
             index: self.index,
             position: self.position(),
             file: self.current_path().map(|p| p.display().to_string()),
+            view: self.view,
             mode: self.mode,
             fullscreen: self.fullscreen,
             menu: self.menu,
             help: self.help,
+            names: self.names,
             crop: self.crop_pixels(),
             title: self.title(),
             status: self.status(),
@@ -460,10 +599,12 @@ pub struct Dump {
     /// `i / N`, 1-based.
     pub position: String,
     pub file: Option<String>,
+    pub view: View,
     pub mode: Mode,
     pub fullscreen: bool,
     pub menu: bool,
     pub help: bool,
+    pub names: bool,
     /// Integer source pixels.
     pub crop: Option<PixelRect>,
     pub title: String,

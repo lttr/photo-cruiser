@@ -14,8 +14,9 @@
 
 use crate::action::Action;
 use crate::app::{self, Config};
+use crate::crop_overlay::Modes;
 use crate::message::Message;
-use crate::state::{Display, Effect, Mode, State, decode_job};
+use crate::state::{Display, Effect, Mode, State, View, decode_job, thumb_job};
 use iced::futures::channel::mpsc;
 use iced::keyboard::{Key, key::Named};
 use iced::mouse::Button;
@@ -46,18 +47,23 @@ fn names() -> Vec<String> {
 // ---------------------------------------------------------------------------------------
 // Pure update tests
 
-/// Run decodes synchronously until the loader is idle.
+/// Run decodes (and grid thumbnails) synchronously until the loader is idle.
 fn settle(s: &mut State) {
     while let Some((job, path)) = s.next_job() {
         let r = decode_job(&path, job.kind, s.max_side);
         s.finish(job, r);
     }
+    while let Some((job, path)) = s.next_thumb_job() {
+        s.finish_thumb(job, thumb_job(&path));
+    }
     assert!(s.is_idle());
 }
 
-/// No fades: they would make `is_idle` time-dependent.
+/// No fades: they would make `is_idle` time-dependent. File names on (most checks read
+/// them from the status line).
 fn opened(path: &Path) -> State {
     let mut s = State::new(TEST_MAX_SIDE, Duration::ZERO);
+    s.names = true;
     assert_eq!(s.apply(&Action::Open { path: path.into() }), Effect::None);
     settle(&mut s);
     s
@@ -233,6 +239,73 @@ fn update_fades_except_when_flipping_quickly() {
 }
 
 #[test]
+fn update_grid_view() {
+    let mut s = opened(&fixtures());
+    assert_eq!(s.view, View::Grid, "a folder opens in the grid");
+    // Visible thumbnails are loaded; the broken file's is an error.
+    assert!((0..8).all(|i| s.thumbs.get(i).is_some_and(|t| t.is_ok())));
+    assert!(s.thumbs.get(8).unwrap().is_err());
+    assert_eq!(s.dump(None, None).view, View::Grid);
+
+    s.body = Some(Size::new(850.0, 700.0)); // 4 columns: rows 0–3, 4–7, 8
+    assert_eq!(s.columns(), 4);
+    s.apply(&Action::Down);
+    s.apply(&Action::Next);
+    assert_eq!(s.index, 5);
+    s.apply(&Action::Down); // into the short last row
+    assert_eq!(s.index, 8);
+    s.apply(&Action::Down); // no row below
+    assert_eq!(s.index, 8);
+    s.apply(&Action::Up);
+    s.apply(&Action::Up);
+    assert_eq!(s.index, 0);
+    s.apply(&Action::Up);
+    assert_eq!(s.index, 0);
+
+    // Enter opens the selection; row moves do nothing there; Esc goes back.
+    s.apply(&Action::Goto { index: 2 });
+    s.apply(&Action::ShowPhoto { index: None });
+    assert_eq!((s.view, s.index), (View::Photo, 2));
+    s.apply(&Action::Down);
+    assert_eq!(s.index, 2);
+    s.apply(&Action::ShowGrid);
+    assert_eq!((s.view, s.index), (View::Grid, 2));
+    s.apply(&Action::ShowPhoto { index: Some(6) });
+    assert_eq!((s.view, s.index), (View::Photo, 6));
+    s.apply(&Action::ShowGrid);
+    s.apply(&Action::ShowPhoto { index: Some(9) });
+    assert_eq!((s.view, s.index, s.errors.len()), (View::Grid, 6, 1));
+
+    // Crop from the grid crops the current photo; back in the grid, crop mode is off.
+    s.apply(&Action::ToggleCrop);
+    assert_eq!((s.view, s.mode), (View::Photo, Mode::Crop));
+    s.apply(&Action::ShowGrid);
+    assert_eq!((s.view, s.mode, s.crop_pixels()), (View::Grid, Mode::Browse, None));
+
+    // No thumbnails load while a single photo shows.
+    s.apply(&Action::Open { path: fixtures() });
+    s.apply(&Action::ShowPhoto { index: None });
+    assert!(s.next_thumb_job().is_none());
+    // A file opens in the photo view.
+    s.apply(&Action::Open { path: fixtures().join("img2.jpg") });
+    assert_eq!((s.view, s.index), (View::Photo, 1));
+
+    // Moving past the visible rows asks the grid to scroll; the newly visible thumbnails load.
+    s.apply(&Action::Open { path: fixtures() });
+    settle(&mut s);
+    s.body = Some(Size::new(850.0, 260.0)); // about one row
+    assert_eq!(s.scroll.take(), Some(0.0), "opening scrolls to the top");
+    s.apply(&Action::Down);
+    s.apply(&Action::Down);
+    let y = s.scroll.take().expect("scrolls");
+    assert_eq!(s.grid_offset, y);
+    assert!(s.visible().contains(&8), "{:?}", s.visible());
+    s.apply(&Action::Up);
+    s.apply(&Action::Up);
+    assert_eq!(s.scroll.take(), Some(0.0));
+}
+
+#[test]
 fn dump_json_shape() {
     let mut s = opened(&fixtures());
     s.apply(&Action::SetCrop(Rect::new(40.4, 30.0, 200.0, 150.0)));
@@ -258,7 +331,15 @@ struct Harness<P: Program<Message = Message> + 'static> {
     rx: mpsc::Receiver<emulator::Event<P>>,
 }
 
-fn harness() -> Harness<impl Program<Message = Message, State = app::App>> {
+/// Opened on the fixtures, in the grid, file names on (`N`).
+fn grid_harness() -> Harness<impl Program<Message = Message, State = app::App>> {
+    let mut h = bare_harness();
+    h.keys(Key::Character("n".into()), 1);
+    h
+}
+
+/// Opened on the fixtures, in the grid, as at start.
+fn bare_harness() -> Harness<impl Program<Message = Message, State = app::App>> {
     let cfg = Config {
         folder: Some(fixtures()),
         max_side: TEST_MAX_SIDE,
@@ -268,12 +349,22 @@ fn harness() -> Harness<impl Program<Message = Message, State = app::App>> {
     Harness::new(app::application(cfg))
 }
 
+/// Opened on the fixtures, showing the first photo (Enter in the grid).
+fn harness() -> Harness<impl Program<Message = Message, State = app::App>> {
+    let mut h = grid_harness();
+    h.keys(Key::Named(Named::Enter), 1);
+    h
+}
+
 impl<P: Program<Message = Message> + 'static> Harness<P> {
     fn new(prog: P) -> Self {
         let (tx, rx) = mpsc::channel(100);
         let emu = Emulator::new(tx, &prog, emulator::Mode::Zen, SIZE);
         let mut h = Harness { prog, emu, rx };
         h.until_ready(); // boot task: decode current and neighbours
+        // What the overlay reports on its first redraw in the real window.
+        let body = h.bounds("body").unwrap().size();
+        h.emu.update(&h.prog, Message::Body(body));
         h
     }
 
@@ -328,6 +419,15 @@ impl<P: Program<Message = Message> + 'static> Harness<P> {
             _ => None,
         };
         self.sim().find(pick).is_ok()
+    }
+
+    /// Centre of the first text widget showing exactly `needle`.
+    fn text_center(&self, needle: &str) -> Point {
+        let pick = |c: Candidate<'_>| match c {
+            Candidate::Text { content, bounds, .. } if content == needle => Some(bounds.center()),
+            _ => None,
+        };
+        self.sim().find(pick).unwrap_or_else(|_| panic!("no text {needle:?}"))
     }
 
     fn click_menu_button(&mut self) {
@@ -598,6 +698,61 @@ fn shortcuts_panel() {
 }
 
 #[test]
+fn grid_click_keys_and_back() {
+    let mut h = grid_harness();
+    assert!(h.bounds("grid").is_some() && h.bounds("photo").is_none());
+    assert_eq!(h.status(), "img1.png · 1 / 9");
+    assert!(h.bounds("selected").unwrap().contains(h.text_center("img1.png")));
+
+    // A click on a thumbnail opens that photo.
+    let target = Some(Target::Text("img3-exif6.jpg".into()));
+    h.run(Interaction::Mouse(Mouse::Click { button: Button::Left, target }));
+    h.until("img3 shown", |h| h.status() == "img3-exif6.jpg · 3 / 9" && h.bounds("photo").is_some());
+    assert!(h.bounds("grid").is_none());
+
+    // Esc: back to the grid, on the same photo.
+    h.keys(Key::Named(Named::Escape), 1);
+    assert!(h.bounds("grid").is_some() && h.bounds("photo").is_none());
+    assert!(h.bounds("selected").unwrap().contains(h.text_center("img3-exif6.jpg")));
+
+    // 4 columns at this size: ↓ is +4, ↑ is −4; Enter opens the selection.
+    h.keys(Key::Named(Named::ArrowDown), 1);
+    assert_eq!(h.status(), "img10.gif · 7 / 9");
+    h.keys(Key::Named(Named::ArrowRight), 1);
+    h.keys(Key::Character("k".into()), 1);
+    assert_eq!(h.status(), "img4.AVIF · 4 / 9");
+    assert!(h.bounds("selected").unwrap().contains(h.text_center("img4.AVIF")));
+    h.keys(Key::Named(Named::Enter), 1);
+    h.until("img4 shown", |h| h.bounds("photo").is_some());
+    assert_eq!(h.status(), "img4.AVIF · 4 / 9");
+}
+
+#[test]
+fn names_hidden_by_default_and_toggled_with_n() {
+    let mut s = State::new(TEST_MAX_SIDE, Duration::ZERO);
+    s.apply(&Action::Open { path: fixtures() });
+    assert_eq!((s.names, s.status()), (false, "1 / 9".into()));
+    s.apply(&Action::ToggleNames);
+    assert_eq!(s.status(), "img1.png · 1 / 9");
+    assert!(s.dump(None, None).names);
+
+    let mut h = bare_harness();
+    assert_eq!(h.status(), "1 / 9");
+    assert!(!h.has_text("img1.png") && !h.has_text("img2.jpg"), "no names in the grid");
+    let cell = h.bounds("selected").unwrap();
+    h.keys(Key::Character("n".into()), 1);
+    assert_eq!(h.status(), "img1.png · 1 / 9");
+    assert!(h.has_text("img2.jpg"), "grid labels shown");
+    assert!(h.bounds("selected").unwrap().height > cell.height, "cells make room for the name");
+    h.keys(Key::Character("n".into()), 1);
+    h.keys(Key::Named(Named::Enter), 1);
+    h.until("img1 shown", |h| h.bounds("photo").is_some());
+    assert_eq!(h.status(), "1 / 9", "photo view: no name either");
+    h.keys(Key::Character("n".into()), 1);
+    assert_eq!(h.status(), "img1.png · 1 / 9");
+}
+
+#[test]
 fn update_tilde() {
     use crate::state::tilde;
     let home = PathBuf::from(std::env::var_os("HOME").unwrap());
@@ -612,9 +767,9 @@ fn question_mark_uses_the_shifted_key() {
     use iced::keyboard::Modifiers;
     // What winit sends for Shift+/ on a US layout: `key` without Shift, `modified_key` with it.
     let (slash, question) = (Key::Character("/".into()), Key::Character("?".into()));
-    let msg = key_message(&slash, &question, Modifiers::SHIFT, false, false, false);
+    let msg = key_message(&slash, &question, Modifiers::SHIFT, Modes::default());
     assert!(matches!(msg, Some(Message::Action(Action::ToggleHelp))), "{msg:?}");
-    assert!(key_message(&slash, &slash, Modifiers::empty(), false, false, false).is_none());
+    assert!(key_message(&slash, &slash, Modifiers::empty(), Modes::default()).is_none());
 }
 
 #[test]
@@ -642,7 +797,7 @@ fn shifted_g_is_last() {
     use crate::crop_overlay::key_message;
     use iced::keyboard::Modifiers;
     let (g, big_g) = (Key::Character("g".into()), Key::Character("G".into()));
-    let msg = |k, m, mods| key_message(k, m, mods, false, false, false);
+    let msg = |k, m, mods| key_message(k, m, mods, Modes::default());
     assert!(matches!(msg(&g, &big_g, Modifiers::SHIFT), Some(Message::Action(Action::Last))));
     assert!(matches!(msg(&g, &g, Modifiers::empty()), Some(Message::Action(Action::First))));
     assert!(msg(&g, &g, Modifiers::CTRL).is_none(), "Ctrl+G is not a shortcut");
@@ -652,5 +807,5 @@ fn shifted_g_is_last() {
 fn q_does_not_quit() {
     use crate::crop_overlay::key_message;
     let q = Key::Character("q".into());
-    assert!(key_message(&q, &q, iced::keyboard::Modifiers::empty(), false, false, false).is_none());
+    assert!(key_message(&q, &q, iced::keyboard::Modifiers::empty(), Modes::default()).is_none());
 }

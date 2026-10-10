@@ -1,6 +1,6 @@
 # Photo Cruiser
 
-A fast photo browser and editor written in Rust. Point it at a folder and flip through the photos. Previews come from embedded thumbnails, and neighbouring photos are preloaded so switching feels instant. It also has a non-destructive crop tool.
+A fast photo browser and editor written in Rust. Point it at a folder to see a grid of its photos, open one and flip through them. Previews come from embedded thumbnails, and neighbouring photos are preloaded so switching feels instant. It also has a non-destructive crop tool.
 
 It's built to be driven by agents as well as people. The CLI can print JSON, and the GUI can run a script, take a screenshot and dump its state.
 
@@ -27,9 +27,12 @@ just check               # fmt, clippy, tests
 | Key         | Action                                |
 | ----------- | ------------------------------------- |
 | ← / →       | Previous / next photo                 |
+| ↑ / ↓       | Grid: row up / down                   |
+| Enter       | Grid: open the photo (or click it)    |
 | C           | Toggle crop                           |
 | F / F11     | Toggle full screen                    |
-| Esc         | Leave crop or full screen             |
+| N           | Show / hide file names                |
+| Esc         | Leave crop or full screen, then back to the grid |
 | Ctrl+O      | Open a folder                         |
 
 ## License
