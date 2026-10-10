@@ -5,7 +5,7 @@ description: Launch and drive Photo Cruiser (the iced GUI `photo-cruiser` and th
 
 # Run and drive Photo Cruiser
 
-Every cargo call needs `PKG_CONFIG=/usr/bin/pkg-config`. `just` sets it for you.
+`.cargo/config.toml` sets `PKG_CONFIG=/usr/bin/pkg-config` (needed for libheif), so plain `cargo` works.
 
 ## Hard rules
 
@@ -16,7 +16,7 @@ Every cargo call needs `PKG_CONFIG=/usr/bin/pkg-config`. `just` sets it for you.
 ## CLI (fastest; no window)
 
 ```bash
-just build                                  # target/debug/{pcr,photo-cruiser}
+cargo build --workspace                     # target/debug/{pcr,photo-cruiser}
 target/debug/pcr list fixtures --json [--probe]
 target/debug/pcr info fixtures/img5.HEIC --json
 target/debug/pcr render fixtures/img5.HEIC --crop 10,20,100,50 [--max-side N] -o /tmp/photo-cruiser/x.png

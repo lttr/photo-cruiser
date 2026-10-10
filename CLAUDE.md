@@ -13,7 +13,7 @@ Dependencies point one way: `cli → core`, `app → core`. Put logic in `core` 
 
 ## Commands
 
-Use `just`. It exports `PKG_CONFIG=/usr/bin/pkg-config`, which every cargo call needs because Linuxbrew's pkg-config breaks libheif detection. If you call cargo directly, set that variable yourself.
+Use `just` (or plain `cargo`). `.cargo/config.toml` sets `PKG_CONFIG=/usr/bin/pkg-config`, because Linuxbrew's pkg-config breaks libheif detection.
 
 - `just check`: fmt check, clippy with `-D warnings`, and all tests.
 - `just verify`: `check`, then CLI and real-window smoke tests with state assertions. Run it before calling work done.

@@ -1,0 +1,3 @@
+# Linuxbrew's pkg-config shadows the system one and breaks libheif detection.
+[env]
+PKG_CONFIG = "/usr/bin/pkg-config"

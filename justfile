@@ -1,7 +1,5 @@
-# Photo Cruiser. `just` lists recipes. Every cargo call needs the system pkg-config
-# (Linuxbrew's shadows it and breaks libheif detection).
+# Photo Cruiser. `just` lists recipes. PKG_CONFIG for libheif is set in .cargo/config.toml.
 
-export PKG_CONFIG := "/usr/bin/pkg-config"
 root := justfile_directory()
 fixtures := root / "fixtures"
 # Scratch dir for scripts, shots and state dumps; outside the repo.
@@ -16,17 +14,9 @@ check:
     cargo clippy --workspace --all-targets -- -D warnings
     cargo test --workspace
 
-# Format all crates
-fmt:
-    cargo fmt --all
-
 # All tests (pass e.g. `-p photo-cruiser-core` or a test name)
 test *args:
     cargo test --workspace {{args}}
-
-# Build the debug binaries (pcr + photo-cruiser)
-build:
-    cargo build --workspace
 
 # Launch the GUI on a folder (default: fixtures/)
 [no-cd]
@@ -55,9 +45,10 @@ fixtures:
     uv run -q "{{root}}/scripts/gen_fixtures.py" "{{fixtures}}"
 
 # Full verification: check + CLI smoke + real-window smoke shot with state assertions
-verify: check build
+verify: check
     #!/usr/bin/env bash
     set -euo pipefail
+    cargo build --workspace
     pcr="{{root}}/target/debug/pcr"
     mkdir -p "{{artifacts}}"
     test "$("$pcr" list "{{fixtures}}" --json | jq .count)" = 9
