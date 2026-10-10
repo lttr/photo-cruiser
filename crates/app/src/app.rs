@@ -59,12 +59,20 @@ fn window_settings() -> window::Settings {
 pub struct App {
     pub state: State,
     pub script: Option<Runner>,
+    /// `PC_RESUME_FILE` (set by `just dev`): the current photo's path is written here, so a
+    /// restarted app can reopen it.
+    resume: Option<PathBuf>,
+    resumed: Option<PathBuf>,
 }
 
 impl App {
     pub fn new(cfg: Config) -> (Self, Task<Message>) {
-        let mut app =
-            App { state: State::new(cfg.max_side, cfg.transition), script: cfg.script.map(Runner::new) };
+        let mut app = App {
+            state: State::new(cfg.max_side, cfg.transition),
+            script: cfg.script.map(Runner::new),
+            resume: std::env::var_os("PC_RESUME_FILE").map(PathBuf::from),
+            resumed: None,
+        };
         if let Some(folder) = cfg.folder {
             app.state.apply(&Action::Open { path: folder });
         }
@@ -90,6 +98,7 @@ impl App {
         let task = match message {
             Message::Action(action) => self.apply(&action),
             Message::OpenDialog => {
+                (self.state.menu, self.state.help) = (false, false);
                 let dialog = rfd::AsyncFileDialog::new().set_title("Open photo folder").pick_folder();
                 return Task::perform(dialog, |h| Message::FolderPicked(h.map(|h| h.path().into())));
             }
@@ -117,7 +126,16 @@ impl App {
             }
             Message::Script(event) => script::update(self, event),
         };
+        self.write_resume();
         Task::batch([task, self.load_next()])
+    }
+
+    fn write_resume(&mut self) {
+        let (Some(file), Some(current)) = (&self.resume, self.state.current_path()) else { return };
+        if self.resumed.as_deref() != Some(current) {
+            let _ = std::fs::write(file, current.as_os_str().as_encoded_bytes());
+            self.resumed = Some(current.to_path_buf());
+        }
     }
 
     /// Apply an action and carry out its [`Effect`] (decodes are scheduled by `update`).

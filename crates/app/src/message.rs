@@ -10,7 +10,7 @@ use std::path::PathBuf;
 pub enum Message {
     /// Everything user-visible goes through an [`Action`].
     Action(Action),
-    /// `Ctrl+O` / toolbar: show the folder picker (interactive only, not an `Action`).
+    /// `Ctrl+O` / menu: show the folder picker (interactive only, not an `Action`).
     OpenDialog,
     FolderPicked(Option<PathBuf>),
     /// Redraw tick while a fade runs.

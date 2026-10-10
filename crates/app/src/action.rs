@@ -1,4 +1,4 @@
-//! The single entry point for behaviour. Keyboard, toolbar buttons, scripts and tests
+//! The single entry point for behaviour. Keyboard, menu items, scripts and tests
 //! all produce [`Action`]s; [`crate::state::State::apply`] interprets them.
 //!
 //! JSON form (internally tagged): `{"action": "next"}`, `{"action": "goto", "index": 3}`,
@@ -18,6 +18,8 @@ pub enum Action {
     },
     Next,
     Prev,
+    First,
+    Last,
     /// Jump to a 0-based index. Out of range is an error (index unchanged).
     Goto {
         index: usize,
@@ -30,10 +32,16 @@ pub enum Action {
     ClearCrop,
     /// Leave crop mode (`Esc`).
     ExitCrop,
-    /// Full screen on/off (`F11`, `F`): hides the toolbar and status line.
+    /// Full screen on/off (`F11`, `F`): hides the footer (status line and menu).
     ToggleFullscreen,
     /// Leave full screen (`Esc` outside crop mode).
     ExitFullscreen,
+    /// Show/hide the menu (`F10`, footer button). Any other action closes it.
+    ToggleMenu,
+    /// Hide the menu (`Esc`, click outside it).
+    CloseMenu,
+    /// Show/hide the keyboard shortcuts (`?`, `F1`, menu). Any other action closes it.
+    ToggleHelp,
     Quit,
 }
 
@@ -52,13 +60,17 @@ mod tests {
             r#"[{"action":"next"},{"action":"goto","index":2},{"action":"toggle_crop"},
                 {"action":"set_crop","x":40,"y":30,"w":200,"h":150},{"action":"open","path":"/tmp"},
                 {"action":"clear_crop"},{"action":"exit_crop"},{"action":"toggle_fullscreen"},
-                {"action":"exit_fullscreen"},{"action":"prev"},{"action":"quit"}]"#,
+                {"action":"exit_fullscreen"},{"action":"prev"},{"action":"quit"},
+                {"action":"toggle_menu"},{"action":"close_menu"},{"action":"toggle_help"},
+                {"action":"first"},{"action":"last"}]"#,
         )
         .unwrap();
         assert_eq!(steps[1], Action::Goto { index: 2 });
         assert_eq!(steps[3], Action::SetCrop(Rect::new(40.0, 30.0, 200.0, 150.0)));
         assert_eq!(steps[7], Action::ToggleFullscreen);
-        assert_eq!(steps.len(), 11);
+        assert_eq!(steps[11], Action::ToggleMenu);
+        assert_eq!(steps[14], Action::First);
+        assert_eq!(steps.len(), 16);
         let json = serde_json::to_string(&Action::SetCrop(Rect::new(1.0, 2.0, 3.0, 4.0))).unwrap();
         assert_eq!(json, r#"{"action":"set_crop","x":1.0,"y":2.0,"w":3.0,"h":4.0}"#);
         assert!(parse_script(r#"[{"action":"jump"}]"#).is_err());

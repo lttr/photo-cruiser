@@ -3,8 +3,8 @@
 //! into an `iced::Theme` plus a few style functions. Falls back to built-in dark values
 //! when the files are missing (other desktops / OSes). No live reload.
 
-use iced::widget::{button as btn, container};
-use iced::{Background, Border, Color, Font, Theme, theme::Palette};
+use iced::widget::{button as btn, container, text};
+use iced::{Background, Border, Color, Font, Shadow, Theme, Vector, theme::Palette};
 use serde::Deserialize;
 use std::path::PathBuf;
 use std::sync::OnceLock;
@@ -23,7 +23,6 @@ struct Component {
     base: Rgba,
     hover: Rgba,
     pressed: Rgba,
-    on: Rgba,
 }
 
 /// A COSMIC "container" (background, primary, ...).
@@ -62,13 +61,11 @@ const FALLBACK: Cosmic = Cosmic {
         base: c(0.388, 0.816, 0.875, 1.0),
         hover: c(0.35, 0.73, 0.78, 1.0),
         pressed: c(0.22, 0.46, 0.49, 1.0),
-        on: c(0.0, 0.0, 0.0, 1.0),
     },
     button: Component {
         base: c(0.62, 0.62, 0.62, 0.25),
         hover: c(0.388, 0.388, 0.388, 0.4),
         pressed: c(0.167, 0.167, 0.167, 0.625),
-        on: c(0.753, 0.753, 0.753, 1.0),
     },
     radius_xl: 160.0,
     font: Font::DEFAULT,
@@ -118,26 +115,6 @@ pub fn theme() -> Theme {
     Theme::custom("COSMIC", palette)
 }
 
-/// Pill-shaped COSMIC button: `suggested` uses the accent colour, otherwise the
-/// translucent "standard" button colours.
-pub fn button(suggested: bool) -> impl Fn(&Theme, btn::Status) -> btn::Style {
-    move |_, status| {
-        let t = get();
-        let c = if suggested { t.accent } else { t.button };
-        let bg = match status {
-            btn::Status::Hovered => c.hover,
-            btn::Status::Pressed => c.pressed,
-            _ => c.base,
-        };
-        btn::Style {
-            background: Some(Background::Color(color(bg))),
-            text_color: color(c.on),
-            border: Border::default().rounded(t.radius_xl),
-            ..btn::Style::default()
-        }
-    }
-}
-
 /// Header / status bars: the COSMIC window background.
 pub fn bar(_: &Theme) -> container::Style {
     let t = get();
@@ -146,4 +123,61 @@ pub fn bar(_: &Theme) -> container::Style {
         text_color: Some(color(t.background.on)),
         ..container::Style::default()
     }
+}
+
+/// Borderless button (menu button and items): background only on hover/press, or while
+/// `active` (its menu is open).
+pub fn flat(active: bool) -> impl Fn(&Theme, btn::Status) -> btn::Style {
+    move |_, status| {
+        let t = get();
+        let bg = match status {
+            btn::Status::Pressed => Some(t.button.pressed),
+            btn::Status::Hovered => Some(t.button.hover),
+            _ if active => Some(t.button.base),
+            _ => None,
+        };
+        btn::Style {
+            background: bg.map(|c| Background::Color(color(c))),
+            text_color: color(t.background.on),
+            border: Border::default().rounded(8),
+            ..btn::Style::default()
+        }
+    }
+}
+
+/// The menu panel: a slightly lighter card over the image.
+pub fn menu(_: &Theme) -> container::Style {
+    let t = get();
+    let (bg, on) = (color(t.background.base), color(t.background.on));
+    container::Style {
+        background: Some(mix(bg, on, 0.06).into()),
+        text_color: Some(on),
+        border: Border { color: mix(bg, on, 0.15), width: 1.0, radius: 10.into() },
+        shadow: Shadow {
+            color: Color::from_rgba(0.0, 0.0, 0.0, 0.4),
+            offset: Vector::new(0.0, 4.0),
+            blur_radius: 16.0,
+        },
+        ..container::Style::default()
+    }
+}
+
+/// Bars of the menu icon.
+pub fn icon(_: &Theme) -> container::Style {
+    let t = get();
+    container::Style {
+        background: Some(color(t.background.on).into()),
+        border: Border::default().rounded(1),
+        ..container::Style::default()
+    }
+}
+
+/// Secondary text (keyboard shortcuts).
+pub fn dim(_: &Theme) -> text::Style {
+    let t = get();
+    text::Style { color: Some(mix(color(t.background.base), color(t.background.on), 0.55)) }
+}
+
+fn mix(a: Color, b: Color, t: f32) -> Color {
+    Color::from_rgb(a.r + (b.r - a.r) * t, a.g + (b.g - a.g) * t, a.b + (b.b - a.b) * t)
 }

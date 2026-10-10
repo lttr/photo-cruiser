@@ -114,8 +114,12 @@ pub struct State {
     pub loader: Loader<Loaded>,
     pub crop: CropTool,
     pub mode: Mode,
-    /// Full screen: no toolbar or status line. The runtime mirrors it to the window.
+    /// Full screen: no status line. The runtime mirrors it to the window.
     pub fullscreen: bool,
+    /// The menu (Open folder, Crop, Full screen) is showing.
+    pub menu: bool,
+    /// The keyboard shortcuts panel is showing.
+    pub help: bool,
     pub max_side: u32,
     /// Rejected actions and folder errors, oldest first.
     pub errors: Vec<String>,
@@ -143,6 +147,8 @@ impl State {
             crop: CropTool::default(),
             mode: Mode::Browse,
             fullscreen: false,
+            menu: false,
+            help: false,
             max_side,
             errors: Vec::new(),
             shown: None,
@@ -239,6 +245,8 @@ impl State {
     }
 
     pub fn apply(&mut self, action: &Action) -> Effect {
+        self.menu = matches!(action, Action::ToggleMenu) && !self.menu;
+        self.help = matches!(action, Action::ToggleHelp) && !self.help;
         match action {
             Action::Open { path } => self.open(path),
             Action::Next => {
@@ -251,6 +259,9 @@ impl State {
                     self.select(self.index - 1);
                 }
             }
+            Action::First if self.len() > 0 => self.select(0),
+            Action::Last if self.len() > 0 => self.select(self.len() - 1),
+            Action::First | Action::Last => {}
             Action::Goto { index } => {
                 if *index < self.len() {
                     self.select(*index);
@@ -286,6 +297,7 @@ impl State {
                 return Effect::Fullscreen(false);
             }
             Action::ExitFullscreen => {}
+            Action::ToggleMenu | Action::CloseMenu | Action::ToggleHelp => {}
             Action::Quit => return Effect::Quit,
         }
         Effect::None
@@ -380,20 +392,20 @@ impl State {
     }
 
     pub fn title(&self) -> String {
-        match self.folder.as_ref().and_then(|f| f.path.file_name()) {
-            Some(n) => format!("Photo Cruiser — {}", n.to_string_lossy()),
-            None => "Photo Cruiser".into(),
+        match &self.folder {
+            Some(f) => format!("PhotoCruiser: {}", tilde(&f.path)),
+            None => "PhotoCruiser".into(),
         }
     }
 
-    /// `name — i / N[ — crop W×H @ X,Y]`; empty without a current file.
+    /// `name · i / N[ · crop W×H @ X,Y]`; empty without a current file.
     pub fn status(&self) -> String {
         let Some(name) = self.current_name() else { return String::new() };
-        let mut s = format!("{name} — {}", self.position());
+        let mut s = format!("{name} · {}", self.position());
         if let Some(px) = self.crop_pixels() {
-            s += &format!(" — crop {px}");
+            s += &format!(" · crop {px}");
         } else if self.mode == Mode::Crop {
-            s += " — crop: drag on the image (Esc to leave)";
+            s += " · crop: drag on the image (Esc to leave)";
         }
         s
     }
@@ -418,6 +430,8 @@ impl State {
             file: self.current_path().map(|p| p.display().to_string()),
             mode: self.mode,
             fullscreen: self.fullscreen,
+            menu: self.menu,
+            help: self.help,
             crop: self.crop_pixels(),
             title: self.title(),
             status: self.status(),
@@ -448,6 +462,8 @@ pub struct Dump {
     pub file: Option<String>,
     pub mode: Mode,
     pub fullscreen: bool,
+    pub menu: bool,
+    pub help: bool,
     /// Integer source pixels.
     pub crop: Option<PixelRect>,
     pub title: String,
@@ -459,4 +475,14 @@ pub struct Dump {
     /// Logical size of the window (from the screenshot or `window::size`).
     pub window: Option<WindowSize>,
     pub shot: Option<String>,
+}
+
+/// `path` for display, with the home directory shortened to `~`.
+pub fn tilde(path: &Path) -> String {
+    let home = std::env::var_os("HOME").map(PathBuf::from);
+    match home.as_deref().and_then(|h| path.strip_prefix(h).ok()) {
+        Some(rest) if rest.as_os_str().is_empty() => "~".into(),
+        Some(rest) => format!("~/{}", rest.display()),
+        None => path.display().to_string(),
+    }
 }

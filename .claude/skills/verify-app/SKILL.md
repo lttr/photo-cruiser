@@ -13,7 +13,7 @@ description: Verify a change to Photo Cruiser with evidence (tests, CLI output, 
 just verify
 ```
 
-This runs `just check` (fmt, clippy `-D warnings`, all tests), then a CLI smoke test, then the real-window smoke script (`scripts/smoke.json` on `fixtures/`, headless through `scripts/headless.sh`), and asserts the state JSON (index 4, crop mode, crop 200×150 @ 40,30, no errors, not loading). It must print `verify ok`. Then **Read `/tmp/photo-cruiser/verify.png`**: img5.HEIC (checkerboard) should be dimmed to about 50% outside a sharp-edged selection, with the status line `img5.HEIC — 5 / 9 — crop 200×150 @ 40,30`.
+This runs `just check` (fmt, clippy `-D warnings`, all tests), then a CLI smoke test, then the real-window smoke script (`scripts/smoke.json` on `fixtures/`, headless through `scripts/headless.sh`), and asserts the state JSON (index 4, crop mode, crop 200×150 @ 40,30, no errors, not loading). It must print `verify ok`. Then **Read `/tmp/photo-cruiser/verify.png`**: img5.HEIC (checkerboard) should be dimmed to about 50% outside a sharp-edged selection, with the status line `img5.HEIC · 5 / 9 · crop 200×150 @ 40,30`.
 
 ## 2. Change-specific evidence
 

@@ -19,6 +19,9 @@ pub const EDGE: f32 = 8.0;
 /// What the overlay needs to know; rebuilt on every `view`.
 pub struct Overlay {
     pub active: bool,
+    /// The menu or the shortcuts panel is open (`Esc` closes it first).
+    pub menu: bool,
+    pub help: bool,
     /// Selection in source pixels.
     pub selection: Option<Rect>,
     /// Source size of the shown image, if any.
@@ -47,15 +50,56 @@ pub struct OverlayState {
     last: iced::Point,
 }
 
-/// `crop`: crop mode is on (`Esc` leaves it before leaving full screen).
-pub fn key_message(key: &Key, mods: keyboard::Modifiers, crop: bool) -> Option<Message> {
+/// Every shortcut, for the shortcuts panel. Keep in sync with [`key_message`].
+pub const SHORTCUTS: &[(&str, &str)] = &[
+    ("→  ←   l  h   j  k", "Next / previous photo"),
+    ("Home  End   g  G", "First / last photo"),
+    ("Ctrl+O", "Open folder"),
+    ("C", "Crop on / off"),
+    ("F  F11", "Full screen on / off"),
+    ("F10", "Menu"),
+    ("?  F1", "Keyboard shortcuts"),
+    ("Esc", "Close menu, leave crop, leave full screen"),
+];
+
+/// `key` ignores Shift, `modified` doesn't (Shift+/ is `/` and `?`): symbols like `?` are
+/// matched on `modified`. `menu`/`help`/`crop`: the menu / shortcuts panel is open, crop
+/// mode is on. `Esc` closes the menu or panel, then leaves crop mode, then full screen.
+pub fn key_message(
+    key: &Key,
+    modified: &Key,
+    mods: keyboard::Modifiers,
+    menu: bool,
+    help: bool,
+    crop: bool,
+) -> Option<Message> {
     let plain = !mods.control() && !mods.alt() && !mods.logo();
+    // Symbols and vim keys (g vs G) by what was typed.
+    if let (true, Key::Character(c)) = (plain, modified) {
+        let action = match c.as_str() {
+            "?" => Some(Action::ToggleHelp),
+            "l" | "j" => Some(Action::Next),
+            "h" | "k" => Some(Action::Prev),
+            "g" => Some(Action::First),
+            "G" => Some(Action::Last),
+            _ => None,
+        };
+        if let Some(action) = action {
+            return Some(action.into());
+        }
+    }
     Some(match key {
         Key::Named(Named::ArrowRight) => Action::Next.into(),
         Key::Named(Named::ArrowLeft) => Action::Prev.into(),
+        Key::Named(Named::Home) => Action::First.into(),
+        Key::Named(Named::End) => Action::Last.into(),
+        Key::Named(Named::Escape) if menu => Action::CloseMenu.into(),
+        Key::Named(Named::Escape) if help => Action::ToggleHelp.into(),
         Key::Named(Named::Escape) if crop => Action::ExitCrop.into(),
         Key::Named(Named::Escape) => Action::ExitFullscreen.into(),
         Key::Named(Named::F11) => Action::ToggleFullscreen.into(),
+        Key::Named(Named::F10) => Action::ToggleMenu.into(),
+        Key::Named(Named::F1) => Action::ToggleHelp.into(),
         Key::Character(c) if mods.control() && c.eq_ignore_ascii_case("o") => Message::OpenDialog,
         Key::Character(c) if plain && c.eq_ignore_ascii_case("c") => Action::ToggleCrop.into(),
         Key::Character(c) if plain && c.eq_ignore_ascii_case("f") => Action::ToggleFullscreen.into(),
@@ -74,8 +118,9 @@ impl canvas::Program<Message> for Overlay {
         cursor: Cursor,
     ) -> Option<canvas::Action<Message>> {
         let (kind, pos) = match event {
-            Event::Keyboard(keyboard::Event::KeyPressed { key, modifiers, .. }) => {
-                return key_message(key, *modifiers, self.active).map(canvas::Action::publish);
+            Event::Keyboard(keyboard::Event::KeyPressed { key, modified_key, modifiers, .. }) => {
+                return key_message(key, modified_key, *modifiers, self.menu, self.help, self.active)
+                    .map(canvas::Action::publish);
             }
             _ if !self.active => {
                 state.pressed = false;

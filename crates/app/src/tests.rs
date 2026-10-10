@@ -4,7 +4,7 @@
 //!   synchronously. No iced runtime.
 //! - The rest: headless end-to-end tests with `iced_test`. The real program
 //!   (boot/update/view/title/theme) runs in an `Emulator`, which executes Tasks on the
-//!   app's executor, so decoding is real, on threads. Mouse input (click "Crop" by text,
+//!   app's executor, so decoding is real, on threads. Mouse input (menu clicks,
 //!   drags) goes through `Emulator::run` with `Instruction`s: raw iced mouse events
 //!   dispatched through the real widget tree. Keys: iced_test has no arrow keys in its
 //!   instructions, so they are tapped on a `Simulator` built on the emulator's current
@@ -67,8 +67,8 @@ fn opened(path: &Path) -> State {
 fn update_browse_and_goto_bounds() {
     let mut s = opened(&fixtures());
     assert_eq!((s.len(), s.index, s.position()), (9, 0, "1 / 9".into()));
-    assert_eq!(s.status(), "img1.png — 1 / 9");
-    assert_eq!(s.title(), "Photo Cruiser — fixtures");
+    assert_eq!(s.status(), "img1.png · 1 / 9");
+    assert_eq!(s.title(), format!("PhotoCruiser: {}", crate::state::tilde(&fixtures())));
     s.apply(&Action::Prev);
     assert_eq!(s.index, 0);
     s.apply(&Action::Goto { index: 8 });
@@ -93,7 +93,7 @@ fn update_set_crop_clamps_and_modes() {
     s.apply(&Action::SetCrop(Rect::new(300.0, 200.0, 100.0, 100.0)));
     assert_eq!(s.mode, Mode::Crop, "set_crop turns crop mode on");
     assert_eq!(s.crop_pixels(), Some(PixelRect { x: 300, y: 200, w: 20, h: 40 }));
-    assert_eq!(s.status(), "img1.png — 1 / 9 — crop 20×40 @ 300,200");
+    assert_eq!(s.status(), "img1.png · 1 / 9 · crop 20×40 @ 300,200");
     s.apply(&Action::ClearCrop);
     assert_eq!((s.mode, s.crop_pixels()), (Mode::Crop, None));
     s.apply(&Action::SetCrop(Rect::new(500.0, 0.0, 10.0, 10.0))); // fully outside
@@ -145,8 +145,8 @@ fn update_open_resets() {
     s.apply(&Action::Open { path: fixtures().join("subdir") });
     settle(&mut s);
     assert_eq!((s.len(), s.index, s.mode, s.crop_pixels()), (1, 0, Mode::Browse, None));
-    assert_eq!(s.title(), "Photo Cruiser — subdir");
-    assert_eq!(s.status(), "nested.jpg — 1 / 1");
+    assert_eq!(s.title(), format!("PhotoCruiser: {}", crate::state::tilde(&fixtures().join("subdir"))));
+    assert_eq!(s.status(), "nested.jpg · 1 / 1");
 
     // A file path opens its folder at that file.
     s.apply(&Action::Open { path: fixtures().join("img9.webp") });
@@ -330,6 +330,11 @@ impl<P: Program<Message = Message> + 'static> Harness<P> {
         self.sim().find(pick).is_ok()
     }
 
+    fn click_menu_button(&mut self) {
+        let target = Some(Target::Point(self.bounds("menu-button").expect("menu button").center()));
+        self.run(Interaction::Mouse(Mouse::Click { button: Button::Left, target }));
+    }
+
     fn bounds(&self, id: &'static str) -> Option<Rectangle> {
         self.sim().find(selector::id(id)).ok().map(|t| t.bounds())
     }
@@ -421,7 +426,7 @@ fn browse_all_fixtures() {
         if i > 0 {
             h.keys(Key::Named(Named::ArrowRight), 1);
         }
-        let want = format!("{name} — {} / 9", i + 1);
+        let want = format!("{name} · {} / 9", i + 1);
         if name.contains("broken") {
             // Shows its error (in place of the image), not "Loading…".
             h.until(&want, |h| h.status() == want && h.has_text("decode failed"));
@@ -432,31 +437,37 @@ fn browse_all_fixtures() {
         }
     }
     let (state, window) = h.emu.into_state();
-    assert_eq!(Program::title(&h.prog, &state, window), "Photo Cruiser — fixtures");
+    assert_eq!(
+        Program::title(&h.prog, &state, window),
+        format!("PhotoCruiser: {}", crate::state::tilde(&fixtures()))
+    );
 }
 
 #[test]
 fn clamping_at_both_ends() {
     let mut h = harness();
-    h.until("first", |h| h.status() == "img1.png — 1 / 9" && h.bounds("photo").is_some());
+    h.until("first", |h| h.status() == "img1.png · 1 / 9" && h.bounds("photo").is_some());
     h.keys(Key::Named(Named::ArrowLeft), 3);
-    assert_eq!(h.status(), "img1.png — 1 / 9");
+    assert_eq!(h.status(), "img1.png · 1 / 9");
     // 30 × → in one burst (like a held key): clamps at 9, stale decodes are dropped.
     h.keys(Key::Named(Named::ArrowRight), 30);
-    assert_eq!(h.status(), "img12-broken.jpg — 9 / 9");
+    assert_eq!(h.status(), "img12-broken.jpg · 9 / 9");
     h.until("broken shown", |h| h.has_text("decode failed"));
     h.keys(Key::Named(Named::ArrowLeft), 1);
-    h.until("img11", |h| h.status() == "img11.bmp — 8 / 9" && h.bounds("photo").is_some());
+    h.until("img11", |h| h.status() == "img11.bmp · 8 / 9" && h.bounds("photo").is_some());
 }
 
 #[test]
 fn crop_draw_move_resize_dim_and_esc() {
     let mut h = harness();
     h.until("img1 shown", |h| h.bounds("photo").is_some());
-    // Toolbar button, clicked by its text.
+    // Through the menu: open it, pick "Crop" by its text.
+    h.click_menu_button();
+    assert!(h.bounds("menu").is_some(), "menu open");
     let target = Some(Target::Text("Crop".into()));
     h.run(Interaction::Mouse(Mouse::Click { button: Button::Left, target }));
     assert!(h.status().contains("crop: drag"), "{}", h.status());
+    assert!(h.bounds("menu").is_none(), "picking an item closes the menu");
     let before = h.snapshot("nocrop");
 
     let (w, hh) = (320.0, 240.0); // img1.png
@@ -480,7 +491,7 @@ fn crop_draw_move_resize_dim_and_esc() {
 
     // Esc leaves crop mode.
     h.keys(Key::Named(Named::Escape), 1);
-    assert_eq!(h.status(), "img1.png — 1 / 9");
+    assert_eq!(h.status(), "img1.png · 1 / 9");
 }
 
 #[test]
@@ -505,17 +516,17 @@ fn fullscreen_hides_bars_and_keys() {
     let mut h = harness();
     h.until("img1 shown", |h| h.bounds("photo").is_some());
     let windowed = h.bounds("body").unwrap();
-    assert!(windowed.height < SIZE.height && h.has_text("Open folder"));
+    assert!(windowed.height < SIZE.height && h.bounds("menu-button").is_some());
 
     h.keys(Key::Character("f".into()), 1);
     assert_eq!(h.bounds("body").unwrap(), Rectangle::with_size(SIZE), "image area fills the window");
-    assert!(!h.has_text("Open folder") && h.status().is_empty(), "bars hidden");
+    assert!(h.bounds("menu-button").is_none() && h.status().is_empty(), "footer hidden");
     h.keys(Key::Named(Named::ArrowRight), 1); // keys still work
     h.keys(Key::Named(Named::F11), 1);
-    assert_eq!(h.status(), "img2.jpg — 2 / 9");
+    assert_eq!(h.status(), "img2.jpg · 2 / 9");
 
     h.keys(Key::Named(Named::F11), 1);
-    assert!(!h.has_text("Open folder"));
+    assert!(h.bounds("menu-button").is_none());
 
     // Crop in full screen: Esc leaves crop mode first, then full screen.
     h.keys(Key::Character("c".into()), 1);
@@ -525,7 +536,121 @@ fn fullscreen_hides_bars_and_keys() {
     assert_close(parse_crop(&h.status()), [160.0, 120.0, 0.0, 0.0]);
     h.keys(Key::Named(Named::F11), 1);
     h.keys(Key::Named(Named::Escape), 1);
-    assert!(!h.has_text("Open folder"), "first Esc only leaves crop mode");
+    assert!(h.bounds("menu-button").is_none(), "first Esc only leaves crop mode");
     h.keys(Key::Named(Named::Escape), 1);
-    assert_eq!(h.status(), "img2.jpg — 2 / 9");
+    assert_eq!(h.status(), "img2.jpg · 2 / 9");
+}
+
+#[test]
+fn menu_hidden_by_default_and_closes() {
+    let mut h = harness();
+    h.until("img1 shown", |h| h.bounds("photo").is_some());
+    assert!(h.bounds("menu").is_none() && !h.has_text("Open folder"), "no menu or toolbar by default");
+    let full = h.bounds("body").unwrap();
+    assert!(full.height > SIZE.height - 40.0, "image area takes all but the footer: {full:?}");
+
+    h.click_menu_button();
+    assert!(h.has_text("Open folder") && h.has_text("Full screen"));
+    h.keys(Key::Named(Named::Escape), 1);
+    assert!(h.bounds("menu").is_none(), "Esc closes it");
+
+    h.click_menu_button();
+    h.click_menu_button();
+    assert!(h.bounds("menu").is_none(), "the button toggles it");
+    h.keys(Key::Named(Named::F10), 1);
+    assert!(h.bounds("menu").is_some(), "F10 opens it");
+    h.keys(Key::Named(Named::F10), 1);
+    assert!(h.bounds("menu").is_none(), "F10 closes it");
+
+    h.click_menu_button();
+    let target = Some(Target::Point(full.center()));
+    h.run(Interaction::Mouse(Mouse::Click { button: Button::Left, target }));
+    assert!(h.bounds("menu").is_none(), "a click outside closes it");
+    assert_eq!(h.status(), "img1.png · 1 / 9");
+
+    h.click_menu_button();
+    h.keys(Key::Named(Named::ArrowRight), 1);
+    assert!(h.bounds("menu").is_none(), "any action closes it");
+    assert_eq!(h.status(), "img2.jpg · 2 / 9");
+}
+
+#[test]
+fn shortcuts_panel() {
+    let mut h = harness();
+    h.until("img1 shown", |h| h.bounds("photo").is_some());
+    assert!(h.bounds("help").is_none());
+    h.keys(Key::Character("?".into()), 1);
+    assert!(h.has_text("Keyboard shortcuts") && h.has_text("Next / previous photo"));
+    h.keys(Key::Named(Named::Escape), 1);
+    assert!(h.bounds("help").is_none(), "Esc closes it");
+    h.keys(Key::Named(Named::F1), 1);
+    assert!(h.bounds("help").is_some(), "F1 opens it");
+    h.keys(Key::Named(Named::F1), 1);
+    assert!(h.bounds("help").is_none(), "F1 closes it");
+
+    h.click_menu_button();
+    let target = Some(Target::Text("Keyboard shortcuts".into()));
+    h.run(Interaction::Mouse(Mouse::Click { button: Button::Left, target }));
+    assert!(h.bounds("help").is_some() && h.bounds("menu").is_none(), "opens from the menu");
+    let target = Some(Target::Point(Point::new(5.0, 5.0)));
+    h.run(Interaction::Mouse(Mouse::Click { button: Button::Left, target }));
+    assert!(h.bounds("help").is_none(), "a click outside closes it");
+}
+
+#[test]
+fn update_tilde() {
+    use crate::state::tilde;
+    let home = PathBuf::from(std::env::var_os("HOME").unwrap());
+    assert_eq!(tilde(&home.join("Pictures/x")), "~/Pictures/x");
+    assert_eq!(tilde(&home), "~");
+    assert_eq!(tilde(Path::new("/tmp/x")), "/tmp/x");
+}
+
+#[test]
+fn question_mark_uses_the_shifted_key() {
+    use crate::crop_overlay::key_message;
+    use iced::keyboard::Modifiers;
+    // What winit sends for Shift+/ on a US layout: `key` without Shift, `modified_key` with it.
+    let (slash, question) = (Key::Character("/".into()), Key::Character("?".into()));
+    let msg = key_message(&slash, &question, Modifiers::SHIFT, false, false, false);
+    assert!(matches!(msg, Some(Message::Action(Action::ToggleHelp))), "{msg:?}");
+    assert!(key_message(&slash, &slash, Modifiers::empty(), false, false, false).is_none());
+}
+
+#[test]
+fn vim_keys() {
+    let mut h = harness();
+    h.until("img1 shown", |h| h.bounds("photo").is_some());
+    h.keys(Key::Character("l".into()), 2);
+    assert_eq!(h.status(), "img3-exif6.jpg · 3 / 9");
+    h.keys(Key::Character("j".into()), 1);
+    h.keys(Key::Character("h".into()), 1);
+    h.keys(Key::Character("k".into()), 1);
+    assert!(h.status().ends_with("2 / 9"), "{}", h.status());
+    h.keys(Key::Character("G".into()), 1);
+    assert!(h.status().ends_with("9 / 9"), "{}", h.status());
+    h.keys(Key::Character("g".into()), 1);
+    assert!(h.status().ends_with("1 / 9"), "{}", h.status());
+    h.keys(Key::Named(Named::End), 1);
+    assert!(h.status().ends_with("9 / 9"), "{}", h.status());
+    h.keys(Key::Named(Named::Home), 1);
+    assert!(h.status().ends_with("1 / 9"), "{}", h.status());
+}
+
+#[test]
+fn shifted_g_is_last() {
+    use crate::crop_overlay::key_message;
+    use iced::keyboard::Modifiers;
+    let (g, big_g) = (Key::Character("g".into()), Key::Character("G".into()));
+    let msg = |k, m, mods| key_message(k, m, mods, false, false, false);
+    assert!(matches!(msg(&g, &big_g, Modifiers::SHIFT), Some(Message::Action(Action::Last))));
+    assert!(matches!(msg(&g, &g, Modifiers::empty()), Some(Message::Action(Action::First))));
+    assert!(msg(&g, &g, Modifiers::CTRL).is_none(), "Ctrl+G is not a shortcut");
+}
+
+#[test]
+fn q_does_not_quit() {
+    use crate::crop_overlay::key_message;
+    let q = Key::Character("q".into());
+    assert!(key_message(&q, &q, iced::keyboard::Modifiers::empty(), false, false, false).is_none());
 }
