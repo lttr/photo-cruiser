@@ -71,3 +71,32 @@ verify: check
     jq -e '.index == 1 and .view == "grid" and .errors == [] and .loading == false' \
         "{{artifacts}}/verify-grid.json" >/dev/null || { cat "{{artifacts}}/verify-grid.json"; exit 1; }
     echo "verify ok: {{artifacts}}/verify.png {{artifacts}}/verify-grid.png"
+
+# Release build of the GUI and the CLI (run before `sudo just install`)
+build-release:
+    cargo build --release --locked -p photo-cruiser-app -p photo-cruiser-cli
+
+appid := "com.lukastrumm.PhotoCruiser"
+# System-wide by default; `just prefix=~/.local install` for the current user only (no sudo).
+prefix := "/usr/local"
+share := prefix / "share"
+
+# Install the binaries, desktop entry and icon (`just build-release` first; needs sudo for /usr/local)
+install:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    cd "{{root}}"
+    for bin in photo-cruiser pcr; do
+        test -x "target/release/$bin" || { echo "target/release/$bin missing: run 'just build-release' first"; exit 1; }
+        install -Dm0755 "target/release/$bin" "{{prefix}}/bin/$bin"
+    done
+    install -Dm0644 "resources/{{appid}}.desktop" "{{share}}/applications/{{appid}}.desktop"
+    install -Dm0644 "resources/icons/hicolor/scalable/apps/{{appid}}.svg" "{{share}}/icons/hicolor/scalable/apps/{{appid}}.svg"
+    gtk-update-icon-cache -qtf "{{share}}/icons/hicolor" 2>/dev/null || true
+    update-desktop-database -q "{{share}}/applications" 2>/dev/null || true
+    echo "installed to {{prefix}}"
+
+# Remove what `install` put in place (same prefix)
+uninstall:
+    -rm "{{prefix}}/bin/photo-cruiser" "{{prefix}}/bin/pcr" "{{share}}/applications/{{appid}}.desktop" "{{share}}/icons/hicolor/scalable/apps/{{appid}}.svg"
+    -update-desktop-database -q "{{share}}/applications"

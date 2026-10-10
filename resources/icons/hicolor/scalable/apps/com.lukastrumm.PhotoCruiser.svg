@@ -1,0 +1,31 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<svg viewBox="0 0 128 128" xmlns="http://www.w3.org/2000/svg">
+  <defs>
+    <linearGradient id="bg" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#2d3550"/>
+      <stop offset="1" stop-color="#161a2a"/>
+    </linearGradient>
+    <linearGradient id="sky" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#ff9a5a"/>
+      <stop offset="1" stop-color="#ffd27a"/>
+    </linearGradient>
+    <clipPath id="photo">
+      <rect x="26" y="34" width="76" height="60" rx="4"/>
+    </clipPath>
+  </defs>
+  <rect x="8" y="8" width="112" height="112" rx="24" fill="url(#bg)"/>
+  <!-- photo -->
+  <g clip-path="url(#photo)">
+    <rect x="26" y="34" width="76" height="60" fill="url(#sky)"/>
+    <circle cx="80" cy="54" r="9" fill="#fff4d6"/>
+    <path d="M26 94 L50 62 L64 78 L76 66 L102 94 Z" fill="#3a6f8f"/>
+    <path d="M26 94 L50 62 L58 72 L44 94 Z" fill="#2c5670"/>
+  </g>
+  <!-- crop corners -->
+  <g fill="none" stroke="#7df9e0" stroke-width="6" stroke-linecap="round" stroke-linejoin="round">
+    <path d="M20 42 V28 H34"/>
+    <path d="M94 28 H108 V42"/>
+    <path d="M108 86 V100 H94"/>
+    <path d="M34 100 H20 V86"/>
+  </g>
+</svg>

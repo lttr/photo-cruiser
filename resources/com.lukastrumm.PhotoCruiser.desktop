@@ -1,0 +1,13 @@
+[Desktop Entry]
+Name=Photo Cruiser
+GenericName=Photo Browser
+Comment=Fast photo browser and editor
+Type=Application
+Icon=com.lukastrumm.PhotoCruiser
+Exec=photo-cruiser %f
+Terminal=false
+StartupNotify=true
+StartupWMClass=com.lukastrumm.PhotoCruiser
+Categories=Graphics;Photography;Viewer;
+Keywords=photo;image;viewer;crop;heic;
+MimeType=image/jpeg;image/png;image/gif;image/webp;image/bmp;image/avif;image/heic;image/heif;

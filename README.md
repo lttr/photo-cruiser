@@ -22,6 +22,16 @@ just cli list fixtures   # run the CLI
 just check               # fmt, clippy, tests
 ```
 
+## Install
+
+```sh
+just build-release
+sudo just install      # /usr/local: photo-cruiser, pcr, desktop entry, icon
+sudo just uninstall
+```
+
+`just prefix=$HOME/.local install` installs for the current user only, without sudo.
+
 ## Keys
 
 | Key         | Action                                |
