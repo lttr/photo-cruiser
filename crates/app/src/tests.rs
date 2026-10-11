@@ -1276,3 +1276,109 @@ fn failed_save_dot_in_grid() {
     h.keys(Key::Named(Named::Escape), 1); // back to the grid (Save left crop mode)
     h.until("grid with a dot", |h| h.bounds("failed").is_some());
 }
+
+fn palette_labels(s: &State) -> Vec<String> {
+    crate::palette::filtered(s).into_iter().map(|c| c.label).collect()
+}
+
+#[test]
+fn update_palette_lists_what_can_be_done_sorted() {
+    let mut s = opened(&fixtures()); // grid, img1.png
+    s.apply(&Action::TogglePalette);
+    let grid = palette_labels(&s);
+    assert!(grid.is_sorted_by_key(|l| l.to_lowercase()), "alphabetical: {grid:?}");
+    for l in ["Open photo", "Next photo", "Last photo", "Crop", "Big thumbnails", "Open folder…", "Quit"] {
+        assert!(grid.contains(&l.into()), "{l} in {grid:?}");
+    }
+    for l in ["All photos", "Previous photo", "Small thumbnails", "Undo", "Save", "Apply crop"] {
+        assert!(!grid.contains(&l.into()), "{l} not in {grid:?}");
+    }
+
+    // Typing filters (every word, any case) and focuses the first row; ↓/↑ wrap.
+    s.apply(&Action::PaletteQuery { query: "PHO".into() });
+    let want = ["About Photo Cruiser", "Last photo", "Next photo", "Open photo"];
+    assert_eq!(palette_labels(&s), want.map(String::from), "no First / Previous on the first photo");
+    s.apply(&Action::PaletteQuery { query: "photo n".into() });
+    assert_eq!(palette_labels(&s), ["Next photo", "Open photo"].map(String::from));
+    s.apply(&Action::PalettePrev);
+    assert_eq!(s.palette.as_ref().unwrap().focus, 1);
+    s.apply(&Action::PaletteNext);
+    assert_eq!(s.palette.as_ref().unwrap().focus, 0);
+    s.apply(&Action::PaletteQuery { query: "zzz".into() });
+    assert!(palette_labels(&s).is_empty());
+    s.apply(&Action::PaletteNext);
+    assert_eq!(s.palette.as_ref().unwrap().focus, 0, "nothing to move to");
+
+    // Any other action closes it.
+    s.apply(&Action::Next);
+    assert!(s.palette.is_none());
+
+    // Photo view, cropping: the crop's actions; after applying: undo, save, reset.
+    s.apply(&Action::ShowPhoto { index: Some(1) }); // img2.jpg
+    settle(&mut s);
+    s.apply(&Action::SetCrop(Rect::new(20.0, 10.0, 200.0, 150.0)));
+    s.apply(&Action::TogglePalette);
+    let crop = palette_labels(&s);
+    for l in ["All photos", "Apply crop", "Cancel crop", "Aspect ratio free", "Aspect ratio 1:1", "Save"] {
+        assert!(crop.contains(&l.into()), "{l} in {crop:?}");
+    }
+    assert!(!crop.contains(&"Aspect ratio original".into()), "the aspect in use");
+    assert!(!crop.contains(&"Crop".into()) && !crop.contains(&"Open photo".into()));
+    s.apply(&Action::ApplyCrop);
+    s.apply(&Action::TogglePalette);
+    let edited = palette_labels(&s);
+    for l in ["Crop", "Undo", "Save", "Reset edits", "Revert to original"] {
+        assert!(edited.contains(&l.into()), "{l} in {edited:?}");
+    }
+    assert!(!edited.contains(&"Redo".into()));
+    s.apply(&Action::TogglePalette);
+    assert!(s.palette.is_none(), "Ctrl+K again closes it");
+}
+
+#[test]
+fn palette_keys() {
+    use crate::crop_overlay::key_message;
+    use iced::keyboard::Modifiers;
+    let k = Key::Character("k".into());
+    let m = key_message(&k, &k, Modifiers::CTRL, Modes::default());
+    assert!(matches!(m, Some(Message::Action(Action::TogglePalette))), "{m:?}");
+    let open = Modes { palette: true, ..Modes::default() };
+    assert!(
+        key_message(&Key::Character("c".into()), &k, Modifiers::empty(), open).is_none(),
+        "keys go to the field"
+    );
+}
+
+#[test]
+fn palette_type_move_and_pick() {
+    let mut h = harness(); // img1.png
+    h.until("img1 shown", |h| h.bounds("photo").is_some());
+    h.emu.update(&h.prog, Action::TogglePalette.into());
+    assert!(h.bounds("palette").is_some() && h.has_text("Keyboard shortcuts"));
+    // The field's focus comes as a task.
+    std::thread::sleep(Duration::from_millis(50));
+    h.pump();
+
+    // Typed into the field; ↓ moves the focus, Enter picks it.
+    h.run(Interaction::Keyboard(Keyboard::Typewrite("photo".into())));
+    assert!(!h.has_text("Keyboard shortcuts") && h.has_text("All photos"), "filtered");
+    assert!(h.bounds("palette-focus").unwrap().contains(h.text_center("About Photo Cruiser")));
+    h.keys(Key::Named(Named::ArrowDown), 2);
+    assert!(h.bounds("palette-focus").unwrap().contains(h.text_center("Last photo")));
+    h.keys(Key::Named(Named::Enter), 1);
+    assert!(h.bounds("palette").is_none());
+    h.until("last photo", |h| h.status().contains("9 / 9"));
+
+    // Esc closes it; so does a click outside; a click on a row picks it.
+    h.emu.update(&h.prog, Action::TogglePalette.into());
+    h.keys(Key::Named(Named::Escape), 1);
+    assert!(h.bounds("palette").is_none() && h.bounds("grid").is_none(), "Esc only closes the palette");
+    h.emu.update(&h.prog, Action::TogglePalette.into());
+    let target = Some(Target::Point(Point::new(5.0, 700.0)));
+    h.run(Interaction::Mouse(Mouse::Click { button: Button::Left, target }));
+    assert!(h.bounds("palette").is_none(), "a click outside closes it");
+    h.emu.update(&h.prog, Action::TogglePalette.into());
+    let target = Some(Target::Text("Keyboard shortcuts".into()));
+    h.run(Interaction::Mouse(Mouse::Click { button: Button::Left, target }));
+    assert!(h.bounds("palette").is_none() && h.bounds("help").is_some());
+}

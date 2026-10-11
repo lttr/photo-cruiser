@@ -27,6 +27,8 @@ pub struct Modes {
     pub about: bool,
     /// The custom aspect field has the keyboard (only `Esc` is ours).
     pub input: bool,
+    /// The command palette shows: its own layer takes the keys ([`crate::palette::Keys`]).
+    pub palette: bool,
     pub crop: bool,
     pub fullscreen: bool,
     /// The grid shows (not a single photo).
@@ -76,6 +78,7 @@ pub const SHORTCUTS: &[(&str, &str)] = &[
     ("↓  ↑   j  k", "Grid: row down / up; photo: next / previous"),
     ("Home  End   g  G", "First / last photo"),
     ("Enter", "Grid: open the photo; crop: apply"),
+    ("Ctrl+K", "Find an action by name"),
     ("Ctrl+O", "Open folder"),
     ("C", "Crop on / off"),
     ("Ctrl+Z", "Undo"),
@@ -97,6 +100,9 @@ pub const SHORTCUTS: &[(&str, &str)] = &[
 pub fn key_message(key: &Key, modified: &Key, mods: keyboard::Modifiers, m: Modes) -> Option<Message> {
     let plain = !mods.control() && !mods.alt() && !mods.logo();
     let (down, up) = if m.grid { (Action::Down, Action::Up) } else { (Action::Next, Action::Prev) };
+    if m.palette {
+        return None;
+    }
     if m.input {
         return matches!(key, Key::Named(Named::Escape)).then_some(Action::ToggleCustomAspect.into());
     }
@@ -152,6 +158,7 @@ pub fn key_message(key: &Key, modified: &Key, mods: keyboard::Modifiers, m: Mode
         Key::Named(Named::F10 | Named::ContextMenu) if !m.menu => Action::MenuFocus { index: 0 }.into(),
         Key::Named(Named::F10 | Named::ContextMenu) => Action::ToggleMenu.into(),
         Key::Named(Named::F1) => Action::ToggleHelp.into(),
+        Key::Character(c) if mods.control() && c.eq_ignore_ascii_case("k") => Action::TogglePalette.into(),
         Key::Character(c) if mods.control() && c.eq_ignore_ascii_case("o") => Message::OpenDialog,
         Key::Character(c) if mods.control() && c.eq_ignore_ascii_case("s") => Action::Save.into(),
         Key::Character(c) if mods.control() && mods.shift() && c.eq_ignore_ascii_case("z") => {

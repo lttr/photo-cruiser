@@ -19,6 +19,7 @@ mod crop_overlay;
 mod grid;
 mod menu;
 mod message;
+mod palette;
 mod script;
 mod settings;
 mod state;

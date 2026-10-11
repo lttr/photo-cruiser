@@ -4,7 +4,7 @@
 //! JSON form (internally tagged): `{"action": "next"}`, `{"action": "goto", "index": 3}`,
 //! `{"action": "set_crop", "x": 40, "y": 30, "w": 200, "h": 150}`,
 //! `{"action": "open", "path": "fixtures"}`, `{"action": "show_photo", "index": 2}`,
-//! `{"action": "set_aspect", "aspect": "16:9"}`.
+//! `{"action": "set_aspect", "aspect": "16:9"}`, `{"action": "palette_query", "query": "crop"}`.
 
 use crate::grid::Layout;
 use photo_cruiser_core::Rect;
@@ -89,6 +89,25 @@ pub enum Action {
     MenuPrev,
     /// Pick the focused menu item (`Enter`, `Space`).
     MenuActivate,
+    /// Show/hide the command palette (`Ctrl+K`): every action that does something now,
+    /// sorted by name. Any other action closes it.
+    TogglePalette,
+    /// Hide the palette (`Esc`, click outside it).
+    ClosePalette,
+    /// The palette's search text (typing): shows only the actions whose name has every
+    /// word of it, focuses the first.
+    PaletteQuery {
+        query: String,
+    },
+    /// Focus this palette row (mouse over it).
+    PaletteFocus {
+        index: usize,
+    },
+    /// Focus the next / previous palette row, wrapping around (`↓`/`↑`, `Tab`/`Shift+Tab`).
+    PaletteNext,
+    PalettePrev,
+    /// Do the focused palette row's action (`Enter`).
+    PaletteActivate,
     /// Show/hide file names in the status line and the grid (`N`, menu). Off at first start, then remembered.
     ToggleNames,
     /// Grid: the next layout, small → big thumbnails → justified (`Z`, menu). Small at first start, then remembered.
@@ -127,7 +146,9 @@ mod tests {
                 {"action":"menu_focus","index":2},{"action":"menu_next"},{"action":"menu_prev"},{"action":"menu_activate"},
                 {"action":"set_aspect","aspect":"16:9"},{"action":"set_aspect","aspect":"free"},{"action":"next_aspect"},
                 {"action":"swap_aspect"},{"action":"toggle_custom_aspect"},{"action":"apply_crop"},
-                {"action":"undo"},{"action":"redo"},{"action":"reset_edits"},{"action":"revert"},{"action":"save"}]"#,
+                {"action":"undo"},{"action":"redo"},{"action":"reset_edits"},{"action":"revert"},{"action":"save"},
+                {"action":"toggle_palette"},{"action":"palette_query","query":"crop"},{"action":"palette_focus","index":1},
+                {"action":"palette_next"},{"action":"palette_prev"},{"action":"palette_activate"},{"action":"close_palette"}]"#,
         )
         .unwrap();
         assert_eq!(steps[1], Action::Goto { index: 2 });
@@ -148,7 +169,9 @@ mod tests {
         assert_eq!(steps[33], Action::ToggleCustomAspect);
         assert_eq!(steps[34], Action::ApplyCrop);
         assert_eq!(steps[38], Action::Revert);
-        assert_eq!(steps.len(), 40);
+        assert_eq!(steps[41], Action::PaletteQuery { query: "crop".into() });
+        assert_eq!(steps[45], Action::PaletteActivate);
+        assert_eq!(steps.len(), 47);
         let json = serde_json::to_string(&Action::SetCrop(Rect::new(1.0, 2.0, 3.0, 4.0))).unwrap();
         assert_eq!(json, r#"{"action":"set_crop","x":1.0,"y":2.0,"w":3.0,"h":4.0}"#);
         assert!(parse_script(r#"[{"action":"jump"}]"#).is_err());

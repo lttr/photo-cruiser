@@ -112,6 +112,14 @@ impl History {
         true
     }
 
+    pub fn can_undo(&self) -> bool {
+        !self.past.is_empty()
+    }
+
+    pub fn can_redo(&self) -> bool {
+        !self.future.is_empty()
+    }
+
     /// Step forward again. Returns false if there is nothing to redo.
     pub fn redo(&mut self, stack: &mut EditStack) -> bool {
         let Some(next) = self.future.pop() else { return false };
@@ -152,10 +160,12 @@ mod tests {
         assert!(h.change(&mut s, crop(2.0)));
         assert!(h.undo(&mut s) && s == crop(1.0));
         assert!(h.undo(&mut s) && s.is_empty());
+        assert!(!h.can_undo() && h.can_redo());
         assert!(!h.undo(&mut s));
         assert!(h.redo(&mut s) && s == crop(1.0));
         // A new change drops the redo steps.
         assert!(h.change(&mut s, crop(3.0)));
+        assert!(h.can_undo() && !h.can_redo());
         assert!(!h.redo(&mut s));
         for i in 0..150 {
             h.change(&mut s, crop(10.0 + i as f32));

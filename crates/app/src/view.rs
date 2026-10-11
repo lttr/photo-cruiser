@@ -7,7 +7,8 @@
 //! `body` (the image area), `menu-button`, `menu`, `menu-focus` (its focused item),
 //! `help` (shortcuts panel), `about`, `aspects` (the crop's aspect buttons in the footer),
 //! `aspect-panel` and `aspect-input` (the custom aspect field), `apply` (the crop's
-//! Apply button), `failed` (the dot on a grid cell whose save failed).
+//! Apply button), `failed` (the dot on a grid cell whose save failed), `palette`,
+//! `palette-input` and `palette-focus` (the command palette, its field, its focused row).
 
 use crate::action::Action;
 use crate::app::App;
@@ -15,6 +16,7 @@ use crate::crop_overlay::{Modes, Overlay, SHORTCUTS};
 use crate::grid::LABEL;
 use crate::menu;
 use crate::message::Message;
+use crate::palette;
 use crate::state::{Display, Mode, State, View, tilde};
 use crate::theme;
 use iced::alignment::Horizontal;
@@ -70,6 +72,7 @@ pub fn view(app: &App) -> Element<'_, Message> {
             help: s.help,
             about: s.about,
             input: s.aspect_input.is_some(),
+            palette: s.palette.is_some(),
             crop: s.mode == Mode::Crop,
             fullscreen: s.fullscreen,
             grid,
@@ -113,6 +116,9 @@ pub fn view(app: &App) -> Element<'_, Message> {
         body,
         container(footer).padding(iced::Padding::from([2, 4]).left(12)).width(Fill).style(theme::bar)
     ];
+    if let Some(p) = &s.palette {
+        return stack![main, command_palette(s, p)].into();
+    }
     if s.help {
         let rows = SHORTCUTS.iter().map(|(keys, what)| {
             row![text(*keys).width(150).style(theme::dim), text(*what)].spacing(16).into()
@@ -188,6 +194,41 @@ pub fn view(app: &App) -> Element<'_, Message> {
     // A click anywhere outside the menu closes it (and goes no further).
     let layer = container(opaque(menu)).align_right(Fill).align_bottom(Fill).padding([42, 6]);
     stack![main, mouse_area(layer).on_press(Action::CloseMenu.into())].into()
+}
+
+/// The palette's layer: the field and the rows matching it, near the top of the window;
+/// a click outside closes it. The [`palette::Keys`] layer on top takes its keys.
+fn command_palette<'a>(s: &'a State, p: &'a palette::Palette) -> Element<'a, Message> {
+    let field = text_input("Type an action", &p.query)
+        .id("palette-input")
+        .on_input(|query| Action::PaletteQuery { query }.into())
+        .padding([6, 10]);
+    let items = palette::filtered(s);
+    let total = items.len();
+    let rows = items.into_iter().enumerate().skip(p.top).take(palette::VISIBLE).map(|(i, c)| {
+        let content = row![text(c.label).width(Fill), text(c.keys).size(12).style(theme::dim)]
+            .spacing(24)
+            .align_y(Center);
+        let focused = i == p.focus;
+        let button =
+            button(content).padding([6, 12]).width(Fill).style(theme::flat(focused)).on_press(c.message);
+        let row = container(mouse_area(button).on_enter(Action::PaletteFocus { index: i }.into()));
+        if focused { row.id("palette-focus").into() } else { row.into() }
+    });
+    let mut list = column(rows);
+    if total == 0 {
+        list = list.push(container(text("No matching action").style(theme::dim)).padding([6, 12]));
+    }
+    let hidden = total.saturating_sub(p.top + palette::VISIBLE);
+    if hidden > 0 {
+        list =
+            list.push(container(text(format!("{hidden} more")).size(12).style(theme::dim)).padding([4, 12]));
+    }
+    let panel =
+        container(column![field, list].spacing(4).width(440)).padding(6).style(theme::menu).id("palette");
+    let layer = container(opaque(panel)).align_x(Center).width(Fill).height(Fill).padding([80, 0]);
+    let keys = canvas(palette::Keys).width(Fill).height(Fill);
+    stack![mouse_area(layer).on_press(Action::ClosePalette.into()), keys].into()
 }
 
 /// Every photo of the folder as a thumbnail, in the rows of [`State::grid`], the current

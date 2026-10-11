@@ -8,7 +8,7 @@ use crate::settings::Settings;
 use crate::state::{
     DEFAULT_MAX_SIDE, DEFAULT_TRANSITION, Effect, Loaded, State, decode_job, io_job, size_job, thumb_job,
 };
-use crate::{menu, theme, view};
+use crate::{menu, palette, theme, view};
 use iced::widget::operation::AbsoluteOffset;
 use iced::{Subscription, Task, window};
 use std::path::PathBuf;
@@ -146,6 +146,7 @@ impl App {
             Message::Action(action) => self.apply(&action),
             Message::OpenDialog => {
                 (self.state.menu, self.state.help, self.state.about) = (false, false, false);
+                self.state.palette = None;
                 let dialog = rfd::AsyncFileDialog::new().set_title("Open photo folder").pick_folder();
                 return Task::perform(dialog, |h| Message::FolderPicked(h.map(|h| h.path().into())));
             }
@@ -241,10 +242,22 @@ impl App {
                 None => Task::none(),
             };
         }
+        if *action == Action::PaletteActivate {
+            let s = &self.state;
+            let pick = s.palette.as_ref().and_then(|p| palette::filtered(s).into_iter().nth(p.focus));
+            return match pick {
+                Some(c) => {
+                    self.state.palette = None;
+                    self.update(c.message)
+                }
+                None => Task::none(),
+            };
+        }
         match self.state.apply(action) {
             Effect::None if self.state.aspect_input.is_some() => {
                 iced::widget::operation::focus("aspect-input")
             }
+            Effect::None if self.state.palette.is_some() => iced::widget::operation::focus("palette-input"),
             Effect::Quit => iced::exit(),
             Effect::Fullscreen(on) => set_fullscreen(on),
             Effect::None => Task::none(),

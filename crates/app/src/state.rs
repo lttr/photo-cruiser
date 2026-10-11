@@ -22,6 +22,7 @@
 use crate::action::Action;
 use crate::grid;
 use crate::menu;
+use crate::palette::{self, Palette};
 use iced::widget::image::Handle;
 use photo_cruiser_core::crop::{Aspect, CropTool, MouseKind};
 use photo_cruiser_core::geom::PixelRect;
@@ -244,6 +245,8 @@ pub struct State {
     pub about: bool,
     /// The custom aspect ratio field is showing, with this text.
     pub aspect_input: Option<String>,
+    /// The command palette (`Ctrl+K`) is showing.
+    pub palette: Option<Palette>,
     /// File names are shown (status line, grid labels). Off by default; remembered between runs.
     pub names: bool,
     /// How the grid arranges thumbnails. Small at first start, then remembered.
@@ -299,6 +302,7 @@ impl State {
             help: false,
             about: false,
             aspect_input: None,
+            palette: None,
             names: false,
             layout: grid::Layout::default(),
             max_side,
@@ -460,6 +464,15 @@ impl State {
             }
             _ => None,
         };
+        self.palette = match action {
+            Action::TogglePalette if self.palette.is_none() => Some(Palette::default()),
+            Action::PaletteQuery { .. }
+            | Action::PaletteFocus { .. }
+            | Action::PaletteNext
+            | Action::PalettePrev
+            | Action::PaletteActivate => self.palette.take(),
+            _ => None,
+        };
         let effect = self.act(action);
         self.sync_display();
         effect
@@ -607,8 +620,30 @@ impl State {
                     (Some(i), false) => (i + n - 1) % n,
                 });
             }
-            // `MenuActivate` is picked up by the app, which knows the items' messages.
+            Action::PaletteQuery { query } => {
+                if let Some(p) = &mut self.palette {
+                    *p = Palette { query: query.clone(), ..Palette::default() };
+                }
+            }
+            Action::PaletteFocus { index } => {
+                let n = palette::filtered(self).len();
+                if let Some(p) = &mut self.palette {
+                    p.focus(*index, n);
+                }
+            }
+            Action::PaletteNext | Action::PalettePrev => {
+                let n = palette::filtered(self).len();
+                if let Some(p) = self.palette.as_mut().filter(|_| n > 0) {
+                    let i = if *action == Action::PaletteNext { p.focus + 1 } else { p.focus + n - 1 };
+                    p.focus(i % n, n);
+                }
+            }
+            // `MenuActivate` and `PaletteActivate` are picked up by the app, which knows the
+            // items' messages.
             Action::ToggleMenu
+            | Action::TogglePalette
+            | Action::ClosePalette
+            | Action::PaletteActivate
             | Action::CloseMenu
             | Action::MenuNext
             | Action::MenuPrev
@@ -635,6 +670,11 @@ impl State {
 
     fn stack_of(&self, path: &Path) -> EditStack {
         self.edits.get(path).map(|p| p.edits.stack.clone()).unwrap_or_default()
+    }
+
+    /// The backup of the current photo's original, if it was saved.
+    pub fn backup(&self) -> Option<&Path> {
+        self.current_path().and_then(|p| self.edits.get(p)?.edits.backup.as_deref())
     }
 
     /// The current photo's edits differ from what its file was saved with.
@@ -1070,6 +1110,11 @@ impl State {
             aspect: self.crop.aspect,
             aspect_swapped: self.crop.swapped,
             aspect_input: self.aspect_input.clone(),
+            palette: self.palette.clone(),
+            palette_items: match self.palette {
+                Some(_) => palette::filtered(self).into_iter().map(|c| c.label).collect(),
+                None => Vec::new(),
+            },
             names: self.names,
             layout: self.layout,
             crop: self.crop_pixels(),
@@ -1085,10 +1130,7 @@ impl State {
                 .and_then(|p| p.edits.saved.clone())
                 .map(|s| s.ops),
             saving: self.saving().iter().map(|p| p.display().to_string()).collect(),
-            backup: self
-                .current_path()
-                .and_then(|p| self.edits.get(p)?.edits.backup.as_ref())
-                .map(|b| b.display().to_string()),
+            backup: self.backup().map(|b| b.display().to_string()),
             errors,
             window,
             shot: shot.map(|p| p.display().to_string()),
@@ -1125,6 +1167,10 @@ pub struct Dump {
     pub aspect_swapped: bool,
     /// The custom aspect field's text, while it shows.
     pub aspect_input: Option<String>,
+    /// The command palette, while it shows.
+    pub palette: Option<Palette>,
+    /// Its rows (the commands matching its query).
+    pub palette_items: Vec<String>,
     pub names: bool,
     pub layout: grid::Layout,
     /// Integer source pixels.
