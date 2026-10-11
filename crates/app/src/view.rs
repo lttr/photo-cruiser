@@ -5,7 +5,8 @@
 //! preview, or still the previous photo while it decodes), `message` (error / empty),
 //! `grid` (the thumbnails' scrollable), `selected` (the current photo's grid cell),
 //! `body` (the image area), `menu-button`, `menu`, `menu-focus` (its focused item),
-//! `help` (shortcuts panel), `about`.
+//! `help` (shortcuts panel), `about`, `aspects` (the crop's aspect buttons in the footer),
+//! `aspect-panel` and `aspect-input` (the custom aspect field).
 
 use crate::action::Action;
 use crate::app::App;
@@ -18,8 +19,10 @@ use crate::theme;
 use iced::alignment::Horizontal;
 use iced::widget::{
     button, canvas, column, container, image, mouse_area, opaque, row, scrollable, space, stack, text,
+    text_input,
 };
 use iced::{Center, Color, ContentFit, Element, Fill};
+use photo_cruiser_core::crop::Aspect;
 
 const BG: Color = Color::from_rgb(0x11 as f32 / 255.0, 0x11 as f32 / 255.0, 0x11 as f32 / 255.0);
 
@@ -65,6 +68,7 @@ pub fn view(app: &App) -> Element<'_, Message> {
             menu: s.menu,
             help: s.help,
             about: s.about,
+            input: s.aspect_input.is_some(),
             crop: s.mode == Mode::Crop,
             fullscreen: s.fullscreen,
             grid,
@@ -86,17 +90,19 @@ pub fn view(app: &App) -> Element<'_, Message> {
         return body.into();
     }
 
-    let footer = row![
-        text(s.status()).size(13).width(Fill),
+    let mut footer = row![text(s.status()).size(13).width(Fill)].align_y(Center);
+    if s.mode == Mode::Crop && !grid {
+        footer = footer.push(aspects(s));
+    }
+    let footer = footer.push(
         container(
             button(hamburger())
                 .padding([7, 8])
                 .style(theme::flat(s.menu))
-                .on_press(Action::ToggleMenu.into())
+                .on_press(Action::ToggleMenu.into()),
         )
         .id("menu-button"),
-    ]
-    .align_y(Center);
+    );
     let main = column![
         body,
         container(footer).padding(iced::Padding::from([2, 4]).left(12)).width(Fill).style(theme::bar)
@@ -129,6 +135,28 @@ pub fn view(app: &App) -> Element<'_, Message> {
         .id("about");
         let layer = container(opaque(panel)).center(Fill);
         return stack![main, mouse_area(layer).on_press(Action::ToggleAbout.into())].into();
+    }
+    if let Some(input) = &s.aspect_input {
+        let parsed = input.parse::<Aspect>().ok().filter(|a| *a != Aspect::Original);
+        let field = text_input("e.g. 7:5 or 2.35", input)
+            .id("aspect-input")
+            .on_input(Message::AspectInput)
+            .on_submit_maybe(parsed.map(|aspect| Action::SetAspect { aspect }.into()))
+            .width(180);
+        let hint = match parsed {
+            _ if input.trim().is_empty() => "Width:height, Enter to use it",
+            Some(_) => "Enter to use it",
+            None => "Not a ratio: try 7:5 or 2.35",
+        };
+        let panel = container(
+            column![text("Custom aspect ratio").size(18), field, text(hint).size(12).style(theme::dim)]
+                .spacing(12),
+        )
+        .padding(24)
+        .style(theme::menu)
+        .id("aspect-panel");
+        let layer = container(opaque(panel)).center(Fill);
+        return stack![main, mouse_area(layer).on_press(Action::ToggleCustomAspect.into())].into();
     }
     if !s.menu {
         return main.into();
@@ -216,6 +244,34 @@ fn grid<'a>(s: &'a State) -> Element<'a, Message> {
         .width(Fill)
         .height(Fill)
         .into()
+}
+
+/// The crop's aspect choices: the presets, a custom ratio, and portrait / landscape
+/// (for a fixed, non-square ratio).
+fn aspects(s: &State) -> Element<'_, Message> {
+    let current = s.crop.aspect;
+    let choice = |label: String, active: bool, message: Message| -> Element<'_, Message> {
+        button(text(label).size(13)).padding([3, 8]).style(theme::flat(active)).on_press(message).into()
+    };
+    let mut buttons: Vec<_> = Aspect::PRESETS
+        .into_iter()
+        .map(|a| {
+            let label = match a {
+                Aspect::Original => "Original".into(),
+                Aspect::Free => "Free".into(),
+                _ => a.to_string(),
+            };
+            choice(label, a == current, Action::SetAspect { aspect: a }.into())
+        })
+        .collect();
+    let custom = if current.is_preset() { "Custom…".into() } else { format!("{current}…") };
+    buttons.push(choice(custom, !current.is_preset(), Action::ToggleCustomAspect.into()));
+    if let Some(r) = s.crop_ratio().filter(|r| (r - 1.0).abs() > 1e-3) {
+        let label = if r > 1.0 { "Landscape" } else { "Portrait" };
+        buttons.push(text("·").style(theme::dim).into());
+        buttons.push(choice(label.into(), false, Action::SwapAspect.into()));
+    }
+    container(row(buttons).spacing(2).align_y(Center)).padding([0, 8]).id("aspects").into()
 }
 
 /// Three bars: the menu icon (drawn, so it doesn't depend on the font's glyphs).

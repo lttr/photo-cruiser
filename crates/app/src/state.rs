@@ -17,7 +17,7 @@ use crate::action::Action;
 use crate::grid;
 use crate::menu;
 use iced::widget::image::Handle;
-use photo_cruiser_core::crop::{CropTool, MouseKind};
+use photo_cruiser_core::crop::{Aspect, CropTool, MouseKind};
 use photo_cruiser_core::geom::PixelRect;
 use photo_cruiser_core::loader::{Job, Kind, Loader, SizeJob, Sizes, ThumbJob, Thumbs};
 use photo_cruiser_core::{Folder, Point, Size};
@@ -170,6 +170,8 @@ pub struct State {
     pub help: bool,
     /// The About panel is showing.
     pub about: bool,
+    /// The custom aspect ratio field is showing, with this text.
+    pub aspect_input: Option<String>,
     /// File names are shown (status line, grid labels). Off by default; remembered between runs.
     pub names: bool,
     /// How the grid arranges thumbnails. Small at first start, then remembered.
@@ -211,6 +213,7 @@ impl State {
             menu_focus: None,
             help: false,
             about: false,
+            aspect_input: None,
             names: false,
             layout: grid::Layout::default(),
             max_side,
@@ -350,6 +353,12 @@ impl State {
         }
         self.help = matches!(action, Action::ToggleHelp) && !self.help;
         self.about = matches!(action, Action::ToggleAbout) && !self.about;
+        self.aspect_input = match (action, &self.aspect_input) {
+            (Action::ToggleCustomAspect, None) => {
+                Some(if self.crop.aspect.is_preset() { String::new() } else { self.crop.aspect.to_string() })
+            }
+            _ => None,
+        };
         match action {
             Action::Open { path } => self.open(path),
             Action::Next => {
@@ -418,6 +427,9 @@ impl State {
                 self.mode = Mode::Browse;
                 self.crop.clear();
             }
+            Action::SetAspect { aspect } => self.crop.set_aspect(*aspect, self.image_size()),
+            Action::NextAspect => self.crop.set_aspect(self.crop.aspect.next(), self.image_size()),
+            Action::SwapAspect => self.crop.swap(self.image_size()),
             Action::ToggleFullscreen => {
                 self.fullscreen = !self.fullscreen;
                 return Effect::Fullscreen(self.fullscreen);
@@ -457,7 +469,8 @@ impl State {
             | Action::MenuPrev
             | Action::MenuActivate
             | Action::ToggleHelp
-            | Action::ToggleAbout => {}
+            | Action::ToggleAbout
+            | Action::ToggleCustomAspect => {}
             Action::Quit => return Effect::Quit,
         }
         Effect::None
@@ -512,6 +525,16 @@ impl State {
                 self.error(msg);
             }
         }
+    }
+
+    /// Source size of the current photo (zero without one).
+    fn image_size(&self) -> Size {
+        self.picture().map(Picture::source_size).unwrap_or_default()
+    }
+
+    /// The crop's width / height on the current photo; `None` for a free crop.
+    pub fn crop_ratio(&self) -> Option<f32> {
+        self.crop.aspect.ratio(self.image_size(), self.crop.swapped)
     }
 
     /// Mouse event for the crop tool (ignored outside crop mode or without an image).
@@ -648,6 +671,9 @@ impl State {
             menu_focus: self.menu_focus,
             help: self.help,
             about: self.about,
+            aspect: self.crop.aspect,
+            aspect_swapped: self.crop.swapped,
+            aspect_input: self.aspect_input.clone(),
             names: self.names,
             layout: self.layout,
             crop: self.crop_pixels(),
@@ -685,6 +711,12 @@ pub struct Dump {
     pub menu_focus: Option<usize>,
     pub help: bool,
     pub about: bool,
+    /// The crop's aspect: `original`, `free`, `W:H`.
+    pub aspect: Aspect,
+    /// The aspect turned portrait ↔ landscape.
+    pub aspect_swapped: bool,
+    /// The custom aspect field's text, while it shows.
+    pub aspect_input: Option<String>,
     pub names: bool,
     pub layout: grid::Layout,
     /// Integer source pixels.

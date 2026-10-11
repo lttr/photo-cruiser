@@ -177,6 +177,12 @@ impl App {
                 self.state.fullscreen = on;
                 Task::none()
             }
+            Message::AspectInput(text) => {
+                if self.state.aspect_input.is_some() {
+                    self.state.aspect_input = Some(text);
+                }
+                Task::none()
+            }
             Message::Crop(kind, p, tol) => {
                 self.state.crop_mouse(kind, p, tol);
                 Task::none()
@@ -222,6 +228,9 @@ impl App {
             };
         }
         match self.state.apply(action) {
+            Effect::None if self.state.aspect_input.is_some() => {
+                iced::widget::operation::focus("aspect-input")
+            }
             Effect::Quit => iced::exit(),
             Effect::Fullscreen(on) => set_fullscreen(on),
             Effect::None => Task::none(),

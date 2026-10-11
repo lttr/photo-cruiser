@@ -25,6 +25,8 @@ pub struct Modes {
     pub menu: bool,
     pub help: bool,
     pub about: bool,
+    /// The custom aspect field has the keyboard (only `Esc` is ours).
+    pub input: bool,
     pub crop: bool,
     pub fullscreen: bool,
     /// The grid shows (not a single photo).
@@ -76,6 +78,8 @@ pub const SHORTCUTS: &[(&str, &str)] = &[
     ("Enter", "Grid: open the photo"),
     ("Ctrl+O", "Open folder"),
     ("C", "Crop on / off"),
+    ("A", "Crop: next aspect ratio (original, free, 1:1, 3:2, …)"),
+    ("X", "Crop: portrait / landscape"),
     ("F  F11", "Full screen on / off"),
     ("N", "File names on / off"),
     ("Z", "Grid: small / big thumbnails / justified"),
@@ -90,6 +94,9 @@ pub const SHORTCUTS: &[(&str, &str)] = &[
 pub fn key_message(key: &Key, modified: &Key, mods: keyboard::Modifiers, m: Modes) -> Option<Message> {
     let plain = !mods.control() && !mods.alt() && !mods.logo();
     let (down, up) = if m.grid { (Action::Down, Action::Up) } else { (Action::Next, Action::Prev) };
+    if m.input {
+        return matches!(key, Key::Named(Named::Escape)).then_some(Action::ToggleCustomAspect.into());
+    }
     if m.menu && plain {
         let action = match key {
             Key::Named(Named::ArrowDown) => Some(Action::MenuNext),
@@ -143,6 +150,8 @@ pub fn key_message(key: &Key, modified: &Key, mods: keyboard::Modifiers, m: Mode
         Key::Named(Named::F1) => Action::ToggleHelp.into(),
         Key::Character(c) if mods.control() && c.eq_ignore_ascii_case("o") => Message::OpenDialog,
         Key::Character(c) if plain && c.eq_ignore_ascii_case("c") => Action::ToggleCrop.into(),
+        Key::Character(c) if plain && m.crop && c.eq_ignore_ascii_case("a") => Action::NextAspect.into(),
+        Key::Character(c) if plain && m.crop && c.eq_ignore_ascii_case("x") => Action::SwapAspect.into(),
         Key::Character(c) if plain && c.eq_ignore_ascii_case("f") => Action::ToggleFullscreen.into(),
         Key::Character(c) if plain && c.eq_ignore_ascii_case("n") => Action::ToggleNames.into(),
         Key::Character(c) if plain && c.eq_ignore_ascii_case("z") => Action::NextLayout.into(),

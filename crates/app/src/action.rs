@@ -3,10 +3,12 @@
 //!
 //! JSON form (internally tagged): `{"action": "next"}`, `{"action": "goto", "index": 3}`,
 //! `{"action": "set_crop", "x": 40, "y": 30, "w": 200, "h": 150}`,
-//! `{"action": "open", "path": "fixtures"}`, `{"action": "show_photo", "index": 2}`.
+//! `{"action": "open", "path": "fixtures"}`, `{"action": "show_photo", "index": 2}`,
+//! `{"action": "set_aspect", "aspect": "16:9"}`.
 
 use crate::grid::Layout;
 use photo_cruiser_core::Rect;
+use photo_cruiser_core::crop::Aspect;
 use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
 
@@ -43,6 +45,18 @@ pub enum Action {
     ClearCrop,
     /// Leave crop mode (`Esc`).
     ExitCrop,
+    /// The shape the crop keeps: `"original"` (the photo's, the default), `"free"`, `"W:H"`
+    /// or a number (footer buttons). A selection is reshaped to it.
+    SetAspect {
+        aspect: Aspect,
+    },
+    /// The next preset aspect (`A`).
+    NextAspect,
+    /// Turn the crop aspect portrait ↔ landscape (`X`, footer).
+    SwapAspect,
+    /// Show/hide the field for a custom aspect ratio (footer "Custom…"). Any other action
+    /// closes it.
+    ToggleCustomAspect,
     /// Full screen on/off (`F11`, `F`): hides the footer (status line and menu).
     ToggleFullscreen,
     /// Leave full screen (`Esc` outside crop mode).
@@ -97,7 +111,9 @@ mod tests {
                 {"action":"first"},{"action":"last"},{"action":"up"},{"action":"down"},
                 {"action":"show_photo"},{"action":"show_photo","index":3},{"action":"show_grid"},{"action":"toggle_names"},
                 {"action":"next_layout"},{"action":"set_layout","layout":"justified"},{"action":"toggle_about"},
-                {"action":"menu_focus","index":2},{"action":"menu_next"},{"action":"menu_prev"},{"action":"menu_activate"}]"#,
+                {"action":"menu_focus","index":2},{"action":"menu_next"},{"action":"menu_prev"},{"action":"menu_activate"},
+                {"action":"set_aspect","aspect":"16:9"},{"action":"set_aspect","aspect":"free"},{"action":"next_aspect"},
+                {"action":"swap_aspect"},{"action":"toggle_custom_aspect"}]"#,
         )
         .unwrap();
         assert_eq!(steps[1], Action::Goto { index: 2 });
@@ -113,9 +129,13 @@ mod tests {
         assert_eq!(steps[24], Action::ToggleAbout);
         assert_eq!(steps[25], Action::MenuFocus { index: 2 });
         assert_eq!(steps[28], Action::MenuActivate);
-        assert_eq!(steps.len(), 29);
+        assert_eq!(steps[29], Action::SetAspect { aspect: Aspect::Ratio { w: 16.0, h: 9.0 } });
+        assert_eq!(steps[30], Action::SetAspect { aspect: Aspect::Free });
+        assert_eq!(steps[33], Action::ToggleCustomAspect);
+        assert_eq!(steps.len(), 34);
         let json = serde_json::to_string(&Action::SetCrop(Rect::new(1.0, 2.0, 3.0, 4.0))).unwrap();
         assert_eq!(json, r#"{"action":"set_crop","x":1.0,"y":2.0,"w":3.0,"h":4.0}"#);
         assert!(parse_script(r#"[{"action":"jump"}]"#).is_err());
+        assert!(parse_script(r#"[{"action":"set_aspect","aspect":"wide"}]"#).is_err());
     }
 }

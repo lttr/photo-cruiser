@@ -13,6 +13,11 @@ impl Point {
     pub const fn new(x: f32, y: f32) -> Self {
         Point { x, y }
     }
+
+    /// x and y swapped.
+    pub const fn transpose(self) -> Self {
+        Point::new(self.y, self.x)
+    }
 }
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Serialize, Deserialize)]
@@ -24,6 +29,11 @@ pub struct Size {
 impl Size {
     pub const fn new(width: f32, height: f32) -> Self {
         Size { width, height }
+    }
+
+    /// Width and height swapped.
+    pub const fn transpose(self) -> Self {
+        Size::new(self.height, self.width)
     }
 }
 

@@ -24,7 +24,7 @@ use iced::keyboard::{Key, key::Named};
 use iced::mouse::Button;
 use iced::{Point, Program, Rectangle, Size};
 use iced_test::emulator::{self, Emulator};
-use iced_test::instruction::{Interaction, Mouse, Target};
+use iced_test::instruction::{self, Interaction, Keyboard, Mouse, Target};
 use iced_test::selector::{self, Candidate};
 use iced_test::{Instruction, Simulator};
 use photo_cruiser_core::geom::{PixelRect, fit_rect};
@@ -96,6 +96,35 @@ fn update_browse_and_goto_bounds() {
     let dump = s.dump(None, None);
     assert_eq!(dump.errors.len(), 2);
     assert_eq!(s.apply(&Action::Quit), Effect::Quit);
+}
+
+#[test]
+fn update_crop_aspect() {
+    use photo_cruiser_core::crop::Aspect;
+    let mut s = opened(&fixtures()); // img1.png, 320×240
+    assert_eq!(
+        (s.crop.aspect, s.crop_ratio()),
+        (Aspect::Original, Some(4.0 / 3.0)),
+        "the photo's by default"
+    );
+    s.apply(&Action::SetCrop(Rect::new(0.0, 0.0, 200.0, 200.0)));
+    s.apply(&Action::SetAspect { aspect: Aspect::Ratio { w: 16.0, h: 9.0 } });
+    let px = s.crop_pixels().unwrap();
+    assert!((px.w as f32 / px.h as f32 - 16.0 / 9.0).abs() < 0.02, "{px}");
+    s.apply(&Action::SwapAspect);
+    assert_eq!(s.crop_ratio(), Some(9.0 / 16.0));
+    s.apply(&Action::ToggleCustomAspect);
+    assert_eq!(s.aspect_input.as_deref(), Some(""), "field opens empty for a preset");
+    s.apply(&Action::Next);
+    assert_eq!(s.aspect_input, None, "any other action closes it");
+    let v = serde_json::to_value(s.dump(None, None)).unwrap();
+    assert_eq!((v["aspect"].as_str(), v["aspect_swapped"].as_bool()), (Some("16:9"), Some(true)));
+    s.apply(&Action::NextAspect);
+    assert_eq!(s.crop.aspect, Aspect::Original, "a preset after the last one wraps");
+    // The ratio follows each photo: img3 is portrait.
+    s.apply(&Action::Goto { index: 2 });
+    settle(&mut s);
+    assert_eq!(s.crop_ratio(), Some(4.0 / 3.0), "swapped: portrait photo, landscape crop");
 }
 
 #[test]
@@ -583,21 +612,72 @@ fn crop_draw_move_resize_dim_and_esc() {
     assert_close(parse_crop(&h.status()), [0.4 * w, 0.4 * hh, 0.2 * w, 0.2 * hh]);
     h.drag(at(0.4, 0.4), at(0.5, 0.45)); // move by +0.1, +0.05
     assert_close(parse_crop(&h.status()), [0.4 * w, 0.4 * hh, 0.3 * w, 0.25 * hh]);
-    h.drag(at(0.7, 0.65), at(0.8, 0.85)); // resize the bottom-right corner
-    assert_close(parse_crop(&h.status()), [0.5 * w, 0.6 * hh, 0.3 * w, 0.25 * hh]);
+    // Resize the bottom-right corner: keeps the photo's 4:3, the larger side wins.
+    h.drag(at(0.7, 0.65), at(0.8, 0.85));
+    assert_close(parse_crop(&h.status()), [0.6 * w, 0.6 * hh, 0.3 * w, 0.25 * hh]);
 
     // 50% dim outside the selection (sRGB blending via `web-colors`), untouched inside.
     let after = h.snapshot("crop");
-    for (fx, fy) in [(0.1, 0.1), (0.9, 0.5), (0.5, 0.95)] {
+    for (fx, fy) in [(0.1, 0.1), (0.95, 0.5), (0.5, 0.95)] {
         let ratio = mean(&after, at(fx, fy)) / mean(&before, at(fx, fy));
         assert!((ratio - 0.5).abs() < 0.04, "outside at ({fx},{fy}) not dimmed to ~50%: {ratio}");
     }
     let inside = mean(&after, at(0.55, 0.7)) / mean(&before, at(0.55, 0.7));
     assert!((inside - 1.0).abs() < 0.02, "inside changed: {inside}");
 
+    // Free (a footer button): the corner follows the cursor.
+    h.run(Interaction::Mouse(Mouse::Click {
+        button: Button::Left,
+        target: Some(Target::Text("Free".into())),
+    }));
+    h.drag(at(0.9, 0.85), at(0.8, 0.95));
+    assert_close(parse_crop(&h.status()), [0.5 * w, 0.7 * hh, 0.3 * w, 0.25 * hh]);
+
     // Esc leaves crop mode.
     h.keys(Key::Named(Named::Escape), 1);
     assert_eq!(h.status(), "img1.png · 1 / 9");
+}
+
+#[test]
+fn crop_aspect_presets_custom_and_swap() {
+    let mut h = harness();
+    h.until("img1 shown", |h| h.bounds("photo").is_some());
+    assert!(h.bounds("aspects").is_none(), "aspect buttons only while cropping");
+    h.keys(Key::Character("c".into()), 1);
+    assert!(h.bounds("aspects").is_some() && h.has_text("Landscape"));
+    let fit = h.fit((320, 240));
+    let at = |fx: f32, fy: f32| Point::new(fit.x + fx * fit.w, fit.y + fy * fit.h);
+    h.drag(at(0.1, 0.1), at(0.6, 0.3));
+    assert_close(parse_crop(&h.status()), [160.0, 120.0, 32.0, 24.0]);
+
+    // `A` twice: original → free → 1:1, the selection reshaped around its centre.
+    h.keys(Key::Character("a".into()), 2);
+    let [cw, ch, ..] = parse_crop(&h.status());
+    assert!((cw - ch).abs() <= 1.0, "{}", h.status());
+    assert!(!h.has_text("Landscape"), "no orientation for a square");
+
+    // Custom 2:1, typed into the field; `X` turns it portrait.
+    let target = Some(Target::Text("Custom…".into()));
+    h.run(Interaction::Mouse(Mouse::Click { button: Button::Left, target }));
+    assert!(h.bounds("aspect-input").is_some());
+    h.run(Interaction::Keyboard(Keyboard::Typewrite("2:1".into())));
+    h.run(Interaction::Keyboard(Keyboard::Type(instruction::Key::Enter)));
+    assert!(h.bounds("aspect-panel").is_none() && h.has_text("2:1…"), "{}", h.status());
+    let [cw, ch, ..] = parse_crop(&h.status());
+    assert!((cw / ch - 2.0).abs() < 0.05, "{}", h.status());
+    h.keys(Key::Character("x".into()), 1);
+    let [cw, ch, ..] = parse_crop(&h.status());
+    assert!((ch / cw - 2.0).abs() < 0.05, "{}", h.status());
+    assert!(h.has_text("Portrait"));
+
+    // Esc closes the field without changing anything.
+    h.run(Interaction::Mouse(Mouse::Click {
+        button: Button::Left,
+        target: Some(Target::Text("2:1…".into())),
+    }));
+    h.keys(Key::Named(Named::Escape), 1);
+    assert!(h.bounds("aspect-panel").is_none());
+    assert!(h.status().contains("crop "), "still cropping: {}", h.status());
 }
 
 #[test]

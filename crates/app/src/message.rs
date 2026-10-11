@@ -32,6 +32,8 @@ pub enum Message {
     /// Mouse press/move/release over the image: source pixel (unclamped), grab tolerance
     /// in source pixels.
     Crop(MouseKind, Point, f32),
+    /// The custom aspect field was edited.
+    AspectInput(String),
     /// Script-mode internal steps.
     Script(script::Event),
 }
