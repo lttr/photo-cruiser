@@ -6,6 +6,10 @@ It's built to be driven by agents as well as people. The CLI can print JSON, and
 
 Supported formats: JPEG, PNG, GIF, WebP, BMP, and AVIF/HEIC/HEIF through the system libheif. EXIF orientation is respected.
 
+## Principle: fewest steps
+
+Processing photos should take as few steps as possible. Whatever the app can do on its own, it does, instead of asking. For example, edits are saved when you move on to the next photo: there's no "save changes?" prompt and no Save step to remember. Anything done automatically must be undoable; the original photo is always kept.
+
 ## Layout
 
 - `crates/core`: all photo logic (catalog, decoding, crop and edit stack, rendering, export). No GUI dependencies.

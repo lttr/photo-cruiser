@@ -1,5 +1,6 @@
 ---
-status: ready
+status: abandoned
+superseded_by: ../../2026-10-11_save-edits/spec.md
 blocked_by: [03]
 references:
   - "Spec: ../spec.md"

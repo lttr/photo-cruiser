@@ -2,6 +2,10 @@
 
 A fast photo browser/editor in Rust. All photo logic lives in a GUI-free library; the iced GUI and the `pcr` CLI are thin front ends over it. Spec: `.aiwork/2026-10-06_iced-app-foundation/spec.md`.
 
+## Principle: fewest steps
+
+Processing photos should take as few steps as possible. When designing a feature, prefer doing things automatically over adding a step, a confirmation or a prompt. For example, edits save when the user leaves a photo, with no Save step and no "unsaved changes" dialog. In return, everything automatic must be undoable (the original is kept in a backup).
+
 ## Layout
 
 - `crates/core` (`photo_cruiser_core`): catalog, decode (`image` + system libheif), geom, crop tool, edit stack, CPU render, export, loader. No GUI deps, no async runtime.
