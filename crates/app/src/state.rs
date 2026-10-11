@@ -15,6 +15,7 @@
 
 use crate::action::Action;
 use crate::grid;
+use crate::menu;
 use iced::widget::image::Handle;
 use photo_cruiser_core::crop::{CropTool, MouseKind};
 use photo_cruiser_core::geom::PixelRect;
@@ -163,6 +164,8 @@ pub struct State {
     pub fullscreen: bool,
     /// The menu (Open folder, Crop, Full screen) is showing.
     pub menu: bool,
+    /// The focused menu item (keyboard or mouse), an index into [`menu::ITEMS`].
+    pub menu_focus: Option<usize>,
     /// The keyboard shortcuts panel is showing.
     pub help: bool,
     /// The About panel is showing.
@@ -205,6 +208,7 @@ impl State {
             mode: Mode::Browse,
             fullscreen: false,
             menu: false,
+            menu_focus: None,
             help: false,
             about: false,
             names: false,
@@ -334,7 +338,16 @@ impl State {
     }
 
     pub fn apply(&mut self, action: &Action) -> Effect {
-        self.menu = matches!(action, Action::ToggleMenu) && !self.menu;
+        let was_open = self.menu;
+        self.menu = match action {
+            Action::ToggleMenu => !self.menu,
+            Action::MenuFocus { .. } => true,
+            Action::MenuNext | Action::MenuPrev | Action::MenuActivate => self.menu,
+            _ => false,
+        };
+        if !self.menu || !was_open {
+            self.menu_focus = None;
+        }
         self.help = matches!(action, Action::ToggleHelp) && !self.help;
         self.about = matches!(action, Action::ToggleAbout) && !self.about;
         match action {
@@ -427,7 +440,24 @@ impl State {
                 // Rows and columns change: keep the current photo in view.
                 self.reveal();
             }
-            Action::ToggleMenu | Action::CloseMenu | Action::ToggleHelp | Action::ToggleAbout => {}
+            Action::MenuFocus { index } => self.menu_focus = Some((*index).min(menu::ITEMS.len() - 1)),
+            Action::MenuNext | Action::MenuPrev if self.menu => {
+                let n = menu::ITEMS.len();
+                self.menu_focus = Some(match (self.menu_focus, *action == Action::MenuNext) {
+                    (None, true) => 0,
+                    (None, false) => n - 1,
+                    (Some(i), true) => (i + 1) % n,
+                    (Some(i), false) => (i + n - 1) % n,
+                });
+            }
+            // `MenuActivate` is picked up by the app, which knows the items' messages.
+            Action::ToggleMenu
+            | Action::CloseMenu
+            | Action::MenuNext
+            | Action::MenuPrev
+            | Action::MenuActivate
+            | Action::ToggleHelp
+            | Action::ToggleAbout => {}
             Action::Quit => return Effect::Quit,
         }
         Effect::None
@@ -615,6 +645,7 @@ impl State {
             mode: self.mode,
             fullscreen: self.fullscreen,
             menu: self.menu,
+            menu_focus: self.menu_focus,
             help: self.help,
             about: self.about,
             names: self.names,
@@ -651,6 +682,7 @@ pub struct Dump {
     pub mode: Mode,
     pub fullscreen: bool,
     pub menu: bool,
+    pub menu_focus: Option<usize>,
     pub help: bool,
     pub about: bool,
     pub names: bool,

@@ -8,7 +8,7 @@ use crate::settings::Settings;
 use crate::state::{
     DEFAULT_MAX_SIDE, DEFAULT_TRANSITION, Effect, Loaded, State, decode_job, size_job, thumb_job,
 };
-use crate::{theme, view};
+use crate::{menu, theme, view};
 use iced::widget::operation::AbsoluteOffset;
 use iced::{Subscription, Task, window};
 use std::path::PathBuf;
@@ -214,6 +214,13 @@ impl App {
 
     /// Apply an action and carry out its [`Effect`] (decodes are scheduled by `update`).
     pub fn apply(&mut self, action: &Action) -> Task<Message> {
+        if *action == Action::MenuActivate {
+            let s = &self.state;
+            return match s.menu_focus.filter(|_| s.menu) {
+                Some(i) => self.update(menu::ITEMS[i].message(s)),
+                None => Task::none(),
+            };
+        }
         match self.state.apply(action) {
             Effect::Quit => iced::exit(),
             Effect::Fullscreen(on) => set_fullscreen(on),

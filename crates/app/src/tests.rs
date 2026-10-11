@@ -704,6 +704,41 @@ fn shortcuts_panel() {
 }
 
 #[test]
+fn menu_keyboard() {
+    let mut h = harness();
+    h.until("img1 shown", |h| h.bounds("photo").is_some());
+    h.keys(Key::Named(Named::F10), 1);
+    let first = h.bounds("menu-focus").expect("F10 focuses the first item");
+    h.keys(Key::Named(Named::ArrowDown), 1);
+    let second = h.bounds("menu-focus").unwrap();
+    assert!(second.y > first.y, "↓ moves down");
+    h.keys(Key::Named(Named::ArrowUp), 2);
+    let last = h.bounds("menu-focus").unwrap();
+    assert!(last.y > second.y, "↑ from the first item wraps to the last");
+    h.keys(Key::Named(Named::ArrowDown), 1);
+    assert_eq!(h.bounds("menu-focus").unwrap().y, first.y, "↓ from the last wraps to the first");
+    h.keys(Key::Named(Named::End), 1);
+    assert_eq!(h.bounds("menu-focus").unwrap().y, last.y, "End");
+    h.keys(Key::Named(Named::Home), 1);
+    assert_eq!(h.bounds("menu-focus").unwrap().y, first.y, "Home");
+    assert_eq!(h.status(), "img1.png · 1 / 9", "the photo doesn't change");
+
+    // Open folder, All photos, Crop: Enter picks it and closes the menu.
+    h.keys(Key::Named(Named::ArrowDown), 2);
+    h.keys(Key::Named(Named::Enter), 1);
+    assert!(h.bounds("menu").is_none() && h.status().contains("crop: drag"), "{}", h.status());
+
+    // Opened with the mouse: nothing focused until ↓ / ↑, or the mouse is over an item.
+    h.click_menu_button();
+    assert!(h.bounds("menu-focus").is_none());
+    h.keys(Key::Named(Named::Enter), 1);
+    assert!(h.bounds("menu").is_some(), "Enter with nothing focused does nothing");
+    h.keys(Key::Named(Named::ArrowUp), 1);
+    h.keys(Key::Named(Named::Space), 1);
+    assert!(h.bounds("about").is_some(), "↑ focuses the last item (About), Space picks it");
+}
+
+#[test]
 fn about_panel() {
     let mut h = harness();
     h.until("img1 shown", |h| h.bounds("photo").is_some());

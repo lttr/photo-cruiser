@@ -17,6 +17,7 @@ mod action;
 mod app;
 mod crop_overlay;
 mod grid;
+mod menu;
 mod message;
 mod script;
 mod settings;

@@ -4,12 +4,14 @@
 //! Widget ids used by tests: `photo` (the current photo, sharp), `preview` (its embedded
 //! preview, or still the previous photo while it decodes), `message` (error / empty),
 //! `grid` (the thumbnails' scrollable), `selected` (the current photo's grid cell),
-//! `body` (the image area), `menu-button`, `menu`, `help` (shortcuts panel), `about`.
+//! `body` (the image area), `menu-button`, `menu`, `menu-focus` (its focused item),
+//! `help` (shortcuts panel), `about`.
 
 use crate::action::Action;
 use crate::app::App;
 use crate::crop_overlay::{Modes, Overlay, SHORTCUTS};
 use crate::grid::LABEL;
+use crate::menu;
 use crate::message::Message;
 use crate::state::{Display, Mode, State, View, tilde};
 use crate::theme;
@@ -132,36 +134,23 @@ pub fn view(app: &App) -> Element<'_, Message> {
         return main.into();
     }
 
-    let item = |label, keys, msg| {
-        let content =
-            row![text(label).width(Fill), text(keys).size(12).style(theme::dim)].spacing(24).align_y(Center);
-        button(content).padding([6, 12]).width(Fill).style(theme::flat(false)).on_press(msg)
+    let item = |i: usize, item: menu::Item| -> Element<'_, Message> {
+        let content = row![text(item.label(s)).width(Fill), text(item.keys(s)).size(12).style(theme::dim)]
+            .spacing(24)
+            .align_y(Center);
+        let focused = s.menu_focus == Some(i);
+        let button = button(content)
+            .padding([6, 12])
+            .width(Fill)
+            .style(theme::flat(focused))
+            .on_press(item.message(s));
+        let item = container(mouse_area(button).on_enter(Action::MenuFocus { index: i }.into()));
+        if focused { item.id("menu-focus").into() } else { item.into() }
     };
-    let crop = if s.mode == Mode::Crop { "Stop cropping" } else { "Crop" };
-    let switch = match s.view {
-        View::Grid => item("Open photo", "Enter", Action::ShowPhoto { index: None }.into()),
-        View::Photo => item("All photos", "Esc", Action::ShowGrid.into()),
-    };
-    let menu = container(
-        column![
-            item("Open folder…", "Ctrl+O", Message::OpenDialog),
-            switch,
-            item(crop, "C", Action::ToggleCrop.into()),
-            item("Full screen", "F", Action::ToggleFullscreen.into()),
-            item(
-                if s.names { "Hide file names" } else { "Show file names" },
-                "N",
-                Action::ToggleNames.into()
-            ),
-            item(s.layout.next().label(), "Z", Action::NextLayout.into()),
-            item("Keyboard shortcuts", "?", Action::ToggleHelp.into()),
-            item("About Photo Cruiser", "", Action::ToggleAbout.into()),
-        ]
-        .width(220),
-    )
-    .padding(4)
-    .style(theme::menu)
-    .id("menu");
+    let menu = container(column(menu::ITEMS.into_iter().enumerate().map(|(i, it)| item(i, it))).width(220))
+        .padding(4)
+        .style(theme::menu)
+        .id("menu");
     // A click anywhere outside the menu closes it (and goes no further).
     let layer = container(opaque(menu)).align_right(Fill).align_bottom(Fill).padding([42, 6]);
     stack![main, mouse_area(layer).on_press(Action::CloseMenu.into())].into()

@@ -51,6 +51,17 @@ pub enum Action {
     ToggleMenu,
     /// Hide the menu (`Esc`, click outside it).
     CloseMenu,
+    /// Focus this menu item (`Home`/`End`, mouse over it), opening the menu if needed
+    /// (`F10`, `Menu` key: the first item).
+    MenuFocus {
+        index: usize,
+    },
+    /// Focus the next / previous menu item, wrapping around (`↓`/`↑`, `j`/`k`, `Tab`/`Shift+Tab`).
+    /// Ignored while the menu is closed.
+    MenuNext,
+    MenuPrev,
+    /// Pick the focused menu item (`Enter`, `Space`).
+    MenuActivate,
     /// Show/hide file names in the status line and the grid (`N`, menu). Off at first start, then remembered.
     ToggleNames,
     /// Grid: the next layout, small → big thumbnails → justified (`Z`, menu). Small at first start, then remembered.
@@ -85,7 +96,8 @@ mod tests {
                 {"action":"toggle_menu"},{"action":"close_menu"},{"action":"toggle_help"},
                 {"action":"first"},{"action":"last"},{"action":"up"},{"action":"down"},
                 {"action":"show_photo"},{"action":"show_photo","index":3},{"action":"show_grid"},{"action":"toggle_names"},
-                {"action":"next_layout"},{"action":"set_layout","layout":"justified"},{"action":"toggle_about"}]"#,
+                {"action":"next_layout"},{"action":"set_layout","layout":"justified"},{"action":"toggle_about"},
+                {"action":"menu_focus","index":2},{"action":"menu_next"},{"action":"menu_prev"},{"action":"menu_activate"}]"#,
         )
         .unwrap();
         assert_eq!(steps[1], Action::Goto { index: 2 });
@@ -99,7 +111,9 @@ mod tests {
         assert_eq!(steps[22], Action::NextLayout);
         assert_eq!(steps[23], Action::SetLayout { layout: Layout::Justified });
         assert_eq!(steps[24], Action::ToggleAbout);
-        assert_eq!(steps.len(), 25);
+        assert_eq!(steps[25], Action::MenuFocus { index: 2 });
+        assert_eq!(steps[28], Action::MenuActivate);
+        assert_eq!(steps.len(), 29);
         let json = serde_json::to_string(&Action::SetCrop(Rect::new(1.0, 2.0, 3.0, 4.0))).unwrap();
         assert_eq!(json, r#"{"action":"set_crop","x":1.0,"y":2.0,"w":3.0,"h":4.0}"#);
         assert!(parse_script(r#"[{"action":"jump"}]"#).is_err());

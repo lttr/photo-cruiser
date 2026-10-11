@@ -5,6 +5,7 @@
 //! area's size, which the grid layout needs ([`Message::Body`]).
 
 use crate::action::Action;
+use crate::menu;
 use crate::message::Message;
 use iced::keyboard::{self, Key, key::Named};
 use iced::mouse::{self, Button, Cursor, Interaction};
@@ -78,7 +79,7 @@ pub const SHORTCUTS: &[(&str, &str)] = &[
     ("F  F11", "Full screen on / off"),
     ("N", "File names on / off"),
     ("Z", "Grid: small / big thumbnails / justified"),
-    ("F10", "Menu"),
+    ("F10", "Menu: ↑ ↓ Home End to move, Enter to pick"),
     ("?  F1", "Keyboard shortcuts"),
     ("Esc", "Close menu, leave crop, leave full screen, back to the grid"),
 ];
@@ -89,6 +90,23 @@ pub const SHORTCUTS: &[(&str, &str)] = &[
 pub fn key_message(key: &Key, modified: &Key, mods: keyboard::Modifiers, m: Modes) -> Option<Message> {
     let plain = !mods.control() && !mods.alt() && !mods.logo();
     let (down, up) = if m.grid { (Action::Down, Action::Up) } else { (Action::Next, Action::Prev) };
+    if m.menu && plain {
+        let action = match key {
+            Key::Named(Named::ArrowDown) => Some(Action::MenuNext),
+            Key::Named(Named::ArrowUp) => Some(Action::MenuPrev),
+            Key::Named(Named::Tab) if mods.shift() => Some(Action::MenuPrev),
+            Key::Named(Named::Tab) => Some(Action::MenuNext),
+            Key::Named(Named::Home) => Some(Action::MenuFocus { index: 0 }),
+            Key::Named(Named::End) => Some(Action::MenuFocus { index: menu::ITEMS.len() - 1 }),
+            Key::Named(Named::Enter | Named::Space) => Some(Action::MenuActivate),
+            Key::Character(c) if c == "j" => Some(Action::MenuNext),
+            Key::Character(c) if c == "k" => Some(Action::MenuPrev),
+            _ => None,
+        };
+        if let Some(action) = action {
+            return Some(action.into());
+        }
+    }
     // Symbols and vim keys (g vs G) by what was typed.
     if let (true, Key::Character(c)) = (plain, modified) {
         let action = match c.as_str() {
@@ -120,7 +138,8 @@ pub fn key_message(key: &Key, modified: &Key, mods: keyboard::Modifiers, m: Mode
         Key::Named(Named::Escape) if m.fullscreen || m.grid => Action::ExitFullscreen.into(),
         Key::Named(Named::Escape) => Action::ShowGrid.into(),
         Key::Named(Named::F11) => Action::ToggleFullscreen.into(),
-        Key::Named(Named::F10) => Action::ToggleMenu.into(),
+        Key::Named(Named::F10 | Named::ContextMenu) if !m.menu => Action::MenuFocus { index: 0 }.into(),
+        Key::Named(Named::F10 | Named::ContextMenu) => Action::ToggleMenu.into(),
         Key::Named(Named::F1) => Action::ToggleHelp.into(),
         Key::Character(c) if mods.control() && c.eq_ignore_ascii_case("o") => Message::OpenDialog,
         Key::Character(c) if plain && c.eq_ignore_ascii_case("c") => Action::ToggleCrop.into(),
