@@ -71,8 +71,9 @@ verify: check
     jq -e '.index == 1 and .view == "grid" and .errors == [] and .loading == false' \
         "{{artifacts}}/verify-grid.json" >/dev/null || { cat "{{artifacts}}/verify-grid.json"; exit 1; }
     # Save on leaving (no apply, no save step), on a scratch copy: never into fixtures/.
-    photos=$(mktemp -d "{{artifacts}}/verify-save-XXXXXX")
-    cp -r "{{fixtures}}/." "$photos"
+    photos="{{artifacts}}/verify-save-photos"
+    if [ -e "$photos" ]; then trash-put "$photos"; fi
+    mkdir -p "$photos" && cp -r "{{fixtures}}/." "$photos"
     "{{root}}/scripts/headless.sh" "{{root}}/target/debug/photo-cruiser" "$photos" --script "{{root}}/scripts/save.json" \
         --shot "{{artifacts}}/verify-save.png" --dump-state "{{artifacts}}/verify-save.json"
     jq -e '.index == 0 and .dirty == false and .saving == [] and .edits == [{"op":"crop","x":40,"y":30,"w":200,"h":150}] and (.backup | endswith(".photo-cruiser/originals/img1.png")) and .errors == []' \

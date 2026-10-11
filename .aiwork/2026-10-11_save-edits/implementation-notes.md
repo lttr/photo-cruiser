@@ -28,7 +28,5 @@
 - Toggling crop mode on an already edited photo decodes the original again (there's no
   cache of the uncropped decode). On big HEICs that's a short wait before the whole
   photo shows.
-- `just verify` leaves its photo copies in `/tmp/photo-cruiser/verify-save-*`. The
-  damage-control hook blocks `rm -rf` in the recipe.
 - Dirty photos found at startup come only from the folder's own sidecars, not from the
   read-only fallback (a read-only folder can't be saved anyway).
