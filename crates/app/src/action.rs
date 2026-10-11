@@ -37,14 +37,27 @@ pub enum Action {
     },
     /// Back to the grid of all photos (`Esc` in the photo view). Leaves crop mode.
     ShowGrid,
-    /// Enter/leave crop mode (`C`). Clears the selection. From the grid: crops the current photo.
+    /// Enter/leave crop mode (`C`). Entering shows the whole original with the applied crop
+    /// selected; leaving applies the selection. From the grid: crops the current photo.
     ToggleCrop,
-    /// Set the selection in source pixels (clamped to the image); turns crop mode on.
+    /// Set the selection (a draft) in source pixels (clamped to the image); turns crop mode on.
     SetCrop(Rect),
     /// Drop the selection, stay in crop mode.
     ClearCrop,
-    /// Leave crop mode (`Esc`).
+    /// Leave crop mode, dropping the draft (`Esc`). The applied crop stays.
     ExitCrop,
+    /// Apply the selection as the photo's crop and leave crop mode (`Enter`, footer
+    /// "Apply"). Leaving the photo with a selection applies it too.
+    ApplyCrop,
+    /// Step through the current photo's edits (`Ctrl+Z`; `Ctrl+Shift+Z`, `Ctrl+Y`).
+    Undo,
+    Redo,
+    /// Remove all edits of the current photo (menu; undoable). Saved when you leave it.
+    ResetEdits,
+    /// Back to the original file now: `reset_edits`, then `save` (menu).
+    Revert,
+    /// Save the current photo now (`Ctrl+S`, menu). Leaving a photo saves it anyway.
+    Save,
     /// The shape the crop keeps: `"original"` (the photo's, the default), `"free"`, `"W:H"`
     /// or a number (footer buttons). A selection is reshaped to it.
     SetAspect {
@@ -113,7 +126,8 @@ mod tests {
                 {"action":"next_layout"},{"action":"set_layout","layout":"justified"},{"action":"toggle_about"},
                 {"action":"menu_focus","index":2},{"action":"menu_next"},{"action":"menu_prev"},{"action":"menu_activate"},
                 {"action":"set_aspect","aspect":"16:9"},{"action":"set_aspect","aspect":"free"},{"action":"next_aspect"},
-                {"action":"swap_aspect"},{"action":"toggle_custom_aspect"}]"#,
+                {"action":"swap_aspect"},{"action":"toggle_custom_aspect"},{"action":"apply_crop"},
+                {"action":"undo"},{"action":"redo"},{"action":"reset_edits"},{"action":"revert"},{"action":"save"}]"#,
         )
         .unwrap();
         assert_eq!(steps[1], Action::Goto { index: 2 });
@@ -132,7 +146,9 @@ mod tests {
         assert_eq!(steps[29], Action::SetAspect { aspect: Aspect::Ratio { w: 16.0, h: 9.0 } });
         assert_eq!(steps[30], Action::SetAspect { aspect: Aspect::Free });
         assert_eq!(steps[33], Action::ToggleCustomAspect);
-        assert_eq!(steps.len(), 34);
+        assert_eq!(steps[34], Action::ApplyCrop);
+        assert_eq!(steps[38], Action::Revert);
+        assert_eq!(steps.len(), 40);
         let json = serde_json::to_string(&Action::SetCrop(Rect::new(1.0, 2.0, 3.0, 4.0))).unwrap();
         assert_eq!(json, r#"{"action":"set_crop","x":1.0,"y":2.0,"w":3.0,"h":4.0}"#);
         assert!(parse_script(r#"[{"action":"jump"}]"#).is_err());

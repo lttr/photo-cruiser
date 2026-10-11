@@ -40,6 +40,8 @@ pub struct Loader<T> {
     generation: u64,
     cache: HashMap<(usize, Kind), T>,
     in_flight: Vec<Job>,
+    /// Jobs in flight whose result is no longer wanted (see [`Loader::invalidate`]).
+    stale: Vec<Job>,
     /// +1 or −1: the last move between distinct indices.
     forward: bool,
     last: Option<usize>,
@@ -47,7 +49,14 @@ pub struct Loader<T> {
 
 impl<T> Default for Loader<T> {
     fn default() -> Self {
-        Loader { generation: 0, cache: HashMap::new(), in_flight: Vec::new(), forward: true, last: None }
+        Loader {
+            generation: 0,
+            cache: HashMap::new(),
+            in_flight: Vec::new(),
+            stale: Vec::new(),
+            forward: true,
+            last: None,
+        }
     }
 }
 
@@ -57,6 +66,7 @@ impl<T> Loader<T> {
         self.generation += 1;
         self.cache.clear();
         self.in_flight.clear();
+        self.stale.clear();
         self.forward = true;
         self.last = None;
     }
@@ -99,12 +109,23 @@ impl<T> Loader<T> {
         Some(job)
     }
 
+    /// Forget the results for `index` (the photo or its edits changed): they are loaded
+    /// again. A decode of it in flight is dropped when it finishes.
+    pub fn invalidate(&mut self, index: usize) {
+        self.cache.retain(|k, _| k.0 != index);
+        self.stale.extend(self.in_flight.iter().filter(|j| j.index == index));
+    }
+
     /// Store a finished job's result. Returns false (and drops it) if the job is stale.
     pub fn finish(&mut self, job: Job, result: T) -> bool {
         if job.generation != self.generation {
             return false;
         }
         self.in_flight.retain(|j| *j != job);
+        if let Some(i) = self.stale.iter().position(|j| *j == job) {
+            self.stale.remove(i);
+            return false;
+        }
         self.cache.insert((job.index, job.kind), result);
         true
     }
@@ -157,11 +178,13 @@ pub struct Thumbs<T> {
     generation: u64,
     done: HashMap<usize, (u32, T)>,
     in_flight: Vec<usize>,
+    /// In flight, but the photo changed since: dropped when finished.
+    stale: Vec<usize>,
 }
 
 impl<T> Default for Thumbs<T> {
     fn default() -> Self {
-        Thumbs { generation: 0, done: HashMap::new(), in_flight: Vec::new() }
+        Thumbs { generation: 0, done: HashMap::new(), in_flight: Vec::new(), stale: Vec::new() }
     }
 }
 
@@ -171,6 +194,15 @@ impl<T> Thumbs<T> {
         self.generation += 1;
         self.done.clear();
         self.in_flight.clear();
+        self.stale.clear();
+    }
+
+    /// Forget the thumbnail of `index` (the photo changed): it is decoded again.
+    pub fn invalidate(&mut self, index: usize) {
+        self.done.remove(&index);
+        if self.in_flight.contains(&index) {
+            self.stale.push(index);
+        }
     }
 
     /// The thumbnail of `index`, whatever its side.
@@ -200,6 +232,10 @@ impl<T> Thumbs<T> {
             return false;
         }
         self.in_flight.retain(|i| *i != job.index);
+        if let Some(i) = self.stale.iter().position(|i| *i == job.index) {
+            self.stale.remove(i);
+            return false;
+        }
         self.done.insert(job.index, (job.side, result));
         true
     }
@@ -250,6 +286,13 @@ impl Sizes {
 
     pub fn get(&self, index: usize) -> Option<(u32, u32)> {
         self.sizes.get(index).copied().flatten()
+    }
+
+    /// Forget a size (the photo changed); a thumbnail or the next probe fills it in.
+    pub fn unset(&mut self, index: usize) {
+        if let Some(s) = self.sizes.get_mut(index) {
+            *s = None;
+        }
     }
 
     pub fn set(&mut self, index: usize, size: (u32, u32)) {
@@ -386,6 +429,31 @@ mod tests {
         // Smaller again: the big one will do.
         assert!(t.next_job(0..1, 1, 256).is_none());
         assert_eq!(t.get(0), Some(&512));
+    }
+
+    #[test]
+    fn invalidated_results_dropped_and_reloaded() {
+        let mut l = Loader::<u8>::default();
+        while let Some(j) = l.next_job(0, 1) {
+            l.finish(j, 1);
+        }
+        assert_eq!(l.get(0), Some(&1));
+        l.invalidate(0);
+        assert_eq!(l.get(0), None);
+        let p = l.next_job(0, 1).unwrap();
+        let f = l.next_job(0, 1).unwrap();
+        l.invalidate(0); // again, while decoding
+        assert!(!l.finish(f, 2) && !l.finish(p, 2), "stale results dropped");
+        while let Some(j) = l.next_job(0, 1) {
+            l.finish(j, 3);
+        }
+        assert_eq!(l.get(0), Some(&3));
+        let mut t = Thumbs::<u8>::default();
+        let j = t.next_job(0..1, 1, 64).unwrap();
+        t.invalidate(0);
+        assert!(!t.finish(j, 1));
+        let j = t.next_job(0..1, 1, 64).unwrap();
+        assert!(t.finish(j, 2) && t.get(0) == Some(&2));
     }
 
     #[test]

@@ -6,7 +6,8 @@
 //! `grid` (the thumbnails' scrollable), `selected` (the current photo's grid cell),
 //! `body` (the image area), `menu-button`, `menu`, `menu-focus` (its focused item),
 //! `help` (shortcuts panel), `about`, `aspects` (the crop's aspect buttons in the footer),
-//! `aspect-panel` and `aspect-input` (the custom aspect field).
+//! `aspect-panel` and `aspect-input` (the custom aspect field), `apply` (the crop's
+//! Apply button), `failed` (the dot on a grid cell whose save failed).
 
 use crate::action::Action;
 use crate::app::App;
@@ -93,6 +94,11 @@ pub fn view(app: &App) -> Element<'_, Message> {
     let mut footer = row![text(s.status()).size(13).width(Fill)].align_y(Center);
     if s.mode == Mode::Crop && !grid {
         footer = footer.push(aspects(s));
+        let apply = button(text("Apply").size(13))
+            .padding([3, 10])
+            .style(theme::flat(true))
+            .on_press_maybe(s.crop.selection.map(|_| Action::ApplyCrop.into()));
+        footer = footer.push(container(apply).padding([0, 8]).id("apply"));
     }
     let footer = footer.push(
         container(
@@ -222,6 +228,14 @@ fn grid<'a>(s: &'a State) -> Element<'a, Message> {
                 layers = layers.push(container(space()).width(Fill).height(Fill).style(theme::frame));
             }
             layers.into()
+        };
+        let failed = s.save_failed.contains_key(&folder.entries[i].path);
+        let content: Element<_> = match failed {
+            true => {
+                let dot = container(space()).width(12).height(12).style(theme::failed).id("failed");
+                stack![content, container(dot).padding(6).width(Fill).align_right(Fill)].into()
+            }
+            false => content,
         };
         let cell = button(content)
             .padding(m.cell)

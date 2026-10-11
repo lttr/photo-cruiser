@@ -6,7 +6,11 @@
 
 Natural order of the photo entries (what `pcr list fixtures` must print):
   img1.png, img2.jpg, img3-exif6.jpg, img4.AVIF, img5.HEIC, img9.webp, img10.gif, img11.bmp, img12-broken.jpg
-Ignored: .hidden.jpg, notes.txt, subdir/, previews/
+Ignored: .hidden.jpg, notes.txt, subdir/, previews/, save/
+
+save/: inputs for the Save tests (they copy them to a temp folder first):
+  q98.jpg (quality 98, 4:2:0, 300 dpi, sRGB ICC profile), q75.jpg (quality 75),
+  anim.gif (2 frames), lossless.webp, gray16.png (16-bit)
 
 previews/: photos with embedded thumbnails (80×60, a downscaled copy):
   thumb.HEIC (HEIF thumbnail item), thumb-exif6.jpg (EXIF IFD1 thumbnail, orientation 6),
@@ -96,4 +100,16 @@ wide = marked(gradient(320, 180), "16:9")
 wide.save(previews / "letterbox.jpg", quality=90, exif=exif_with_thumbnail(gradient(80, 60), 1))
 rounded = marked(gradient(), "4:3")
 rounded.save(previews / "rounded.jpg", quality=90, exif=exif_with_thumbnail(rounded.resize((80, 64)), 1))
+
+from PIL import ImageCms
+
+save = out / "save"
+save.mkdir(exist_ok=True)
+icc = ImageCms.ImageCmsProfile(ImageCms.createProfile("sRGB")).tobytes()
+marked(gradient(), "q98").save(save / "q98.jpg", quality=98, subsampling=2, dpi=(300, 300), icc_profile=icc)
+marked(gradient(), "q75").save(save / "q75.jpg", quality=75, subsampling=2)
+frames = [marked(checker(64, 48, 8), "1"), marked(gradient(64, 48), "2")]
+frames[0].save(save / "anim.gif", save_all=True, append_images=frames[1:], duration=100, loop=0)
+marked(gradient(160, 120), "lossless").save(save / "lossless.webp", lossless=True)
+Image.new("I;16", (32, 24), 40000).save(save / "gray16.png")
 print(f"fixtures written to {out}")

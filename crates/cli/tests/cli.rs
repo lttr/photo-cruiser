@@ -1,7 +1,7 @@
 //! `pcr` end to end against `fixtures/`.
 
 use assert_cmd::Command;
-use serde_json::Value;
+use serde_json::{Value, json};
 use std::path::PathBuf;
 
 fn fixtures() -> PathBuf {
@@ -231,4 +231,99 @@ fn usage_errors_exit_1() {
         .assert()
         .code(1);
     pcr().arg("--help").assert().success();
+}
+
+/// A temp folder with a copy of each fixture in `names`, plus a private data dir (for the
+/// read-only sidecar fallback and the trash).
+fn temp_copies(names: &[&str]) -> (tempfile::TempDir, Vec<String>) {
+    let dir = tempfile::tempdir().unwrap();
+    std::fs::create_dir(dir.path().join("photos")).unwrap();
+    let paths = names
+        .iter()
+        .map(|n| {
+            let to = dir.path().join("photos").join(n);
+            std::fs::copy(fixtures().join(n), &to).unwrap();
+            to.to_string_lossy().into_owned()
+        })
+        .collect();
+    (dir, paths)
+}
+
+fn pcr_in(dir: &tempfile::TempDir) -> Command {
+    let mut c = pcr();
+    c.env("XDG_DATA_HOME", dir.path().join("data"));
+    c
+}
+
+fn json_in(dir: &tempfile::TempDir, args: &[&str], code: i32) -> Value {
+    let out = pcr_in(dir).args(args).assert().code(code).get_output().stdout.clone();
+    serde_json::from_slice(&out).unwrap_or_else(|e| panic!("{e}: {}", String::from_utf8_lossy(&out)))
+}
+
+#[test]
+fn edits_save_revert() {
+    let (dir, p) = temp_copies(&["img2.jpg"]);
+    let photo = &p[0];
+    let input = std::fs::read(photo).unwrap();
+    let v = json_in(&dir, &["edits", photo, "--json"], 0);
+    assert_eq!(
+        (v["ops"].as_array().unwrap().len(), &v["saved"], &v["dirty"]),
+        (0, &Value::Null, &Value::Bool(false))
+    );
+
+    let edits = dir.path().join("e.json");
+    std::fs::write(&edits, r#"{"version":1,"ops":[{"op":"crop","x":10,"y":10,"w":100,"h":80}]}"#).unwrap();
+    let v = json_in(&dir, &["save", photo, "--edits", &edits.to_string_lossy(), "--json"], 0);
+    assert_eq!(
+        (&v["action"], &v["width"], &v["height"], &v["format"]),
+        (&json!("saved"), &json!(100), &json!(80), &json!("jpeg"))
+    );
+    let v = json_in(&dir, &["edits", photo, "--json"], 0);
+    assert_eq!(v["dirty"], false);
+    assert_eq!(v["saved"][0]["w"], 100.0);
+    assert!(v["backup"].as_str().unwrap().ends_with(".photo-cruiser/originals/img2.jpg"));
+    assert_eq!(json_in(&dir, &["save", photo, "--json"], 0)["action"], "unchanged");
+
+    // Export uses the sidecar and renders from the backup: cropped once, not twice.
+    let out = dir.path().join("out.png").to_string_lossy().into_owned();
+    let v = json_in(&dir, &["export", photo, "-o", &out, "--json"], 0);
+    assert_eq!((&v["width"], &v["height"]), (&json!(100), &json!(80)));
+    let v = json_in(&dir, &["render", photo, "--no-edits", "-o", &out, "--json"], 0);
+    assert_eq!((&v["width"], &v["height"]), (&json!(320), &json!(240)), "the original");
+
+    assert_eq!(json_in(&dir, &["revert", photo, "--json"], 0)["action"], "reverted");
+    assert_eq!(std::fs::read(photo).unwrap(), input);
+    assert_eq!(json_in(&dir, &["edits", photo, "--json"], 0)["backup"], Value::Null);
+}
+
+#[test]
+fn converted_photo_reverts_to_the_original_name() {
+    let (dir, p) = temp_copies(&["img5.HEIC"]);
+    let input = std::fs::read(&p[0]).unwrap();
+    let edits = dir.path().join("e.json");
+    std::fs::write(&edits, r#"{"version":1,"ops":[{"op":"crop","x":0,"y":0,"w":64,"h":64}]}"#).unwrap();
+    let v = json_in(&dir, &["save", &p[0], "--edits", &edits.to_string_lossy(), "--json"], 0);
+    let jpg = v["path"].as_str().unwrap().to_string();
+    assert!(jpg.ends_with("photos/img5.jpg"), "{jpg}");
+    let v = json_in(&dir, &["revert", &jpg, "--json"], 0);
+    assert!(v["path"].as_str().unwrap().ends_with("photos/img5.HEIC"));
+    assert_eq!(std::fs::read(&p[0]).unwrap(), input);
+    assert!(!std::path::Path::new(&jpg).exists(), "our JPEG went to the trash");
+}
+
+#[test]
+fn read_only_folder_keeps_edits_in_the_fallback() {
+    use std::os::unix::fs::PermissionsExt;
+    let (dir, p) = temp_copies(&["img2.jpg"]);
+    let photos = dir.path().join("photos");
+    std::fs::set_permissions(&photos, std::fs::Permissions::from_mode(0o555)).unwrap();
+    let edits = dir.path().join("e.json");
+    std::fs::write(&edits, r#"{"version":1,"ops":[{"op":"crop","x":0,"y":0,"w":64,"h":64}]}"#).unwrap();
+    let v = json_in(&dir, &["save", &p[0], "--edits", &edits.to_string_lossy(), "--json"], 2);
+    let v2 = json_in(&dir, &["edits", &p[0], "--json"], 0);
+    std::fs::set_permissions(&photos, std::fs::Permissions::from_mode(0o755)).unwrap();
+    assert_eq!(v["error"]["kind"], "read_only");
+    assert_eq!((&v2["dirty"], &v2["ops"][0]["w"]), (&json!(true), &json!(64.0)));
+    let fallback: Vec<_> = std::fs::read_dir(dir.path().join("data/photo-cruiser/edits")).unwrap().collect();
+    assert_eq!(fallback.len(), 1);
 }

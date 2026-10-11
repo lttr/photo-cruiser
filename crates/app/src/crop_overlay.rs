@@ -75,9 +75,12 @@ pub const SHORTCUTS: &[(&str, &str)] = &[
     ("→  ←   l  h", "Next / previous photo"),
     ("↓  ↑   j  k", "Grid: row down / up; photo: next / previous"),
     ("Home  End   g  G", "First / last photo"),
-    ("Enter", "Grid: open the photo"),
+    ("Enter", "Grid: open the photo; crop: apply"),
     ("Ctrl+O", "Open folder"),
     ("C", "Crop on / off"),
+    ("Ctrl+Z", "Undo"),
+    ("Ctrl+Shift+Z  Ctrl+Y", "Redo"),
+    ("Ctrl+S", "Save now (leaving a photo saves it)"),
     ("A", "Crop: next aspect ratio (original, free, 1:1, 3:2, …)"),
     ("X", "Crop: portrait / landscape"),
     ("F  F11", "Full screen on / off"),
@@ -85,7 +88,7 @@ pub const SHORTCUTS: &[(&str, &str)] = &[
     ("Z", "Grid: small / big thumbnails / justified"),
     ("F10", "Menu: ↑ ↓ Home End to move, Enter to pick"),
     ("?  F1", "Keyboard shortcuts"),
-    ("Esc", "Close menu, leave crop, leave full screen, back to the grid"),
+    ("Esc", "Close menu, drop the crop selection, leave full screen, back to the grid"),
 ];
 
 /// `key` ignores Shift, `modified` doesn't (Shift+/ is `/` and `?`): symbols like `?` are
@@ -138,6 +141,7 @@ pub fn key_message(key: &Key, modified: &Key, mods: keyboard::Modifiers, m: Mode
         Key::Named(Named::Home) => Action::First.into(),
         Key::Named(Named::End) => Action::Last.into(),
         Key::Named(Named::Enter) if m.grid => Action::ShowPhoto { index: None }.into(),
+        Key::Named(Named::Enter) if m.crop => Action::ApplyCrop.into(),
         Key::Named(Named::Escape) if m.menu => Action::CloseMenu.into(),
         Key::Named(Named::Escape) if m.help => Action::ToggleHelp.into(),
         Key::Named(Named::Escape) if m.about => Action::ToggleAbout.into(),
@@ -149,6 +153,12 @@ pub fn key_message(key: &Key, modified: &Key, mods: keyboard::Modifiers, m: Mode
         Key::Named(Named::F10 | Named::ContextMenu) => Action::ToggleMenu.into(),
         Key::Named(Named::F1) => Action::ToggleHelp.into(),
         Key::Character(c) if mods.control() && c.eq_ignore_ascii_case("o") => Message::OpenDialog,
+        Key::Character(c) if mods.control() && c.eq_ignore_ascii_case("s") => Action::Save.into(),
+        Key::Character(c) if mods.control() && mods.shift() && c.eq_ignore_ascii_case("z") => {
+            Action::Redo.into()
+        }
+        Key::Character(c) if mods.control() && c.eq_ignore_ascii_case("z") => Action::Undo.into(),
+        Key::Character(c) if mods.control() && c.eq_ignore_ascii_case("y") => Action::Redo.into(),
         Key::Character(c) if plain && c.eq_ignore_ascii_case("c") => Action::ToggleCrop.into(),
         Key::Character(c) if plain && m.crop && c.eq_ignore_ascii_case("a") => Action::NextAspect.into(),
         Key::Character(c) if plain && m.crop && c.eq_ignore_ascii_case("x") => Action::SwapAspect.into(),

@@ -173,6 +173,15 @@ pub fn frame(_: &Theme) -> container::Style {
     container::Style { border, ..container::Style::default() }
 }
 
+/// The dot on a grid cell whose photo couldn't be saved.
+pub fn failed(_: &Theme) -> container::Style {
+    container::Style {
+        background: Some(Color::from_rgb8(0xE0, 0x40, 0x40).into()),
+        border: Border { color: Color::WHITE, width: 1.5, radius: 6.into() },
+        ..container::Style::default()
+    }
+}
+
 /// Text over a photo: white on a dark translucent strip.
 pub fn scrim(_: &Theme) -> container::Style {
     container::Style {

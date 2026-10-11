@@ -5,12 +5,14 @@
 //! additionally gets `{"error": {"kind": ..., "message": ...}}`.
 //!
 //! Exit codes: 0 ok, 1 usage, 2 I/O (missing files, write/encode failures, unsupported
-//! output extension, missing `photo-cruiser` binary), 3 decode (corrupt or unsupported
-//! input image, invalid edits JSON, a crop that is empty after clamping to the image).
+//! output extension, a read-only folder or a taken name on save, missing `photo-cruiser`
+//! binary), 3 decode (corrupt or unsupported input image, invalid edits JSON, a crop that
+//! is empty after clamping to the image, an animated or 16-bit image on save).
 
 use clap::{Parser, Subcommand};
 use photo_cruiser_core::export::{self, OutFormat};
 use photo_cruiser_core::render::{self, RenderOpts};
+use photo_cruiser_core::store::{self, PhotoEdits};
 use photo_cruiser_core::{EditStack, Error, Folder, Op, Probe, Rect};
 use serde::Serialize;
 use serde_json::{Value, json};
@@ -20,8 +22,9 @@ use std::time::Instant;
 
 const AFTER_HELP: &str = "\
 --json prints pretty JSON to stdout; on failure {\"error\": {\"kind\", \"message\"}}.
-Exit codes: 0 ok, 1 usage, 2 I/O (incl. encode, unsupported output format),
-3 decode (incl. unsupported input, invalid edits JSON, crop outside the image).";
+Exit codes: 0 ok, 1 usage, 2 I/O (incl. encode, unsupported output format, read-only
+folder, name taken), 3 decode (incl. unsupported input, invalid edits JSON, crop outside
+the image, animated or 16-bit image).";
 
 #[derive(Parser)]
 #[command(name = "pcr", version, about = "Photo Cruiser command line", after_help = AFTER_HELP)]
@@ -47,12 +50,16 @@ enum Cmd {
         #[arg(long)]
         json: bool,
     },
-    /// Render a photo with edits to PNG or JPEG (chosen by the output extension).
+    /// Render a photo with edits to PNG or JPEG (chosen by the output extension). Starts
+    /// from the original (the backup, if the photo was saved) with the photo's own edits.
     Render {
         file: PathBuf,
-        /// Edit stack JSON (`{"version": 1, "ops": [...]}`).
-        #[arg(long)]
+        /// Edit stack JSON (`{"version": 1, "ops": [...]}`), instead of the photo's own edits.
+        #[arg(long, conflicts_with = "no_edits")]
         edits: Option<PathBuf>,
+        /// Ignore the photo's own edits.
+        #[arg(long)]
+        no_edits: bool,
         /// Crop `x,y,w,h` in source pixels, appended after the edits. Clamped to the
         /// image; a crop fully outside it is an `empty_crop` error.
         #[arg(long, value_parser = parse_crop)]
@@ -65,16 +72,42 @@ enum Cmd {
         #[arg(long)]
         json: bool,
     },
-    /// Export a photo at full resolution with an edit stack applied.
+    /// Export a photo at full resolution with its edits applied, to a new file. Starts from
+    /// the original (the backup, if the photo was saved).
     Export {
         file: PathBuf,
+        /// Edit stack JSON, instead of the photo's own edits.
+        #[arg(long, conflicts_with = "no_edits")]
+        edits: Option<PathBuf>,
+        /// Ignore the photo's own edits.
         #[arg(long)]
-        edits: PathBuf,
+        no_edits: bool,
         #[arg(short, long)]
         output: PathBuf,
         /// JPEG quality 1-100.
         #[arg(long, default_value_t = 90, value_parser = clap::value_parser!(u8).range(1..=100))]
         quality: u8,
+        #[arg(long)]
+        json: bool,
+    },
+    /// A photo's edits: the current stack, the saved one, dirty, and the backup.
+    Edits {
+        file: PathBuf,
+        #[arg(long)]
+        json: bool,
+    },
+    /// Render the photo's edits (or `--edits`, which become its edits) into the photo file.
+    /// The original is kept in `.photo-cruiser/originals/`.
+    Save {
+        file: PathBuf,
+        #[arg(long)]
+        edits: Option<PathBuf>,
+        #[arg(long)]
+        json: bool,
+    },
+    /// Restore the original photo and drop its edits.
+    Revert {
+        file: PathBuf,
         #[arg(long)]
         json: bool,
     },
@@ -103,8 +136,18 @@ impl Fail {
 impl From<Error> for Fail {
     fn from(e: Error) -> Self {
         let code = match e {
-            Error::Io { .. } | Error::Encode { .. } | Error::UnsupportedOutput { .. } => 2,
-            Error::Unsupported { .. } | Error::Decode { .. } | Error::Edits(_) | Error::EmptyCrop(_) => 3,
+            Error::Io { .. }
+            | Error::Encode { .. }
+            | Error::UnsupportedOutput { .. }
+            | Error::ReadOnly { .. }
+            | Error::NameTaken { .. } => 2,
+            Error::Unsupported { .. }
+            | Error::Decode { .. }
+            | Error::Edits(_)
+            | Error::EmptyCrop(_)
+            | Error::Animated { .. }
+            | Error::HighBitDepth { .. }
+            | Error::StaleEdits { .. } => 3,
         };
         Fail::new(code, e.kind(), e)
     }
@@ -132,7 +175,10 @@ fn main() -> ExitCode {
         Cmd::List { json, .. }
         | Cmd::Info { json, .. }
         | Cmd::Render { json, .. }
-        | Cmd::Export { json, .. } => *json,
+        | Cmd::Export { json, .. }
+        | Cmd::Edits { json, .. }
+        | Cmd::Save { json, .. }
+        | Cmd::Revert { json, .. } => *json,
         Cmd::App { .. } => false,
     };
     match run(cli.cmd) {
@@ -151,16 +197,30 @@ fn run(cmd: Cmd) -> Result<ExitCode, Fail> {
     match cmd {
         Cmd::List { dir, probe, json } => list(&dir, probe, json)?,
         Cmd::Info { file, json } => info(&file, json)?,
-        Cmd::Render { file, edits, crop, max_side, output, json } => {
-            let mut stack = edits.as_deref().map(read_edits).transpose()?.unwrap_or_default();
+        Cmd::Render { file, edits, no_edits, crop, max_side, output, json } => {
+            let mut stack = stack_for(&file, edits.as_deref(), no_edits)?;
             if let Some(r) = crop {
                 stack.ops.push(Op::Crop(r));
             }
             write_rendered(&file, &stack, max_side, &output, 90, json)?
         }
-        Cmd::Export { file, edits, output, quality, json } => {
-            write_rendered(&file, &read_edits(&edits)?, None, &output, quality, json)?
+        Cmd::Export { file, edits, no_edits, output, quality, json } => {
+            let stack = stack_for(&file, edits.as_deref(), no_edits)?;
+            write_rendered(&file, &stack, None, &output, quality, json)?
         }
+        Cmd::Edits { file, json } => show_edits(&file, json)?,
+        Cmd::Save { file, edits, json } => {
+            let stack = match edits {
+                Some(path) => {
+                    let stack = read_edits(&path)?;
+                    store::store_stack(&file, &stack)?;
+                    stack
+                }
+                None => load_edits(&file)?.map(|e| e.stack).unwrap_or_default(),
+            };
+            print_report(&store::save(&file, &stack)?, json);
+        }
+        Cmd::Revert { file, json } => print_report(&store::revert(&file)?, json),
         Cmd::App { dir, args } => return app(&dir, &args),
     }
     Ok(ExitCode::SUCCESS)
@@ -266,7 +326,7 @@ fn write_rendered(
 ) -> Result<(), Fail> {
     // Check the output extension before the (possibly slow) decode.
     let format = OutFormat::from_path(output, quality)?;
-    let src = photo_cruiser_core::decode(file)?;
+    let src = photo_cruiser_core::decode(&store::original(file))?;
     let img = render::render(&src, edits, RenderOpts { max_side })?;
     export::save(&img, output, format)?;
     let (width, height) = img.dimensions();
@@ -287,6 +347,78 @@ struct RenderJson<'a> {
 
 fn read_edits(path: &Path) -> Result<EditStack, Fail> {
     Ok(EditStack::load(path)?)
+}
+
+/// The photo's sidecar. Stale edits (the photo changed elsewhere) are a warning.
+fn load_edits(file: &Path) -> Result<Option<PhotoEdits>, Fail> {
+    match store::load(file) {
+        Err(e @ Error::StaleEdits { .. }) => {
+            eprintln!("pcr: warning: {e}");
+            Ok(None)
+        }
+        res => Ok(res?),
+    }
+}
+
+/// `--edits`, else (unless `--no-edits`) the photo's own.
+fn stack_for(file: &Path, edits: Option<&Path>, no_edits: bool) -> Result<EditStack, Fail> {
+    match edits {
+        Some(path) => read_edits(path),
+        None if no_edits => Ok(EditStack::default()),
+        None => Ok(load_edits(file)?.map(|e| e.stack).unwrap_or_default()),
+    }
+}
+
+#[derive(Serialize)]
+struct EditsJson<'a> {
+    path: &'a Path,
+    ops: &'a [Op],
+    /// `null` if never saved.
+    saved: Option<&'a [Op]>,
+    dirty: bool,
+    backup: Option<PathBuf>,
+}
+
+fn show_edits(file: &Path, json: bool) -> Result<(), Fail> {
+    if !file.is_file() {
+        return Err(Error::io(file, std::io::ErrorKind::NotFound.into()).into());
+    }
+    let edits = load_edits(file)?.unwrap_or_default();
+    let out = EditsJson {
+        path: file,
+        ops: &edits.stack.ops,
+        saved: edits.saved.as_ref().map(|s| s.ops.as_slice()),
+        dirty: edits.dirty(),
+        backup: store::backup(file),
+    };
+    if json {
+        print_json(&out);
+        return Ok(());
+    }
+    let ops = |ops: &[Op]| serde_json::to_string(ops).expect("ops serialise");
+    println!("ops: {}", ops(out.ops));
+    println!("saved: {}", out.saved.map_or("never".into(), ops));
+    println!("dirty: {}", out.dirty);
+    println!("backup: {}", out.backup.map_or("none".into(), |b| b.display().to_string()));
+    Ok(())
+}
+
+fn print_report(r: &store::SaveReport, json: bool) {
+    if json {
+        print_json(r);
+    } else if r.action == "saved" {
+        println!(
+            "{} {}x{} {} ({}, {} bytes)",
+            r.path.display(),
+            r.width,
+            r.height,
+            r.format,
+            r.quality,
+            r.bytes
+        );
+    } else {
+        println!("{} {}", r.path.display(), r.action);
+    }
 }
 
 /// Run the GUI binary that sits next to `pcr`, forwarding args and exit code.

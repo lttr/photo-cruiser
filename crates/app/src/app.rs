@@ -6,7 +6,7 @@ use crate::message::Message;
 use crate::script::{self, Runner, ScriptConfig};
 use crate::settings::Settings;
 use crate::state::{
-    DEFAULT_MAX_SIDE, DEFAULT_TRANSITION, Effect, Loaded, State, decode_job, size_job, thumb_job,
+    DEFAULT_MAX_SIDE, DEFAULT_TRANSITION, Effect, Loaded, State, decode_job, io_job, size_job, thumb_job,
 };
 use crate::{menu, theme, view};
 use iced::widget::operation::AbsoluteOffset;
@@ -60,6 +60,8 @@ pub fn application(cfg: Config) -> iced::Application<impl iced::Program<State = 
         .theme(|_: &App| theme::theme())
         .default_font(theme::get().font)
         .window(window_settings())
+        // Closing the window quits like `Quit`: after the queued saves.
+        .exit_on_close_request(false)
         // MSAA (iced's default) makes the canvas' 50% black dim ~67% in the real wgpu
         // window (white → 85 instead of 128); iced_test's headless renderer has no MSAA,
         // so only script-mode shots show it. The overlay is axis-aligned: no AA needed.
@@ -132,7 +134,11 @@ impl App {
             Some(_) => window::frames().map(|_| Message::Frame),
             None => Subscription::none(),
         };
-        Subscription::batch([frames, window::resize_events().map(|(id, _)| Message::Resized(id))])
+        Subscription::batch([
+            frames,
+            window::resize_events().map(|(id, _)| Message::Resized(id)),
+            window::close_requests().map(|_| Message::CloseRequested),
+        ])
     }
 
     pub fn update(&mut self, message: Message) -> Task<Message> {
@@ -148,6 +154,14 @@ impl App {
                 Task::none()
             }
             Message::FolderPicked(None) => Task::none(),
+            Message::CloseRequested => self.apply(&Action::Quit),
+            Message::Io(done) => {
+                self.state.finish_io(done);
+                if self.state.quitting && self.state.io_idle() {
+                    return iced::exit();
+                }
+                Task::none()
+            }
             Message::Decoded(job, result) => {
                 self.state.finish(job, result);
                 Task::none()
@@ -195,7 +209,7 @@ impl App {
             Some(y) => iced::widget::operation::scroll_to("grid", AbsoluteOffset { x: None, y: Some(y) }),
             None => Task::none(),
         };
-        Task::batch([task, scroll, self.load_next()])
+        Task::batch([task, scroll, self.load_next(), self.run_io()])
     }
 
     fn write_resume(&mut self) {
@@ -242,8 +256,9 @@ impl App {
     fn load_next(&mut self) -> Task<Message> {
         let max_side = self.state.max_side;
         let mut tasks: Vec<_> = std::iter::from_fn(|| self.state.next_job())
-            .map(|(job, path)| {
-                let decode = move || decode_job(&path, job.kind, max_side);
+            .map(|load| {
+                let job = load.job;
+                let decode = move || decode_job(&load, max_side);
                 Task::perform(on_thread(decode), move |r| Message::Decoded(job, r.unwrap_or_else(panicked)))
             })
             .collect();
@@ -258,6 +273,22 @@ impl App {
             })
         }));
         Task::batch(tasks)
+    }
+}
+
+impl App {
+    /// Start the next sidecar write or save, if the worker is free.
+    fn run_io(&mut self) -> Task<Message> {
+        let Some(io) = self.state.next_io() else { return Task::none() };
+        let fallback = io.clone();
+        Task::perform(on_thread(move || io_job(io)), move |r| {
+            Message::Io(r.unwrap_or_else(|| match fallback.clone() {
+                crate::state::Io::Store(p, _) => {
+                    crate::state::IoDone::Stored(p, Err("worker panicked".into()))
+                }
+                crate::state::Io::Save(p, _) => crate::state::IoDone::Saved(p, Err("worker panicked".into())),
+            }))
+        })
     }
 }
 

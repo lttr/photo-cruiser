@@ -12,6 +12,12 @@
 //! index, so the photo view opens on it and returns to it. Thumbnails load only while the
 //! grid shows, visible ones first. The justified layout also needs every photo's size:
 //! those are probed (headers only) in the background, the layout settling as they come.
+//!
+//! Edits: each photo shows `render(original, stack)`. A crop drawn in crop mode is a
+//! draft until applied (Enter, Apply, or leaving the photo). Every change of a stack is
+//! written to the photo's sidecar, and leaving a dirty photo saves it; both run on one
+//! background worker, in order ([`State::next_io`]). No prompts: quitting waits for the
+//! saves.
 
 use crate::action::Action;
 use crate::grid;
@@ -20,8 +26,10 @@ use iced::widget::image::Handle;
 use photo_cruiser_core::crop::{Aspect, CropTool, MouseKind};
 use photo_cruiser_core::geom::PixelRect;
 use photo_cruiser_core::loader::{Job, Kind, Loader, SizeJob, Sizes, ThumbJob, Thumbs};
-use photo_cruiser_core::{Folder, Point, Size};
+use photo_cruiser_core::store::{self, PhotoEdits, SaveReport};
+use photo_cruiser_core::{EditStack, Error, Folder, History, Op, Point, Size};
 use serde::Serialize;
+use std::collections::{HashMap, VecDeque};
 use std::ops::Range;
 use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
@@ -40,7 +48,7 @@ const RAPID: Duration = Duration::from_millis(200);
 #[derive(Clone, Debug)]
 pub struct Picture {
     pub handle: Handle,
-    /// Full-resolution size (after orientation): the crop coordinate space.
+    /// Full-resolution size of what is shown (after orientation and crop), in source pixels.
     pub source: (u32, u32),
 }
 
@@ -52,18 +60,82 @@ impl Picture {
 
 pub type Loaded = Result<Picture, String>;
 
-/// Run a loader job on `path` (blocking). Errors become strings for the UI; a preview
-/// job for a photo without an embedded preview is an `Err` too (never shown).
-pub fn decode_job(path: &Path, kind: Kind, max_side: u32) -> Loaded {
-    let msg = |e: photo_cruiser_core::Error| e.to_string().trim_end().to_string();
-    let d = match kind {
-        Kind::Full => photo_cruiser_core::decode::decode_max_side(path, Some(max_side)).map_err(msg)?,
+/// A loader job: the photo (or its original, for a full decode) and the edits to render.
+#[derive(Clone, Debug)]
+pub struct LoadJob {
+    pub job: Job,
+    pub path: PathBuf,
+    pub stack: EditStack,
+}
+
+/// Run a loader job (blocking): decode, then render the edits. Errors become strings for
+/// the UI; a preview job for a photo without an embedded preview, or with edits (the
+/// preview would show it unedited), is an `Err` too (never shown).
+pub fn decode_job(load: &LoadJob, max_side: u32) -> Loaded {
+    let msg = |e: Error| e.to_string().trim_end().to_string();
+    let d = match load.job.kind {
+        Kind::Full => photo_cruiser_core::decode::decode_max_side(&load.path, Some(max_side)).map_err(msg)?,
+        Kind::Preview if !load.stack.is_empty() => return Err("edited: no preview".into()),
         Kind::Preview => {
-            photo_cruiser_core::embedded_preview(path).map_err(msg)?.ok_or("no embedded preview")?
+            photo_cruiser_core::embedded_preview(&load.path).map_err(msg)?.ok_or("no embedded preview")?
         }
     };
-    let (w, h) = d.image.dimensions();
-    Ok(Picture { source: d.source_size(), handle: Handle::from_rgba(w, h, d.image.into_raw()) })
+    let full = d.source_size();
+    let source = match load.stack.crop().and_then(|r| r.to_pixels(full)) {
+        Some(px) => (px.w, px.h),
+        None => full,
+    };
+    let img = match load.stack.is_empty() {
+        true => d.image,
+        false => photo_cruiser_core::render::render(&d, &load.stack, Default::default()).map_err(msg)?,
+    };
+    let (w, h) = img.dimensions();
+    Ok(Picture { source, handle: Handle::from_rgba(w, h, img.into_raw()) })
+}
+
+/// The edits of one photo this session: the sidecar's content and the undo history.
+#[derive(Clone, Debug, Default)]
+pub struct PhotoState {
+    pub edits: PhotoEdits,
+    pub history: History,
+}
+
+/// Background file work, one at a time and in order. The stack is read when the job
+/// starts, so a photo queued twice is written once, with its latest edits.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum Queued {
+    /// Write the photo's stack to its sidecar.
+    Store(PathBuf),
+    /// Save the photo (render its edits into the file).
+    Save(PathBuf),
+}
+
+/// A started [`Queued`] job.
+#[derive(Clone, Debug)]
+pub enum Io {
+    Store(PathBuf, EditStack),
+    Save(PathBuf, EditStack),
+}
+
+#[derive(Clone, Debug)]
+pub enum IoDone {
+    Stored(PathBuf, Result<(), String>),
+    Saved(PathBuf, Result<SaveReport, String>),
+}
+
+/// Run an [`Io`] job (blocking).
+pub fn io_job(io: Io) -> IoDone {
+    let msg = |e: Error| e.to_string();
+    match io {
+        Io::Store(path, stack) => {
+            let r = store::store_stack(&path, &stack).map_err(msg);
+            IoDone::Stored(path, r)
+        }
+        Io::Save(path, stack) => {
+            let r = store::save(&path, &stack).map_err(msg);
+            IoDone::Saved(path, r)
+        }
+    }
 }
 
 /// Decode a grid thumbnail of `path` (blocking).
@@ -191,6 +263,19 @@ pub struct State {
     waiting_since: Option<Instant>,
     /// Start of each decode in flight.
     job_started: Vec<(Job, Instant)>,
+    /// Edits of the photos shown this session, by path.
+    pub edits: HashMap<PathBuf, PhotoState>,
+    /// Sidecar writes and saves waiting for the worker, and the one it runs.
+    pub queue: VecDeque<Queued>,
+    pub running: Option<Queued>,
+    /// Photos whose last save failed, with the error (a dot in the grid).
+    pub save_failed: HashMap<PathBuf, String>,
+    /// The stack each loaded (or loading) full image was rendered with.
+    displayed: HashMap<usize, EditStack>,
+    /// Quit was asked for: exit once the queue is done.
+    pub quitting: bool,
+    /// A one-line notice for the status line (saving edits left from last time).
+    pub notice: Option<String>,
 }
 
 impl State {
@@ -225,6 +310,13 @@ impl State {
             trace: std::env::var_os("PC_TRACE").is_some_and(|v| v != "0"),
             waiting_since: None,
             job_started: Vec::new(),
+            edits: HashMap::new(),
+            queue: VecDeque::new(),
+            running: None,
+            save_failed: HashMap::new(),
+            displayed: HashMap::new(),
+            quitting: false,
+            notice: None,
         }
     }
 
@@ -256,7 +348,16 @@ impl State {
         let side = self.layout.thumb_side();
         let thumbs = self.view != View::Grid || self.thumbs.is_idle(self.visible(), self.len(), side);
         let sizes = self.layout != grid::Layout::Justified || self.sizes.is_done();
-        self.loader.is_idle(self.index, self.len()) && self.fade_progress().is_none() && thumbs && sizes
+        self.loader.is_idle(self.index, self.len())
+            && self.fade_progress().is_none()
+            && thumbs
+            && sizes
+            && self.io_idle()
+    }
+
+    /// No sidecar write or save queued or running.
+    pub fn io_idle(&self) -> bool {
+        self.queue.is_empty() && self.running.is_none()
     }
 
     pub fn body_size(&self) -> iced::Size {
@@ -359,8 +460,17 @@ impl State {
             }
             _ => None,
         };
+        let effect = self.act(action);
+        self.sync_display();
+        effect
+    }
+
+    fn act(&mut self, action: &Action) -> Effect {
         match action {
-            Action::Open { path } => self.open(path),
+            Action::Open { path } => {
+                self.leave();
+                self.open(path);
+            }
             Action::Next => {
                 if self.index + 1 < self.len() {
                     self.select(self.index + 1);
@@ -389,6 +499,7 @@ impl State {
                 }
             },
             Action::ShowGrid => {
+                self.leave();
                 self.view = View::Grid;
                 self.mode = Mode::Browse;
                 self.crop.clear();
@@ -406,10 +517,43 @@ impl State {
                     self.error(format!("goto {index}: out of range ({} images)", self.len()));
                 }
             }
+            Action::ToggleCrop if self.mode == Mode::Crop => self.apply_crop(),
             Action::ToggleCrop => {
                 self.view = View::Photo;
-                self.mode = if self.mode == Mode::Crop { Mode::Browse } else { Mode::Crop };
+                self.mode = Mode::Crop;
                 self.crop.clear();
+                // The whole original shows, with the applied crop selected.
+                self.crop.selection = self.stack().crop();
+            }
+            Action::ApplyCrop => self.apply_crop(),
+            Action::Undo | Action::Redo => {
+                (self.mode, self.crop.selection) = (Mode::Browse, None);
+                let Some(path) = self.current_path().map(Path::to_path_buf) else { return Effect::None };
+                let p = self.edits.entry(path.clone()).or_default();
+                let changed = match action {
+                    Action::Undo => p.history.undo(&mut p.edits.stack),
+                    _ => p.history.redo(&mut p.edits.stack),
+                };
+                if changed {
+                    self.enqueue(Queued::Store(path));
+                }
+            }
+            Action::ResetEdits => {
+                (self.mode, self.crop.selection) = (Mode::Browse, None);
+                self.change_stack(EditStack::default());
+            }
+            Action::Revert => {
+                (self.mode, self.crop.selection) = (Mode::Browse, None);
+                self.change_stack(EditStack::default());
+                if let Some(path) = self.current_path().map(Path::to_path_buf) {
+                    self.save_now(path);
+                }
+            }
+            Action::Save => {
+                self.apply_crop();
+                if let Some(path) = self.current_path().map(Path::to_path_buf) {
+                    self.queue_save(path);
+                }
             }
             Action::SetCrop(rect) => match self.picture().map(Picture::source_size) {
                 Some(size) => {
@@ -423,6 +567,7 @@ impl State {
                 None => self.error("set_crop: no image is shown".into()),
             },
             Action::ClearCrop => self.crop.clear(),
+            // Drops the draft; the applied crop stays.
             Action::ExitCrop => {
                 self.mode = Mode::Browse;
                 self.crop.clear();
@@ -471,16 +616,232 @@ impl State {
             | Action::ToggleHelp
             | Action::ToggleAbout
             | Action::ToggleCustomAspect => {}
-            Action::Quit => return Effect::Quit,
+            Action::Quit => {
+                self.leave();
+                if !self.io_idle() {
+                    self.quitting = true;
+                    return Effect::None;
+                }
+                return Effect::Quit;
+            }
         }
         Effect::None
     }
 
+    /// The current photo's stack (empty if it has no edits).
+    pub fn stack(&self) -> EditStack {
+        self.current_path().map(|p| self.stack_of(p)).unwrap_or_default()
+    }
+
+    fn stack_of(&self, path: &Path) -> EditStack {
+        self.edits.get(path).map(|p| p.edits.stack.clone()).unwrap_or_default()
+    }
+
+    /// The current photo's edits differ from what its file was saved with.
+    pub fn dirty(&self) -> bool {
+        self.current_path().and_then(|p| self.edits.get(p)).is_some_and(|p| p.edits.dirty())
+    }
+
+    /// Read a photo's sidecar the first time it is needed. Stale edits are a warning.
+    fn load_edits(&mut self, path: &Path) {
+        if self.edits.contains_key(path) {
+            return;
+        }
+        let edits = match store::load(path) {
+            Ok(e) => e.unwrap_or_default(),
+            Err(e) => {
+                self.error(e.to_string());
+                PhotoEdits::default()
+            }
+        };
+        self.edits.insert(path.to_path_buf(), PhotoState { edits, history: History::default() });
+    }
+
+    /// Make `stack` the current photo's (undoable) and write it to the sidecar.
+    fn change_stack(&mut self, stack: EditStack) {
+        let Some(path) = self.current_path().map(Path::to_path_buf) else { return };
+        self.load_edits(&path);
+        let p = self.edits.get_mut(&path).expect("loaded");
+        if p.history.change(&mut p.edits.stack, stack) {
+            self.enqueue(Queued::Store(path));
+        }
+    }
+
+    /// Apply the crop mode's draft selection (if any) and leave crop mode.
+    fn apply_crop(&mut self) {
+        if self.mode == Mode::Crop {
+            self.apply_draft();
+            self.mode = Mode::Browse;
+            self.crop.clear();
+        }
+    }
+
+    /// Make the draft selection the current photo's crop.
+    fn apply_draft(&mut self) {
+        if let (Mode::Crop, Some(sel)) = (self.mode, self.crop.selection) {
+            let mut stack = self.stack();
+            stack.set_crop(Some(sel));
+            self.change_stack(stack);
+        }
+    }
+
+    /// Leaving the current photo: a draft crop is applied (crop mode stays on, for the
+    /// next photo), a dirty photo saved.
+    fn leave(&mut self) {
+        if self.view != View::Photo {
+            return;
+        }
+        self.apply_draft();
+        if self.dirty()
+            && let Some(path) = self.current_path().map(Path::to_path_buf)
+        {
+            self.queue_save(path);
+        }
+    }
+
+    fn enqueue(&mut self, job: Queued) {
+        if !self.queue.contains(&job) {
+            self.queue.push_back(job);
+        }
+    }
+
+    /// Save a dirty photo in the background.
+    fn queue_save(&mut self, path: PathBuf) {
+        if self.edits.get(&path).is_some_and(|p| p.edits.dirty()) {
+            self.enqueue(Queued::Save(path));
+        }
+    }
+
+    /// Save before anything else queued.
+    fn save_now(&mut self, path: PathBuf) {
+        let job = Queued::Save(path);
+        self.queue.retain(|q| *q != job);
+        self.queue.push_front(job);
+    }
+
+    /// Paths of the photos queued for saving (and the one being saved).
+    pub fn saving(&self) -> Vec<&Path> {
+        self.running
+            .iter()
+            .chain(&self.queue)
+            .filter_map(|q| match q {
+                Queued::Save(p) => Some(p.as_path()),
+                Queued::Store(_) => None,
+            })
+            .collect()
+    }
+
+    /// The next sidecar write or save to run, when the worker is free. The stack is the
+    /// photo's latest.
+    pub fn next_io(&mut self) -> Option<Io> {
+        if self.running.is_some() {
+            return None;
+        }
+        let job = self.queue.pop_front()?;
+        let io = match &job {
+            Queued::Store(p) => Io::Store(p.clone(), self.stack_of(p)),
+            Queued::Save(p) => Io::Save(p.clone(), self.stack_of(p)),
+        };
+        self.running = Some(job);
+        Some(io)
+    }
+
+    pub fn finish_io(&mut self, done: IoDone) {
+        self.running = None;
+        match done {
+            IoDone::Stored(_, Ok(())) => {}
+            IoDone::Stored(path, Err(e)) => {
+                self.error(format!("cannot keep the edits of {}: {e}", path.display()))
+            }
+            IoDone::Saved(path, Err(e)) => {
+                self.error(format!("cannot save: {e}"));
+                self.save_failed.insert(path, e);
+            }
+            IoDone::Saved(path, Ok(report)) => self.saved(path, report),
+        }
+        if self.io_idle() {
+            self.notice = None;
+        }
+        self.sync_display();
+    }
+
+    /// A save finished: the photo may have a new name, its cached images are reloaded,
+    /// and the sidecar's record of the save is taken over.
+    fn saved(&mut self, path: PathBuf, report: SaveReport) {
+        self.save_failed.remove(&path);
+        if report.action == "unchanged" {
+            return;
+        }
+        let new = report.path;
+        let index = self.folder.as_ref().and_then(|f| f.entries.iter().position(|e| e.path == path));
+        let mut p = self.edits.remove(&path).unwrap_or_default();
+        if new != path {
+            if let Some(i) = index
+                && let Some(f) = &mut self.folder
+            {
+                f.entries[i].name = new.file_name().unwrap_or_default().to_string_lossy().into_owned();
+                f.entries[i].path = new.clone();
+            }
+            self.queue.retain(|q| !matches!(q, Queued::Store(p) | Queued::Save(p) if *p == path));
+        }
+        match store::load(&new) {
+            Ok(on_disk) => {
+                let on_disk = on_disk.unwrap_or_default();
+                if on_disk.stack != p.edits.stack {
+                    // Changed while it was saving: keep the newer stack in the sidecar.
+                    self.enqueue(Queued::Store(new.clone()));
+                }
+                p.edits = PhotoEdits { stack: p.edits.stack, ..on_disk };
+            }
+            Err(e) => self.error(e.to_string()),
+        }
+        self.edits.insert(new, p);
+        if let Some(i) = index {
+            self.loader.invalidate(i);
+            self.thumbs.invalidate(i);
+            self.sizes.unset(i);
+            self.displayed.remove(&i);
+        }
+    }
+
+    /// What photo `index` should show: its edits, but the whole original while it is
+    /// being cropped.
+    fn display_stack(&self, index: usize) -> EditStack {
+        let Some(path) = self.folder.as_ref().and_then(|f| f.entries.get(index)).map(|e| &e.path) else {
+            return EditStack::default();
+        };
+        let mut stack = self.stack_of(path);
+        if index == self.index && self.mode == Mode::Crop {
+            stack.set_crop(None);
+        }
+        stack
+    }
+
+    /// Reload the images whose edits (or crop mode) changed since they were rendered.
+    /// The old image stays on screen until the new one is ready.
+    fn sync_display(&mut self) {
+        let changed: Vec<usize> =
+            self.displayed.iter().filter(|(i, s)| self.display_stack(**i) != **s).map(|(i, _)| *i).collect();
+        for i in changed {
+            self.displayed.remove(&i);
+            self.loader.invalidate(i);
+        }
+    }
+
     fn select(&mut self, index: usize) {
+        if index != self.index {
+            self.leave();
+        }
         let now = Instant::now();
         self.selected_at = [Some(now), self.selected_at[0]];
         self.index = index;
         self.crop.clear();
+        if let Some(path) = self.current_path().map(Path::to_path_buf) {
+            self.load_edits(&path);
+            if self.mode == Mode::Crop {
+                self.crop.selection = self.stack().crop();
+            }
+        }
         self.waiting_since = self.trace.then_some(now);
         self.refresh();
         self.reveal();
@@ -502,6 +863,7 @@ impl State {
         self.loader.reset();
         self.thumbs.reset();
         self.sizes.reset(0);
+        self.displayed.clear();
         self.view = if file.is_some() { View::Photo } else { View::Grid };
         self.grid_offset = 0.0;
         self.scroll = Some(0.0);
@@ -517,6 +879,20 @@ impl State {
                 }
                 self.sizes.reset(folder.len());
                 self.folder = Some(folder);
+                if let Some(path) = self.current_path().map(Path::to_path_buf) {
+                    self.load_edits(&path);
+                }
+                // Edits left unsaved last time (the app was killed): save them now.
+                let left = store::dirty_photos(&dir);
+                if !left.is_empty() {
+                    let n = left.len();
+                    self.notice =
+                        Some(format!("saving {n} photo{} edited last time", if n == 1 { "" } else { "s" }));
+                    for path in left {
+                        self.load_edits(&path);
+                        self.queue_save(path);
+                    }
+                }
             }
             Err(e) => {
                 let msg = format!("Cannot open folder: {e}");
@@ -547,15 +923,24 @@ impl State {
         }
     }
 
-    /// The next decode to start, with the file to decode, while a loader slot is free.
-    /// Call until `None`.
-    pub fn next_job(&mut self) -> Option<(Job, PathBuf)> {
+    /// The next decode to start, with the file to decode (the original, for a full
+    /// decode) and the edits to render, while a loader slot is free. Call until `None`.
+    pub fn next_job(&mut self) -> Option<LoadJob> {
         let job = self.loader.next_job(self.index, self.len())?;
         if self.trace {
             self.job_started.push((job, Instant::now()));
         }
-        let path = self.folder.as_ref()?.entries.get(job.index)?.path.clone();
-        Some((job, path))
+        let photo = self.folder.as_ref()?.entries.get(job.index)?.path.clone();
+        self.load_edits(&photo);
+        let stack = self.display_stack(job.index);
+        let path = match (job.kind, &self.edits[&photo].edits.backup) {
+            (Kind::Full, Some(backup)) => backup.clone(),
+            _ => photo,
+        };
+        if job.kind == Kind::Full {
+            self.displayed.insert(job.index, stack.clone());
+        }
+        Some(LoadJob { job, path, stack })
     }
 
     /// The next grid thumbnail to decode (`job.side` is the side to decode at), while the
@@ -638,10 +1023,21 @@ impl State {
             true => format!("{name} · {}", self.position()),
             false => self.position(),
         };
+        if self.quitting {
+            let n = self.saving().len();
+            return format!("Saving {n} photo{}…", if n == 1 { "" } else { "s" });
+        }
         if let Some(px) = self.crop_pixels() {
             s += &format!(" · crop {px}");
         } else if self.mode == Mode::Crop {
             s += " · crop: drag on the image (Esc to leave)";
+        }
+        if let Some(e) = self.current_path().and_then(|p| self.save_failed.get(p)) {
+            s += &format!(" — not saved: {e}");
+        } else if let Some(notice) = &self.notice {
+            s += &format!(" — {notice}");
+        } else if !self.saving().is_empty() {
+            s += " — saving…";
         }
         s
     }
@@ -681,6 +1077,18 @@ impl State {
             status: self.status(),
             loading: self.current_path().is_some() && self.current().is_none(),
             display: self.display(),
+            edits: self.stack().ops,
+            dirty: self.dirty(),
+            saved: self
+                .current_path()
+                .and_then(|p| self.edits.get(p))
+                .and_then(|p| p.edits.saved.clone())
+                .map(|s| s.ops),
+            saving: self.saving().iter().map(|p| p.display().to_string()).collect(),
+            backup: self
+                .current_path()
+                .and_then(|p| self.edits.get(p)?.edits.backup.as_ref())
+                .map(|b| b.display().to_string()),
             errors,
             window,
             shot: shot.map(|p| p.display().to_string()),
@@ -726,6 +1134,16 @@ pub struct Dump {
     /// The current image is still decoding.
     pub loading: bool,
     pub display: Display,
+    /// The current photo's edit stack.
+    pub edits: Vec<Op>,
+    /// Its edits differ from what its file was saved with.
+    pub dirty: bool,
+    /// The stack its file was saved with (`null`: never saved).
+    pub saved: Option<Vec<Op>>,
+    /// Photos queued for saving.
+    pub saving: Vec<String>,
+    /// The backup of its original, if it was saved.
+    pub backup: Option<String>,
     pub errors: Vec<String>,
     /// Logical size of the window (from the screenshot or `window::size`).
     pub window: Option<WindowSize>,

@@ -169,7 +169,7 @@ fn preview_within(path: &Path, tolerance: f64) -> Result<Option<Decoded>> {
         }
         let (w, h) = decoder.dimensions();
         let exif = decoder.exif_metadata().map_err(|e| Error::decode(path, e))?;
-        let Some(jpeg) = exif.as_deref().and_then(exif_thumbnail) else { return Ok(None) };
+        let Some(jpeg) = exif.as_deref().and_then(crate::meta::exif_thumbnail) else { return Ok(None) };
         let Ok(mut img) = image::load_from_memory_with_format(jpeg, image::ImageFormat::Jpeg) else {
             return Ok(None);
         };
@@ -209,45 +209,49 @@ pub fn thumbnail(path: &Path, max_side: u32) -> Result<Decoded> {
     decode_max_side(path, Some(max_side))
 }
 
-/// The JPEG thumbnail referenced by IFD1 of an EXIF block (a TIFF structure).
-fn exif_thumbnail(exif: &[u8]) -> Option<&[u8]> {
-    let le = match exif.get(..2)? {
-        b"II" => true,
-        b"MM" => false,
-        _ => return None,
-    };
-    let u16_at = |o: usize| {
-        let b: [u8; 2] = exif.get(o..o + 2)?.try_into().ok()?;
-        Some(if le { u16::from_le_bytes(b) } else { u16::from_be_bytes(b) })
-    };
-    let u32_at = |o: usize| {
-        let b: [u8; 4] = exif.get(o..o + 4)?.try_into().ok()?;
-        Some(if le { u32::from_le_bytes(b) } else { u32::from_be_bytes(b) })
-    };
-    let ifd0 = u32_at(4)? as usize;
-    let ifd1 = u32_at(ifd0 + 2 + 12 * u16_at(ifd0)? as usize)? as usize;
-    if ifd1 == 0 {
-        return None;
-    }
-    let (mut offset, mut length) = (None, None);
-    for i in 0..u16_at(ifd1)? as usize {
-        let entry = ifd1 + 2 + 12 * i;
-        // SHORT (3) values sit in the first two bytes of the value field.
-        let value = match u16_at(entry + 2)? {
-            3 => u16_at(entry + 8)? as usize,
-            _ => u32_at(entry + 8)? as usize,
-        };
-        match u16_at(entry)? {
-            0x0201 => offset = Some(value),
-            0x0202 => length = Some(value),
-            _ => {}
-        }
-    }
-    let (offset, length) = (offset?, length?);
-    exif.get(offset..offset.checked_add(length)?)
+/// What Save carries over from the original: its ICC profile and EXIF block (a TIFF
+/// structure, without the `Exif\0\0` header).
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct Metadata {
+    pub icc: Option<Vec<u8>>,
+    pub exif: Option<Vec<u8>>,
 }
 
-fn image_decoder(path: &Path) -> Result<(Format, impl ImageDecoder)> {
+/// The ICC profile and EXIF of a photo, as far as its format has them. XMP and maker
+/// notes outside EXIF are not read (a saved photo loses them).
+pub fn metadata(path: &Path) -> Result<Metadata> {
+    if Format::heif_from_path(path).is_some() {
+        use libheif_rs::ColorProfile;
+        let (_ctx, handle) = heif_open(path)?;
+        let icc = handle
+            .color_profile_raw()
+            .filter(|p| p.profile_type() != libheif_rs::color_profile_types::NCLX)
+            .map(|p| p.data);
+        let mut ids = [0; 1];
+        // A HEIF EXIF item starts with the offset of the TIFF header (after those 4 bytes).
+        let exif = (handle.metadata_block_ids(&mut ids, b"Exif") > 0)
+            .then(|| handle.metadata(ids[0]).ok())
+            .flatten()
+            .and_then(|d| {
+                let skip = u32::from_be_bytes(d.get(..4)?.try_into().ok()?) as usize;
+                d.get(4 + skip..).map(<[u8]>::to_vec)
+            });
+        return Ok(Metadata { icc, exif });
+    }
+    let (_, mut decoder) = image_decoder(path)?;
+    let icc = decoder.icc_profile().map_err(|e| Error::decode(path, e))?;
+    let exif = decoder.exif_metadata().map_err(|e| Error::decode(path, e))?;
+    Ok(Metadata { icc, exif })
+}
+
+/// Quantisation tables, sampling and density of a JPEG (see [`crate::meta::jpeg_settings`]).
+/// `Ok(None)` for other formats.
+pub fn jpeg_settings(path: &Path) -> Result<Option<crate::meta::JpegSettings>> {
+    let bytes = std::fs::read(path).map_err(|e| Error::io(path, e))?;
+    Ok(crate::meta::jpeg_settings(&bytes))
+}
+
+pub(crate) fn image_decoder(path: &Path) -> Result<(Format, impl ImageDecoder)> {
     let reader = ImageReader::open(path)
         .map_err(|e| Error::io(path, e))?
         .with_guessed_format()

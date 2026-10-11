@@ -18,7 +18,7 @@ use crate::crop_overlay::Modes;
 use crate::grid::Layout;
 use crate::message::Message;
 use crate::settings::Settings;
-use crate::state::{Display, Effect, Mode, State, View, decode_job, size_job, thumb_job};
+use crate::state::{Display, Effect, Mode, State, View, decode_job, io_job, size_job, thumb_job};
 use iced::futures::channel::mpsc;
 use iced::keyboard::{Key, key::Named};
 use iced::mouse::Button;
@@ -38,8 +38,29 @@ const SIZE: Size = Size::new(1000.0, 750.0);
 const TEST_MAX_SIDE: u32 = 2048;
 const TIMEOUT: Duration = Duration::from_secs(20);
 
+/// A copy of `fixtures/` for this test (each test runs on its own thread): leaving an
+/// edited photo saves it, and nothing may ever be saved into `fixtures/`.
 fn fixtures() -> PathBuf {
-    Path::new(env!("CARGO_MANIFEST_DIR")).join("../../fixtures").canonicalize().unwrap()
+    thread_local! {
+        static COPY: tempfile::TempDir = {
+            let dir = tempfile::tempdir().unwrap();
+            copy_dir(&Path::new(env!("CARGO_MANIFEST_DIR")).join("../../fixtures"), dir.path());
+            dir
+        };
+    }
+    COPY.with(|d| d.path().canonicalize().unwrap())
+}
+
+fn copy_dir(from: &Path, to: &Path) {
+    std::fs::create_dir_all(to).unwrap();
+    for e in std::fs::read_dir(from).unwrap().flatten() {
+        let target = to.join(e.file_name());
+        if e.file_type().unwrap().is_dir() {
+            copy_dir(&e.path(), &target);
+        } else {
+            std::fs::copy(e.path(), target).unwrap();
+        }
+    }
 }
 
 fn names() -> Vec<String> {
@@ -54,14 +75,21 @@ fn settle(s: &mut State) {
     while let Some((job, paths)) = s.next_size_job() {
         s.finish_sizes(&job, &size_job(&paths));
     }
-    while let Some((job, path)) = s.next_job() {
-        let r = decode_job(&path, job.kind, s.max_side);
-        s.finish(job, r);
+    loop {
+        while let Some(io) = s.next_io() {
+            s.finish_io(io_job(io));
+        }
+        while let Some(load) = s.next_job() {
+            let r = decode_job(&load, s.max_side);
+            s.finish(load.job, r);
+        }
+        while let Some((job, path)) = s.next_thumb_job() {
+            s.finish_thumb(job, thumb_job(&path, job.side));
+        }
+        if s.is_idle() {
+            break;
+        }
     }
-    while let Some((job, path)) = s.next_thumb_job() {
-        s.finish_thumb(job, thumb_job(&path, job.side));
-    }
-    assert!(s.is_idle());
 }
 
 /// No fades: they would make `is_idle` time-dependent. File names on (most checks read
@@ -232,9 +260,10 @@ fn update_embedded_preview_then_sharp() {
         s.apply(&Action::Open { path: dir.clone() });
         s.apply(&Action::Goto { index });
         // The preview job comes first and gets its own slot.
-        let (job, path) = s.next_job().unwrap();
+        let load = s.next_job().unwrap();
+        let (job, path) = (load.job, load.path.clone());
         assert_eq!((job.index, job.kind), (index, Kind::Preview));
-        s.finish(job, decode_job(&path, job.kind, s.max_side));
+        s.finish(job, decode_job(&load, s.max_side));
         assert_eq!(s.display(), Display::Preview, "{path:?}");
         assert!(s.picture().is_none(), "no crop on a preview");
         assert_eq!(s.loader.preview(index).unwrap().as_ref().unwrap().source, preview_size);
@@ -244,9 +273,9 @@ fn update_embedded_preview_then_sharp() {
     }
     // Aspect mismatch: no preview, the previous photo stays instead.
     s.apply(&Action::Goto { index: 0 });
-    let (job, path) = s.next_job().unwrap();
-    assert_eq!(job.kind, Kind::Preview);
-    s.finish(job, decode_job(&path, job.kind, s.max_side));
+    let load = s.next_job().unwrap();
+    assert_eq!(load.job.kind, Kind::Preview);
+    s.finish(load.job, decode_job(&load, s.max_side));
     assert_eq!(s.display(), Display::Previous);
 }
 
@@ -692,9 +721,9 @@ fn crop_drag_past_edge_is_clamped() {
         Point::new(SIZE.width - 1.0, SIZE.height - 1.0),
     );
     assert_close(parse_crop(&h.status()), [120.0, 160.0, 120.0, 160.0]);
-    // Arrow keys drop the selection.
+    // Arrow keys apply the selection; the next photo has none.
     h.keys(Key::Named(Named::ArrowLeft), 1);
-    assert!(h.status().ends_with("(Esc to leave)"), "{}", h.status());
+    assert!(h.status().contains("(Esc to leave)"), "{}", h.status());
 }
 
 #[test]
@@ -1033,4 +1062,217 @@ fn q_does_not_quit() {
     use crate::crop_overlay::key_message;
     let q = Key::Character("q".into());
     assert!(key_message(&q, &q, iced::keyboard::Modifiers::empty(), Modes::default()).is_none());
+}
+
+// ---------------------------------------------------------------------------------------
+// Edits: apply, undo, save (on the temp copy of the fixtures)
+
+fn probe_size(p: &Path) -> (u32, u32) {
+    let p = photo_cruiser_core::probe(p).unwrap();
+    (p.width, p.height)
+}
+
+fn crop_ops(x: f32, y: f32, w: f32, h: f32) -> Vec<photo_cruiser_core::Op> {
+    vec![photo_cruiser_core::Op::Crop(Rect::new(x, y, w, h))]
+}
+
+#[test]
+fn update_apply_save_undo_revert() {
+    let mut s = opened(&fixtures());
+    s.apply(&Action::ShowPhoto { index: Some(1) }); // img2.jpg, 320×240
+    settle(&mut s);
+    let photo = s.current_path().unwrap().to_path_buf();
+    let input = std::fs::read(&photo).unwrap();
+    s.apply(&Action::ToggleCrop);
+    s.apply(&Action::SetCrop(Rect::new(20.0, 10.0, 200.0, 150.0)));
+    assert!(s.stack().is_empty(), "a selection is a draft");
+    s.apply(&Action::ApplyCrop);
+    assert_eq!((s.mode, s.stack().ops, s.dirty()), (Mode::Browse, crop_ops(20.0, 10.0, 200.0, 150.0), true));
+    settle(&mut s);
+    assert_eq!(s.picture().unwrap().source, (200, 150), "the cropped photo shows");
+    let sidecar = photo.parent().unwrap().join(".photo-cruiser/edits/img2.jpg.json");
+    assert!(sidecar.exists(), "edits written at once");
+    assert_eq!(probe_size(&photo), (320, 240), "not saved while on the photo");
+
+    // Crop mode shows the whole original, the crop selected.
+    s.apply(&Action::ToggleCrop);
+    assert_eq!(s.crop.selection, Some(Rect::new(20.0, 10.0, 200.0, 150.0)));
+    settle(&mut s);
+    assert_eq!(s.picture().unwrap().source, (320, 240));
+    s.apply(&Action::ExitCrop);
+
+    // Leaving saves.
+    s.apply(&Action::Next);
+    assert_eq!(s.saving(), [photo.as_path()]);
+    assert!(s.status().ends_with("— saving…"), "{}", s.status());
+    settle(&mut s);
+    assert_eq!(probe_size(&photo), (200, 150));
+    s.apply(&Action::Prev);
+    settle(&mut s);
+    let v = serde_json::to_value(s.dump(None, None)).unwrap();
+    assert_eq!((v["dirty"].as_bool(), v["edits"][0]["w"].as_f64()), (Some(false), Some(200.0)));
+    assert_eq!(v["saved"][0]["w"].as_f64(), Some(200.0));
+    assert!(v["backup"].as_str().unwrap().ends_with(".photo-cruiser/originals/img2.jpg"));
+    assert_eq!(s.picture().unwrap().source, (200, 150), "rendered from the backup, cropped once");
+
+    // Undo works across the save; redo.
+    s.apply(&Action::Undo);
+    assert_eq!((s.stack().ops.len(), s.dirty()), (0, true));
+    s.apply(&Action::Redo);
+    assert_eq!((s.stack().ops.len(), s.dirty()), (1, false));
+
+    // Revert: the original, byte for byte, at once.
+    s.apply(&Action::Revert);
+    settle(&mut s);
+    assert_eq!(std::fs::read(&photo).unwrap(), input);
+    assert!(!s.dirty() && s.stack().is_empty() && !sidecar.exists());
+    assert_eq!(s.picture().unwrap().source, (320, 240));
+    assert!(s.errors.is_empty(), "{:?}", s.errors);
+}
+
+#[test]
+fn update_draft_applied_on_leaving_dropped_by_esc() {
+    let mut s = opened(&fixtures());
+    s.apply(&Action::ShowPhoto { index: Some(1) });
+    settle(&mut s);
+    s.apply(&Action::SetCrop(Rect::new(0.0, 0.0, 100.0, 100.0)));
+    s.apply(&Action::ExitCrop);
+    assert!(s.stack().is_empty() && !s.dirty(), "Esc drops the draft");
+    // Draw and press →: applied and saved, crop mode stays for the next photo.
+    s.apply(&Action::SetCrop(Rect::new(0.0, 0.0, 100.0, 100.0)));
+    let photo = s.current_path().unwrap().to_path_buf();
+    s.apply(&Action::Next);
+    assert_eq!((s.mode, s.crop.selection), (Mode::Crop, None));
+    settle(&mut s);
+    assert_eq!(probe_size(&photo), (100, 100));
+    // Back in crop mode on it: its crop is the selection; Esc keeps the applied crop.
+    s.apply(&Action::Prev);
+    assert_eq!(s.crop.selection, Some(Rect::new(0.0, 0.0, 100.0, 100.0)));
+    s.apply(&Action::ExitCrop);
+    assert_eq!(s.stack().ops, crop_ops(0.0, 0.0, 100.0, 100.0));
+}
+
+#[test]
+fn update_quit_waits_for_saves() {
+    let mut s = opened(&fixtures());
+    s.apply(&Action::ShowPhoto { index: Some(1) });
+    settle(&mut s);
+    s.apply(&Action::SetCrop(Rect::new(0.0, 0.0, 100.0, 100.0)));
+    assert_eq!(s.apply(&Action::Quit), Effect::None, "saves first");
+    assert!(s.quitting);
+    assert_eq!(s.status(), "Saving 1 photo…");
+    while let Some(io) = s.next_io() {
+        s.finish_io(io_job(io));
+    }
+    assert!(s.io_idle());
+    assert_eq!(probe_size(&fixtures().join("img2.jpg")), (100, 100));
+    // Nothing to save: quits at once.
+    assert_eq!(s.apply(&Action::Quit), Effect::Quit);
+}
+
+#[test]
+fn update_saves_edits_left_from_a_crash() {
+    let photo = fixtures().join("img2.jpg");
+    let stack = photo_cruiser_core::EditStack::default()
+        .with(photo_cruiser_core::Op::Crop(Rect::new(0.0, 0.0, 64.0, 48.0)));
+    photo_cruiser_core::store::store_stack(&photo, &stack).unwrap();
+    let mut s = State::new(TEST_MAX_SIDE, Duration::ZERO);
+    s.apply(&Action::Open { path: fixtures() });
+    assert_eq!(s.saving(), [photo.as_path()]);
+    assert!(s.status().ends_with("— saving 1 photo edited last time"), "{}", s.status());
+    settle(&mut s);
+    assert_eq!(probe_size(&photo), (64, 48));
+    assert!(!s.status().contains("saving"), "{}", s.status());
+}
+
+#[test]
+fn update_failed_save_stays_dirty() {
+    let mut s = opened(&fixtures().join("save")); // anim.gif first
+    s.apply(&Action::ShowPhoto { index: Some(0) });
+    settle(&mut s);
+    assert_eq!(s.current_name(), Some("anim.gif"));
+    s.apply(&Action::SetCrop(Rect::new(0.0, 0.0, 10.0, 10.0)));
+    s.apply(&Action::Save);
+    settle(&mut s);
+    assert!(s.dirty());
+    assert!(s.status().contains("— not saved: "), "{}", s.status());
+    assert!(s.errors.last().unwrap().contains("animated images can't be edited"), "{:?}", s.errors);
+    assert!(s.save_failed.contains_key(s.current_path().unwrap()));
+}
+
+#[test]
+fn update_converted_photo_keeps_its_place() {
+    let mut s = opened(&fixtures());
+    s.apply(&Action::ShowPhoto { index: Some(4) }); // img5.HEIC
+    settle(&mut s);
+    s.apply(&Action::SetCrop(Rect::new(0.0, 0.0, 100.0, 100.0)));
+    s.apply(&Action::Save);
+    settle(&mut s);
+    assert_eq!((s.index, s.current_name()), (4, Some("img5.jpg")));
+    assert!(!s.dirty());
+    assert_eq!(s.picture().unwrap().source, (100, 100));
+    s.apply(&Action::Revert);
+    settle(&mut s);
+    assert_eq!(s.current_name(), Some("img5.HEIC"));
+    assert!(s.errors.is_empty(), "{:?}", s.errors);
+}
+
+#[test]
+fn edit_keys() {
+    use crate::crop_overlay::key_message;
+    use iced::keyboard::Modifiers;
+    let z = Key::Character("z".into());
+    let crop = Modes { crop: true, ..Modes::default() };
+    let action = |k: &Key, mods, m| match key_message(k, k, mods, m) {
+        Some(Message::Action(a)) => a,
+        other => panic!("{other:?}"),
+    };
+    assert_eq!(action(&z, Modifiers::CTRL, Modes::default()), Action::Undo);
+    assert_eq!(action(&z, Modifiers::CTRL | Modifiers::SHIFT, Modes::default()), Action::Redo);
+    assert_eq!(action(&Key::Character("y".into()), Modifiers::CTRL, Modes::default()), Action::Redo);
+    assert_eq!(action(&Key::Character("s".into()), Modifiers::CTRL, Modes::default()), Action::Save);
+    assert_eq!(action(&Key::Named(Named::Enter), Modifiers::empty(), crop), Action::ApplyCrop);
+    assert_eq!(action(&z, Modifiers::empty(), Modes::default()), Action::NextLayout, "plain Z unchanged");
+}
+
+#[test]
+fn enter_applies_arrow_saves_failed_dot() {
+    let mut h = harness(); // img1.png
+    h.keys(Key::Named(Named::ArrowRight), 1); // img2.jpg
+    h.until("img2", |h| h.status().starts_with("img2.jpg") && h.bounds("photo").is_some());
+    h.keys(Key::Character("c".into()), 1);
+    assert!(h.bounds("apply").is_some(), "Apply button in crop mode");
+    let fit = h.fit((320, 240));
+    h.drag(Point::new(fit.x + 10.0, fit.y + 10.0), Point::new(fit.x + fit.w / 2.0, fit.y + fit.h / 2.0));
+    h.keys(Key::Named(Named::Enter), 1);
+    assert!(!h.status().contains("crop"), "applied, crop mode left: {}", h.status());
+    h.until("cropped photo shown", |h| h.bounds("photo").is_some() && h.bounds("apply").is_none());
+    h.keys(Key::Named(Named::ArrowRight), 1);
+    let photo = fixtures().join("img2.jpg");
+    h.until("saved", |h| !h.status().contains("saving") && probe_size(&photo).0 < 320);
+}
+
+#[test]
+fn failed_save_dot_in_grid() {
+    let cfg = Config {
+        folder: Some(fixtures().join("save")), // anim.gif first
+        max_side: TEST_MAX_SIDE,
+        transition: Duration::ZERO,
+        script: None,
+        settings: None,
+    };
+    let mut h = Harness::new(app::application(cfg));
+    h.keys(Key::Named(Named::Enter), 1);
+    h.until("anim.gif", |h| h.bounds("photo").is_some());
+    h.keys(Key::Character("c".into()), 1);
+    let fit = h.fit((64, 48));
+    h.drag(Point::new(fit.x + 10.0, fit.y + 10.0), Point::new(fit.x + fit.w / 2.0, fit.y + fit.h / 2.0));
+    h.keys(Key::Named(Named::Escape), 1); // drops the draft, leaves crop mode
+    assert!(h.bounds("failed").is_none());
+    h.keys(Key::Character("c".into()), 1);
+    h.drag(Point::new(fit.x + 10.0, fit.y + 10.0), Point::new(fit.x + fit.w / 2.0, fit.y + fit.h / 2.0));
+    h.emu.update(&h.prog, Action::Save.into()); // Ctrl+S (keys with modifiers: see `edit_keys`)
+    h.until("save failed", |h| h.status().contains("not saved: "));
+    h.keys(Key::Named(Named::Escape), 1); // back to the grid (Save left crop mode)
+    h.until("grid with a dot", |h| h.bounds("failed").is_some());
 }

@@ -21,6 +21,20 @@ pub enum Error {
     /// A crop with no pixels left after clamping to the image.
     #[error("crop {},{},{},{} is empty after clamping to the image", .0.x, .0.y, .0.w, .0.h)]
     EmptyCrop(Rect),
+    /// The photo's folder can't be written (Save needs it).
+    #[error("{path}: the folder is read-only, the photo can't be saved")]
+    ReadOnly { path: PathBuf },
+    /// Save would convert to a file name another photo already has.
+    #[error("{path}: already exists, the photo can't be saved under that name")]
+    NameTaken { path: PathBuf },
+    #[error("{path}: animated images can't be edited")]
+    Animated { path: PathBuf },
+    #[error("{path}: 16-bit images can't be saved yet")]
+    HighBitDepth { path: PathBuf },
+    /// The photo was changed by another program after it was saved; its edits are ignored.
+    /// A warning, not a failure.
+    #[error("{path}: changed outside Photo Cruiser, its saved edits are ignored")]
+    StaleEdits { path: PathBuf },
 }
 
 impl Error {
@@ -46,6 +60,11 @@ impl Error {
             Error::Encode { .. } => "encode",
             Error::Edits(_) => "edits",
             Error::EmptyCrop(_) => "empty_crop",
+            Error::ReadOnly { .. } => "read_only",
+            Error::NameTaken { .. } => "name_taken",
+            Error::Animated { .. } => "animated",
+            Error::HighBitDepth { .. } => "high_bit_depth",
+            Error::StaleEdits { .. } => "stale_edits",
         }
     }
 }

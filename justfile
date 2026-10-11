@@ -70,7 +70,15 @@ verify: check
         --shot "{{artifacts}}/verify-grid.png" --dump-state "{{artifacts}}/verify-grid.json"
     jq -e '.index == 1 and .view == "grid" and .errors == [] and .loading == false' \
         "{{artifacts}}/verify-grid.json" >/dev/null || { cat "{{artifacts}}/verify-grid.json"; exit 1; }
-    echo "verify ok: {{artifacts}}/verify.png {{artifacts}}/verify-grid.png"
+    # Save on leaving (no apply, no save step), on a scratch copy: never into fixtures/.
+    photos=$(mktemp -d "{{artifacts}}/verify-save-XXXXXX")
+    cp -r "{{fixtures}}/." "$photos"
+    "{{root}}/scripts/headless.sh" "{{root}}/target/debug/photo-cruiser" "$photos" --script "{{root}}/scripts/save.json" \
+        --shot "{{artifacts}}/verify-save.png" --dump-state "{{artifacts}}/verify-save.json"
+    jq -e '.index == 0 and .dirty == false and .saving == [] and .edits == [{"op":"crop","x":40,"y":30,"w":200,"h":150}] and (.backup | endswith(".photo-cruiser/originals/img1.png")) and .errors == []' \
+        "{{artifacts}}/verify-save.json" >/dev/null || { cat "{{artifacts}}/verify-save.json"; exit 1; }
+    "$pcr" info "$photos/img1.png" | grep -q "size: 200x150" || { echo "img1.png not saved cropped"; exit 1; }
+    echo "verify ok: {{artifacts}}/verify.png {{artifacts}}/verify-grid.png {{artifacts}}/verify-save.png"
 
 # Release build of the GUI and the CLI (run before `just install`)
 build-release:

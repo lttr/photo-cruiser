@@ -11,6 +11,9 @@ pub enum Item {
     /// Grid ↔ photo.
     Switch,
     Crop,
+    Save,
+    ResetEdits,
+    Revert,
     Fullscreen,
     Names,
     Layout,
@@ -19,10 +22,13 @@ pub enum Item {
 }
 
 /// Top to bottom.
-pub const ITEMS: [Item; 8] = [
+pub const ITEMS: [Item; 11] = [
     Item::OpenFolder,
     Item::Switch,
     Item::Crop,
+    Item::Save,
+    Item::ResetEdits,
+    Item::Revert,
     Item::Fullscreen,
     Item::Names,
     Item::Layout,
@@ -38,6 +44,9 @@ impl Item {
             Item::Switch => "All photos",
             Item::Crop if s.mode == Mode::Crop => "Stop cropping",
             Item::Crop => "Crop",
+            Item::Save => "Save",
+            Item::ResetEdits => "Reset edits",
+            Item::Revert => "Revert to original",
             Item::Fullscreen => "Full screen",
             Item::Names if s.names => "Hide file names",
             Item::Names => "Show file names",
@@ -53,6 +62,8 @@ impl Item {
             Item::Switch if s.view == View::Grid => "Enter",
             Item::Switch => "Esc",
             Item::Crop => "C",
+            Item::Save => "Ctrl+S",
+            Item::ResetEdits | Item::Revert => "",
             Item::Fullscreen => "F",
             Item::Names => "N",
             Item::Layout => "Z",
@@ -67,6 +78,9 @@ impl Item {
             Item::Switch if s.view == View::Grid => Action::ShowPhoto { index: None }.into(),
             Item::Switch => Action::ShowGrid.into(),
             Item::Crop => Action::ToggleCrop.into(),
+            Item::Save => Action::Save.into(),
+            Item::ResetEdits => Action::ResetEdits.into(),
+            Item::Revert => Action::Revert.into(),
             Item::Fullscreen => Action::ToggleFullscreen.into(),
             Item::Names => Action::ToggleNames.into(),
             Item::Layout => Action::NextLayout.into(),

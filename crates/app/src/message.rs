@@ -1,6 +1,6 @@
 use crate::action::Action;
 use crate::script;
-use crate::state::Loaded;
+use crate::state::{IoDone, Loaded};
 use photo_cruiser_core::Point;
 use photo_cruiser_core::crop::MouseKind;
 use photo_cruiser_core::loader::{Job, SizeJob, ThumbJob};
@@ -19,6 +19,10 @@ pub enum Message {
     Resized(iced::window::Id),
     /// The window's real mode after a resize: full screen or not.
     WindowMode(bool),
+    /// A sidecar write or save finished.
+    Io(IoDone),
+    /// The window's close button: quit (after saving).
+    CloseRequested,
     /// A background decode finished.
     Decoded(Job, Loaded),
     /// A grid thumbnail finished.

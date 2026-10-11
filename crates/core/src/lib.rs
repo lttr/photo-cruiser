@@ -13,11 +13,13 @@ pub mod export;
 pub mod geom;
 pub mod justified;
 pub mod loader;
+pub mod meta;
 pub mod render;
 pub mod source;
+pub mod store;
 
 pub use catalog::{Entry, Folder};
 pub use decode::{Decoded, Format, Probe, decode, embedded_preview, probe, thumbnail};
-pub use edit::{EditStack, Op};
+pub use edit::{EditStack, History, Op};
 pub use error::{Error, Result};
 pub use geom::{Point, Rect, Size};

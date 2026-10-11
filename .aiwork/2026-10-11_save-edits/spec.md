@@ -1,5 +1,5 @@
 ---
-status: not-started
+status: agent-done
 references:
   - "Foundation spec: ../2026-10-06_iced-app-foundation/spec.md"
   - "Supersedes ticket: ../2026-10-06_iced-app-foundation/tickets/05_sidecars-and-crop-export.md"

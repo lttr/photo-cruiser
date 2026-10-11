@@ -52,6 +52,72 @@ impl EditStack {
     pub fn to_json(&self) -> String {
         serde_json::to_string_pretty(self).expect("edit stack serialises")
     }
+
+    pub fn is_empty(&self) -> bool {
+        self.ops.is_empty()
+    }
+
+    /// The crop, if any. A stack holds at most one.
+    #[allow(clippy::unnecessary_find_map)] // more ops will follow
+    pub fn crop(&self) -> Option<Rect> {
+        self.ops.iter().find_map(|op| match op {
+            Op::Crop(r) => Some(*r),
+        })
+    }
+
+    /// Replace the crop (`None` removes it). Crops never nest: the new one is in source
+    /// pixels of the original, like the one it replaces.
+    pub fn set_crop(&mut self, crop: Option<Rect>) {
+        let at = self.ops.iter().position(|op| matches!(op, Op::Crop(_)));
+        match (at, crop) {
+            (Some(i), Some(r)) => self.ops[i] = Op::Crop(r),
+            (Some(i), None) => {
+                self.ops.remove(i);
+            }
+            (None, Some(r)) => self.ops.insert(0, Op::Crop(r)),
+            (None, None) => {}
+        }
+    }
+}
+
+/// Undo / redo of one photo's stack: the stacks before and after the current one.
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct History {
+    past: Vec<EditStack>,
+    future: Vec<EditStack>,
+}
+
+impl History {
+    /// Undo steps kept.
+    pub const MAX: usize = 100;
+
+    /// Replace `stack` with `new`, remembering the old one. A new change clears the redo
+    /// steps. Returns false (and records nothing) if nothing changed.
+    pub fn change(&mut self, stack: &mut EditStack, new: EditStack) -> bool {
+        if *stack == new {
+            return false;
+        }
+        self.past.push(std::mem::replace(stack, new));
+        if self.past.len() > Self::MAX {
+            self.past.remove(0);
+        }
+        self.future.clear();
+        true
+    }
+
+    /// Step back. Returns false if there is nothing to undo.
+    pub fn undo(&mut self, stack: &mut EditStack) -> bool {
+        let Some(prev) = self.past.pop() else { return false };
+        self.future.push(std::mem::replace(stack, prev));
+        true
+    }
+
+    /// Step forward again. Returns false if there is nothing to redo.
+    pub fn redo(&mut self, stack: &mut EditStack) -> bool {
+        let Some(next) = self.future.pop() else { return false };
+        self.past.push(std::mem::replace(stack, next));
+        true
+    }
 }
 
 #[cfg(test)]
@@ -64,6 +130,41 @@ mod tests {
         let json = s.to_json();
         assert!(json.contains(r#""op": "crop""#), "{json}");
         assert_eq!(EditStack::from_json(&json).unwrap(), s);
+    }
+
+    #[test]
+    fn one_crop_replaced_or_removed() {
+        let mut s = EditStack::default();
+        assert_eq!(s.crop(), None);
+        s.set_crop(Some(Rect::new(1.0, 1.0, 5.0, 5.0)));
+        s.set_crop(Some(Rect::new(2.0, 2.0, 8.0, 8.0)));
+        assert_eq!(s.ops, [Op::Crop(Rect::new(2.0, 2.0, 8.0, 8.0))]);
+        s.set_crop(None);
+        assert!(s.is_empty());
+    }
+
+    #[test]
+    fn history_undo_redo() {
+        let crop = |x| EditStack::default().with(Op::Crop(Rect::new(x, 0.0, 10.0, 10.0)));
+        let (mut h, mut s) = (History::default(), EditStack::default());
+        assert!(h.change(&mut s, crop(1.0)));
+        assert!(!h.change(&mut s, crop(1.0)), "no change, no step");
+        assert!(h.change(&mut s, crop(2.0)));
+        assert!(h.undo(&mut s) && s == crop(1.0));
+        assert!(h.undo(&mut s) && s.is_empty());
+        assert!(!h.undo(&mut s));
+        assert!(h.redo(&mut s) && s == crop(1.0));
+        // A new change drops the redo steps.
+        assert!(h.change(&mut s, crop(3.0)));
+        assert!(!h.redo(&mut s));
+        for i in 0..150 {
+            h.change(&mut s, crop(10.0 + i as f32));
+        }
+        let mut undos = 0;
+        while h.undo(&mut s) {
+            undos += 1;
+        }
+        assert_eq!(undos, History::MAX);
     }
 
     #[test]
