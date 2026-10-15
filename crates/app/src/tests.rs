@@ -1153,6 +1153,86 @@ fn update_draft_applied_on_leaving_dropped_by_esc() {
 }
 
 #[test]
+fn update_rotate_with_crop() {
+    use photo_cruiser_core::Op;
+    let mut s = opened(&fixtures());
+    s.apply(&Action::ShowPhoto { index: Some(1) }); // img2.jpg, 320×240
+    settle(&mut s);
+    let photo = s.current_path().unwrap().to_path_buf();
+    s.apply(&Action::RotateRight);
+    settle(&mut s);
+    assert_eq!((s.picture().unwrap().source, s.dirty()), ((240, 320), true));
+
+    // Crop mode shows the turned original; the top strip of it is the original's left one.
+    s.apply(&Action::SetCrop(Rect::new(0.0, 0.0, 240.0, 100.0)));
+    settle(&mut s);
+    assert_eq!(s.picture().unwrap().source, (240, 320));
+    s.apply(&Action::ApplyCrop);
+    let crop = Op::Crop(Rect::new(0.0, 0.0, 100.0, 240.0));
+    assert_eq!(s.stack().ops, [crop.clone(), Op::Rotate { quarters: 1 }]);
+    settle(&mut s);
+    assert_eq!(s.picture().unwrap().source, (240, 100));
+    s.apply(&Action::ToggleCrop);
+    assert_eq!(s.crop.selection, Some(Rect::new(0.0, 0.0, 240.0, 100.0)), "selected as shown");
+
+    // A draft turns with the photo.
+    s.apply(&Action::RotateLeft);
+    assert_eq!(s.crop.selection, Some(Rect::new(0.0, 0.0, 100.0, 240.0)));
+    assert_eq!(s.stack().ops, [crop]);
+    s.apply(&Action::RotateLeft);
+    assert_eq!(s.crop.selection, Some(Rect::new(0.0, 220.0, 240.0, 100.0)));
+    s.apply(&Action::ApplyCrop);
+
+    // Leaving saves; from the backup, the photo is cropped and turned once.
+    s.apply(&Action::Next);
+    settle(&mut s);
+    assert_eq!(probe_size(&photo), (240, 100));
+    s.apply(&Action::Prev);
+    settle(&mut s);
+    assert_eq!(s.picture().unwrap().source, (240, 100));
+    s.apply(&Action::ToggleCrop);
+    assert_eq!(s.crop.selection, Some(Rect::new(0.0, 220.0, 240.0, 100.0)));
+    assert!(s.errors.is_empty(), "{:?}", s.errors);
+}
+
+#[test]
+fn update_rotate_in_the_grid_saves_at_once() {
+    let mut s = opened(&fixtures());
+    s.apply(&Action::Goto { index: 1 });
+    let photo = s.current_path().unwrap().to_path_buf();
+    let input = std::fs::read(&photo).unwrap();
+    s.apply(&Action::RotateLeft);
+    assert_eq!(s.view, View::Grid);
+    settle(&mut s);
+    assert_eq!((probe_size(&photo), s.dirty()), ((240, 320), false));
+    // Turning back (or undoing) restores the original.
+    s.apply(&Action::RotateRight);
+    settle(&mut s);
+    assert_eq!(std::fs::read(&photo).unwrap(), input);
+    s.apply(&Action::Undo);
+    settle(&mut s);
+    assert_eq!(probe_size(&photo), (240, 320));
+    assert!(s.errors.is_empty(), "{:?}", s.errors);
+}
+
+#[test]
+fn rotate_keys() {
+    use crate::crop_overlay::key_message;
+    use iced::keyboard::Modifiers;
+    // Shift+R / Shift+L turn; plain `l` is still the next photo.
+    for (c, action) in [("r", Action::RotateRight), ("l", Action::RotateLeft)] {
+        let (key, shifted) = (Key::Character(c.into()), Key::Character(c.to_uppercase().into()));
+        let msg = key_message(&key, &shifted, Modifiers::SHIFT, Modes::default());
+        assert!(matches!(&msg, Some(Message::Action(a)) if *a == action), "{c}: {msg:?}");
+    }
+    let l = Key::Character("l".into());
+    let msg = key_message(&l, &l, Modifiers::empty(), Modes::default());
+    assert!(matches!(msg, Some(Message::Action(Action::Next))), "{msg:?}");
+    let r = Key::Character("r".into());
+    assert!(key_message(&r, &r, Modifiers::empty(), Modes::default()).is_none());
+}
+
+#[test]
 fn update_quit_waits_for_saves() {
     let mut s = opened(&fixtures());
     s.apply(&Action::ShowPhoto { index: Some(1) });

@@ -14,7 +14,9 @@
 //! those are probed (headers only) in the background, the layout settling as they come.
 //!
 //! Edits: each photo shows `render(original, stack)`. A crop drawn in crop mode is a
-//! draft until applied (Enter, Apply, or leaving the photo). Every change of a stack is
+//! draft until applied (Enter, Apply, or leaving the photo). Crop mode shows the whole
+//! original, turned like the photo: the selection is on the turned original, the stack's
+//! crop on the original itself. Every change of a stack is
 //! written to the photo's sidecar, and leaving a dirty photo saves it; both run on one
 //! background worker, in order ([`State::next_io`]). No prompts: quitting waits for the
 //! saves.
@@ -28,7 +30,7 @@ use photo_cruiser_core::crop::{Aspect, CropTool, MouseKind};
 use photo_cruiser_core::geom::PixelRect;
 use photo_cruiser_core::loader::{Job, Kind, Loader, SizeJob, Sizes, ThumbJob, Thumbs};
 use photo_cruiser_core::store::{self, PhotoEdits, SaveReport};
-use photo_cruiser_core::{EditStack, Error, Folder, History, Op, Point, Size};
+use photo_cruiser_core::{EditStack, Error, Folder, History, Op, Point, Rect, Size};
 use serde::Serialize;
 use std::collections::{HashMap, VecDeque};
 use std::ops::Range;
@@ -82,10 +84,11 @@ pub fn decode_job(load: &LoadJob, max_side: u32) -> Loaded {
         }
     };
     let full = d.source_size();
-    let source = match load.stack.crop().and_then(|r| r.to_pixels(full)) {
+    let (w, h) = match load.stack.crop().and_then(|r| r.to_pixels(full)) {
         Some(px) => (px.w, px.h),
         None => full,
     };
+    let source = if load.stack.rotation() % 2 == 1 { (h, w) } else { (w, h) };
     let img = match load.stack.is_empty() {
         true => d.image,
         false => photo_cruiser_core::render::render(&d, &load.stack, Default::default()).map_err(msg)?,
@@ -536,7 +539,7 @@ impl State {
                 self.mode = Mode::Crop;
                 self.crop.clear();
                 // The whole original shows, with the applied crop selected.
-                self.crop.selection = self.stack().crop();
+                self.crop.selection = self.crop_selection();
             }
             Action::ApplyCrop => self.apply_crop(),
             Action::Undo | Action::Redo => {
@@ -548,9 +551,11 @@ impl State {
                     _ => p.history.redo(&mut p.edits.stack),
                 };
                 if changed {
-                    self.enqueue(Queued::Store(path));
+                    self.stored(path);
                 }
             }
+            Action::RotateRight => self.rotate(1),
+            Action::RotateLeft => self.rotate(-1),
             Action::ResetEdits => {
                 (self.mode, self.crop.selection) = (Mode::Browse, None);
                 self.change_stack(EditStack::default());
@@ -703,7 +708,46 @@ impl State {
         self.load_edits(&path);
         let p = self.edits.get_mut(&path).expect("loaded");
         if p.history.change(&mut p.edits.stack, stack) {
-            self.enqueue(Queued::Store(path));
+            self.stored(path);
+        }
+    }
+
+    /// A photo's stack changed: write the sidecar. In the grid, which shows the photos'
+    /// files, save it too.
+    fn stored(&mut self, path: PathBuf) {
+        self.enqueue(Queued::Store(path.clone()));
+        if self.view == View::Grid {
+            self.queue_save(path);
+        }
+    }
+
+    /// Turn the current photo by `quarters` × 90° clockwise (negative: counter-clockwise).
+    /// A draft crop turns with it.
+    fn rotate(&mut self, quarters: i32) {
+        let mut stack = self.stack();
+        let old = stack.rotation();
+        stack.rotate(quarters);
+        if let (Mode::Crop, Some(sel)) = (self.mode, self.crop.selection) {
+            let turn = quarters.rem_euclid(4) as u8;
+            self.crop.selection = self.original_size().map(|size| sel.rotate(turn, size.rotate(old)));
+        }
+        self.change_stack(stack);
+    }
+
+    /// The current photo's original size (oriented, before edits), read from its file.
+    fn original_size(&self) -> Option<Size> {
+        let path = self.current_path()?;
+        let backup = self.edits.get(path).and_then(|p| p.edits.backup.as_deref());
+        let p = photo_cruiser_core::probe(backup.unwrap_or(path)).ok()?;
+        Some((p.width, p.height).into())
+    }
+
+    /// The current photo's crop as a selection on its turned original.
+    fn crop_selection(&self) -> Option<Rect> {
+        let stack = self.stack();
+        match (stack.crop()?, stack.rotation()) {
+            (crop, 0) => Some(crop),
+            (crop, q) => Some(crop.rotate(q, self.original_size()?)),
         }
     }
 
@@ -720,8 +764,14 @@ impl State {
     fn apply_draft(&mut self) {
         if let (Mode::Crop, Some(sel)) = (self.mode, self.crop.selection) {
             let mut stack = self.stack();
-            stack.set_crop(Some(sel));
-            self.change_stack(stack);
+            let crop = match stack.rotation() {
+                0 => Some(sel),
+                q => self.original_size().map(|size| sel.rotate(4 - q, size.rotate(q))),
+            };
+            if let Some(crop) = crop {
+                stack.set_crop(Some(crop));
+                self.change_stack(stack);
+            }
         }
     }
 
@@ -879,7 +929,7 @@ impl State {
         if let Some(path) = self.current_path().map(Path::to_path_buf) {
             self.load_edits(&path);
             if self.mode == Mode::Crop {
-                self.crop.selection = self.stack().crop();
+                self.crop.selection = self.crop_selection();
             }
         }
         self.waiting_since = self.trace.then_some(now);

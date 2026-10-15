@@ -81,6 +81,7 @@ pub const SHORTCUTS: &[(&str, &str)] = &[
     ("Ctrl+K", "Find an action by name"),
     ("Ctrl+O", "Open folder"),
     ("C", "Crop on / off"),
+    ("Shift+R  Shift+L", "Turn right / left"),
     ("Ctrl+Z", "Undo"),
     ("Ctrl+Shift+Z  Ctrl+Y", "Redo"),
     ("Ctrl+S", "Save now (leaving a photo saves it)"),
@@ -133,6 +134,8 @@ pub fn key_message(key: &Key, modified: &Key, mods: keyboard::Modifiers, m: Mode
             "k" => Some(up.clone()),
             "g" => Some(Action::First),
             "G" => Some(Action::Last),
+            "R" => Some(Action::RotateRight),
+            "L" => Some(Action::RotateLeft),
             _ => None,
         };
         if let Some(action) = action {

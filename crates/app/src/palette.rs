@@ -133,6 +133,8 @@ fn edits(s: &State, c: &mut Vec<Command>) {
     } else {
         c.push(cmd("Crop", "C", Action::ToggleCrop));
     }
+    c.push(cmd("Turn right", "Shift+R", Action::RotateRight));
+    c.push(cmd("Turn left", "Shift+L", Action::RotateLeft));
     let history = s.current_path().and_then(|p| s.edits.get(p)).map(|p| &p.history);
     if history.is_some_and(|h| h.can_undo()) {
         c.push(cmd("Undo", "Ctrl+Z", Action::Undo));

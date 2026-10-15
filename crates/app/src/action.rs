@@ -52,6 +52,10 @@ pub enum Action {
     /// Step through the current photo's edits (`Ctrl+Z`; `Ctrl+Shift+Z`, `Ctrl+Y`).
     Undo,
     Redo,
+    /// Turn the current photo 90° clockwise (`Shift+R`) / counter-clockwise (`Shift+L`). In the grid
+    /// it is saved at once.
+    RotateRight,
+    RotateLeft,
     /// Remove all edits of the current photo (menu; undoable). Saved when you leave it.
     ResetEdits,
     /// Back to the original file now: `reset_edits`, then `save` (menu).
@@ -148,7 +152,8 @@ mod tests {
                 {"action":"swap_aspect"},{"action":"toggle_custom_aspect"},{"action":"apply_crop"},
                 {"action":"undo"},{"action":"redo"},{"action":"reset_edits"},{"action":"revert"},{"action":"save"},
                 {"action":"toggle_palette"},{"action":"palette_query","query":"crop"},{"action":"palette_focus","index":1},
-                {"action":"palette_next"},{"action":"palette_prev"},{"action":"palette_activate"},{"action":"close_palette"}]"#,
+                {"action":"palette_next"},{"action":"palette_prev"},{"action":"palette_activate"},{"action":"close_palette"},
+                {"action":"rotate_right"},{"action":"rotate_left"}]"#,
         )
         .unwrap();
         assert_eq!(steps[1], Action::Goto { index: 2 });
@@ -171,7 +176,8 @@ mod tests {
         assert_eq!(steps[38], Action::Revert);
         assert_eq!(steps[41], Action::PaletteQuery { query: "crop".into() });
         assert_eq!(steps[45], Action::PaletteActivate);
-        assert_eq!(steps.len(), 47);
+        assert_eq!(steps[47], Action::RotateRight);
+        assert_eq!(steps.len(), 49);
         let json = serde_json::to_string(&Action::SetCrop(Rect::new(1.0, 2.0, 3.0, 4.0))).unwrap();
         assert_eq!(json, r#"{"action":"set_crop","x":1.0,"y":2.0,"w":3.0,"h":4.0}"#);
         assert!(parse_script(r#"[{"action":"jump"}]"#).is_err());

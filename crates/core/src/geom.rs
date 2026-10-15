@@ -35,6 +35,11 @@ impl Size {
     pub const fn transpose(self) -> Self {
         Size::new(self.height, self.width)
     }
+
+    /// The size after `quarters` clockwise quarter turns.
+    pub fn rotate(self, quarters: u8) -> Self {
+        if quarters % 2 == 1 { self.transpose() } else { self }
+    }
 }
 
 impl From<(u32, u32)> for Size {
@@ -112,6 +117,20 @@ impl Rect {
     }
 }
 
+impl Rect {
+    /// This rectangle (inside an image of `size`) after turning the image clockwise by
+    /// `quarters` × 90°. Turning by `4 - quarters` in `size.rotate(quarters)` undoes it.
+    pub fn rotate(&self, quarters: u8, size: Size) -> Rect {
+        let (sw, sh) = (size.width, size.height);
+        match quarters % 4 {
+            1 => Rect::new(sh - self.bottom(), self.x, self.h, self.w),
+            2 => Rect::new(sw - self.right(), sh - self.bottom(), self.w, self.h),
+            3 => Rect::new(self.y, sw - self.right(), self.h, self.w),
+            _ => *self,
+        }
+    }
+}
+
 impl From<PixelRect> for Rect {
     fn from(p: PixelRect) -> Self {
         Rect::new(p.x as f32, p.y as f32, p.w as f32, p.h as f32)
@@ -173,6 +192,17 @@ impl ViewMap {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn rotate_rect_and_back() {
+        let (r, size) = (Rect::new(10.0, 20.0, 30.0, 40.0), Size::new(100.0, 60.0));
+        assert_eq!(r.rotate(1, size), Rect::new(0.0, 10.0, 40.0, 30.0));
+        assert_eq!(r.rotate(2, size), Rect::new(60.0, 0.0, 30.0, 40.0));
+        assert_eq!(r.rotate(3, size), Rect::new(20.0, 60.0, 40.0, 30.0));
+        for q in 0..4 {
+            assert_eq!(r.rotate(q, size).rotate(4 - q, size.rotate(q)), r, "{q}");
+        }
+    }
 
     #[test]
     fn fit_landscape_in_square() {

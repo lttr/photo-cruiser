@@ -25,6 +25,14 @@ pub fn render(src: &Decoded, edits: &EditStack, opts: RenderOpts) -> Result<Rgba
                 let p = scaled.to_pixels(img.dimensions()).ok_or(Error::EmptyCrop(*r))?;
                 img = image::imageops::crop_imm(&img, p.x, p.y, p.w, p.h).to_image();
             }
+            Op::Rotate { quarters } => {
+                img = match quarters % 4 {
+                    1 => image::imageops::rotate90(&img),
+                    2 => image::imageops::rotate180(&img),
+                    3 => image::imageops::rotate270(&img),
+                    _ => img,
+                };
+            }
         }
     }
     Ok(match opts.max_side {
@@ -55,6 +63,24 @@ mod tests {
         assert_eq!(out.dimensions(), (30, 40));
         assert_eq!(out.get_pixel(0, 0).0, [10, 20, 0, 255]);
         assert_eq!(out.get_pixel(29, 39).0, [39, 59, 0, 255]);
+    }
+
+    #[test]
+    fn rotate_after_crop() {
+        let crop = Op::Crop(Rect::new(10.0, 20.0, 30.0, 40.0));
+        let turned = |quarters| {
+            let edits = EditStack::default().with(crop.clone()).with(Op::Rotate { quarters });
+            render(&gradient(100, 100), &edits, RenderOpts::default()).unwrap()
+        };
+        // Clockwise: the crop's bottom-left corner ends up top-left.
+        let cw = turned(1);
+        assert_eq!(cw.dimensions(), (40, 30));
+        assert_eq!(cw.get_pixel(0, 0).0, [10, 59, 0, 255]);
+        let ccw = turned(3);
+        assert_eq!(ccw.get_pixel(0, 0).0, [39, 20, 0, 255]);
+        let half = turned(2);
+        assert_eq!(half.dimensions(), (30, 40));
+        assert_eq!(half.get_pixel(0, 0).0, [39, 59, 0, 255]);
     }
 
     #[test]

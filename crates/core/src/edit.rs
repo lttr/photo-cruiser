@@ -11,6 +11,8 @@ pub const EDIT_VERSION: u32 = 1;
 pub enum Op {
     /// Crop to a rectangle in source pixels (oriented, full resolution).
     Crop(Rect),
+    /// Turn clockwise by `quarters` × 90° (1–3), after the crop.
+    Rotate { quarters: u8 },
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -58,11 +60,32 @@ impl EditStack {
     }
 
     /// The crop, if any. A stack holds at most one.
-    #[allow(clippy::unnecessary_find_map)] // more ops will follow
     pub fn crop(&self) -> Option<Rect> {
         self.ops.iter().find_map(|op| match op {
             Op::Crop(r) => Some(*r),
+            _ => None,
         })
+    }
+
+    /// Clockwise quarter turns, 0–3. A stack holds at most one rotation, after the crop.
+    pub fn rotation(&self) -> u8 {
+        self.ops
+            .iter()
+            .find_map(|op| match op {
+                Op::Rotate { quarters } => Some(quarters % 4),
+                _ => None,
+            })
+            .unwrap_or(0)
+    }
+
+    /// Turn by `quarters` × 90° more (negative: counter-clockwise). A full turn removes
+    /// the rotation.
+    pub fn rotate(&mut self, quarters: i32) {
+        let q = (self.rotation() as i32 + quarters).rem_euclid(4) as u8;
+        self.ops.retain(|op| !matches!(op, Op::Rotate { .. }));
+        if q != 0 {
+            self.ops.push(Op::Rotate { quarters: q });
+        }
     }
 
     /// Replace the crop (`None` removes it). Crops never nest: the new one is in source
@@ -149,6 +172,19 @@ mod tests {
         assert_eq!(s.ops, [Op::Crop(Rect::new(2.0, 2.0, 8.0, 8.0))]);
         s.set_crop(None);
         assert!(s.is_empty());
+    }
+
+    #[test]
+    fn rotation_after_the_crop_and_normalised() {
+        let mut s = EditStack::default();
+        s.rotate(-1);
+        assert_eq!(s.ops, [Op::Rotate { quarters: 3 }]);
+        assert!(s.to_json().contains(r#""op": "rotate""#), "{}", s.to_json());
+        s.set_crop(Some(Rect::new(1.0, 1.0, 5.0, 5.0)));
+        s.rotate(2);
+        assert_eq!(s.ops, [Op::Crop(Rect::new(1.0, 1.0, 5.0, 5.0)), Op::Rotate { quarters: 1 }]);
+        s.rotate(-1);
+        assert_eq!((s.rotation(), s.ops.len()), (0, 1), "a full turn is no rotation");
     }
 
     #[test]
