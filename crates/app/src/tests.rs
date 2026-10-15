@@ -1230,6 +1230,9 @@ fn rotate_keys() {
     assert!(matches!(msg, Some(Message::Action(Action::Next))), "{msg:?}");
     let r = Key::Character("r".into());
     assert!(key_message(&r, &r, Modifiers::empty(), Modes::default()).is_none());
+    let u = Key::Character("u".into());
+    let msg = key_message(&u, &u, Modifiers::empty(), Modes::default());
+    assert!(matches!(msg, Some(Message::Action(Action::Undo))), "u is undo: {msg:?}");
 }
 
 #[test]

@@ -49,7 +49,7 @@ pub enum Action {
     /// Apply the selection as the photo's crop and leave crop mode (`Enter`, footer
     /// "Apply"). Leaving the photo with a selection applies it too.
     ApplyCrop,
-    /// Step through the current photo's edits (`Ctrl+Z`; `Ctrl+Shift+Z`, `Ctrl+Y`).
+    /// Step through the current photo's edits (`Ctrl+Z`, `u`; `Ctrl+Shift+Z`, `Ctrl+Y`).
     Undo,
     Redo,
     /// Turn the current photo 90° clockwise (`Shift+R`) / counter-clockwise (`Shift+L`). In the grid
