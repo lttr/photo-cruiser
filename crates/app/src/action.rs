@@ -57,7 +57,7 @@ pub enum Action {
     /// it is saved at once.
     RotateRight,
     RotateLeft,
-    /// Open a one-slider tool on the current photo (`E`: exposure, `D`: auto levels;
+    /// Open a one-slider tool on the current photo (`E`: exposure, `A`: auto levels;
     /// palette). It applies the tool's opening value (auto, for this photo) as one undoable
     /// step, once the photo is loaded. A tool already in the stack keeps its value. Closes when you leave the photo,
     /// crop or turn it.
@@ -72,8 +72,13 @@ pub enum Action {
     SetAdjust {
         value: f32,
     },
-    /// Back to the value the tool opened at (double-click on the slider).
-    ResetAdjust,
+    /// Back to the tool's auto value for this photo, the one it opened at (`A`, footer
+    /// "Auto", palette, double-click on the slider): one undoable step.
+    #[serde(alias = "reset_adjust")]
+    AutoAdjust,
+    /// Set the open tool to its neutral value, the photo as it was: Exposure 0 EV, Levels 0
+    /// (`0`, footer "No change", palette): one undoable step.
+    NeutralAdjust,
     /// Close the tool, keeping its value (`Enter`, footer "Done").
     CloseTool,
     /// Close the tool and drop what it did since it opened (`Esc`; undoable).
@@ -177,6 +182,7 @@ mod tests {
                 {"action":"palette_next"},{"action":"palette_prev"},{"action":"palette_activate"},{"action":"close_palette"},
                 {"action":"rotate_right"},{"action":"rotate_left"},{"action":"open_tool","tool":"exposure"},
                 {"action":"drag_adjust","value":0.5},{"action":"set_adjust","value":-1},{"action":"reset_adjust"},
+                {"action":"auto_adjust"},{"action":"neutral_adjust"},
                 {"action":"close_tool"},{"action":"cancel_tool"}]"#,
         )
         .unwrap();
@@ -203,7 +209,9 @@ mod tests {
         assert_eq!(steps[47], Action::RotateRight);
         assert_eq!(steps[49], Action::OpenTool { tool: Tool::Exposure });
         assert_eq!(steps[51], Action::SetAdjust { value: -1.0 });
-        assert_eq!(steps.len(), 55);
+        assert_eq!(steps[52], Action::AutoAdjust, "the old name still parses");
+        assert_eq!((&steps[53], &steps[54]), (&Action::AutoAdjust, &Action::NeutralAdjust));
+        assert_eq!(steps.len(), 57);
         let json = serde_json::to_string(&Action::SetCrop(Rect::new(1.0, 2.0, 3.0, 4.0))).unwrap();
         assert_eq!(json, r#"{"action":"set_crop","x":1.0,"y":2.0,"w":3.0,"h":4.0}"#);
         assert!(parse_script(r#"[{"action":"jump"}]"#).is_err());

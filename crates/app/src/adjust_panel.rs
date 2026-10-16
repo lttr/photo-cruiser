@@ -1,6 +1,6 @@
 //! The open tool's slider in the footer: a canvas, so it can tell a drag (live preview,
 //! [`Action::DragAdjust`]) from its end ([`Action::SetAdjust`], one undo step) and see a
-//! double-click ([`Action::ResetAdjust`]), which iced's slider can't.
+//! double-click ([`Action::AutoAdjust`]), which iced's slider can't.
 
 use crate::action::Action;
 use crate::message::Message;
@@ -16,7 +16,7 @@ const PAD: f32 = 8.0;
 /// The tool's shortcut, or `""`.
 pub fn key(tool: Tool) -> &'static str {
     match tool {
-        Tool::Levels => "D",
+        Tool::Levels => "A",
         Tool::Exposure => "E",
     }
 }
@@ -76,7 +76,7 @@ impl canvas::Program<Message> for Slider {
                 state.last_press = if double { None } else { Some((Instant::now(), pos)) };
                 if double {
                     state.dragging = false;
-                    Action::ResetAdjust
+                    Action::AutoAdjust
                 } else {
                     state.dragging = true;
                     state.value = self.locate(bounds, pos.x);

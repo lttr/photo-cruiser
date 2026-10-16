@@ -634,11 +634,15 @@ impl State {
                 None => self.error("drag_adjust: no tool is open".into()),
             },
             Action::SetAdjust { value } => self.set_adjust(*value),
-            Action::ResetAdjust => {
+            Action::AutoAdjust => {
                 if let Some(v) = self.tool.as_ref().and_then(|p| p.opening) {
                     self.set_adjust(v);
                 }
             }
+            Action::NeutralAdjust => match &self.tool {
+                Some(p) => self.set_adjust(p.tool.neutral()),
+                None => self.error("neutral_adjust: no tool is open".into()),
+            },
             Action::CloseTool => self.close_tool(),
             Action::CancelTool => {
                 if let Some(p) = self.tool.take() {

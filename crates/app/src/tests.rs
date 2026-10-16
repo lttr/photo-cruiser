@@ -1496,10 +1496,11 @@ fn update_exposure_opens_at_auto_drags_live_and_saves_on_leaving() {
     assert!(s.preview.is_some());
     s.apply(&Action::TogglePalette);
     let labels = palette_labels(&s);
-    for l in ["Exposure: done", "Exposure: cancel", "Exposure: reset"] {
+    for l in ["Exposure: done", "Exposure: cancel", "Exposure: no change"] {
         assert!(labels.contains(&l.into()), "{l} in {labels:?}");
     }
     assert!(!labels.contains(&"Exposure".into()), "already open");
+    assert!(!labels.contains(&"Exposure: auto".into()), "already at auto");
     s.apply(&Action::ClosePalette);
     assert!(s.tool.is_some());
 
@@ -1519,8 +1520,18 @@ fn update_exposure_opens_at_auto_drags_live_and_saves_on_leaving() {
     assert_eq!(exposure(&s), None, "undo again: as before the tool opened");
     s.apply(&Action::Redo);
     s.apply(&Action::SetAdjust { value: 1.0 });
-    s.apply(&Action::ResetAdjust);
-    assert_eq!(exposure(&s), Some(opening), "double-click: the opening value");
+    s.apply(&Action::AutoAdjust);
+    assert_eq!(exposure(&s), Some(opening), "auto: the opening value");
+    // No change: 0 EV, the photo as it was, one undoable step.
+    s.apply(&Action::NeutralAdjust);
+    assert_eq!((exposure(&s), s.tool.as_ref().unwrap().value(&s.stack())), (None, 0.0));
+    assert!(s.stack().is_empty() && !s.dirty(), "as it was");
+    s.apply(&Action::TogglePalette);
+    let labels = palette_labels(&s);
+    assert!(labels.contains(&"Exposure: auto".into()) && !labels.contains(&"Exposure: no change".into()));
+    s.apply(&Action::Undo);
+    assert_eq!(exposure(&s), Some(opening), "undo: back to auto");
+    assert!(s.tool.is_some());
     // Esc drops what the tool did.
     s.apply(&Action::CancelTool);
     assert!(s.tool.is_none() && s.stack().is_empty() && !s.dirty());
@@ -1589,8 +1600,12 @@ fn update_levels_opens_at_one_on_the_crop() {
     assert_eq!(s.stack(), crop, "opening is one step");
     s.apply(&Action::Redo);
     s.apply(&Action::SetAdjust { value: 2.0 });
-    s.apply(&Action::ResetAdjust);
-    assert_eq!(levels(&s), Some(1.0), "double-click: strength 1");
+    s.apply(&Action::AutoAdjust);
+    assert_eq!(levels(&s), Some(1.0), "auto: strength 1");
+    s.apply(&Action::NeutralAdjust);
+    assert_eq!(s.stack(), crop, "no change: strength 0");
+    s.apply(&Action::Undo);
+    assert_eq!(levels(&s), Some(1.0));
     s.apply(&Action::SetAdjust { value: 0.0 });
     assert_eq!(s.stack(), crop, "strength 0 is no step");
     s.apply(&Action::SetAdjust { value: 1.5 });
@@ -1613,8 +1628,44 @@ fn tool_keys() {
         action(Key::Character("e".into()), Modes::default()),
         Action::OpenTool { tool: Tool::Exposure }
     );
-    assert_eq!(action(Key::Character("D".into()), Modes::default()), Action::OpenTool { tool: Tool::Levels });
+    assert_eq!(action(Key::Character("a".into()), Modes::default()), Action::OpenTool { tool: Tool::Levels });
+    assert_eq!(
+        key_message(
+            &Key::Character("d".into()),
+            &Key::Character("d".into()),
+            Modifiers::empty(),
+            Modes::default()
+        )
+        .map(|_| ()),
+        None,
+        "D is free"
+    );
     assert_eq!(action(Key::Named(Named::Escape), tool), Action::CancelTool);
+    let shift_a =
+        |m| key_message(&Key::Character("a".into()), &Key::Character("A".into()), Modifiers::SHIFT, m);
+    assert!(matches!(shift_a(tool), Some(Message::Action(Action::AutoAdjust))));
+    assert!(matches!(
+        shift_a(Modes::default()),
+        Some(Message::Action(Action::OpenTool { tool: Tool::Levels }))
+    ));
+    assert_eq!(action(Key::Character("0".into()), tool), Action::NeutralAdjust);
+    // Czech layout: the key under 0 is `é`, with Shift `0`.
+    let shifted =
+        key_message(&Key::Character("é".into()), &Key::Character("0".into()), Modifiers::SHIFT, tool);
+    assert!(matches!(shifted, Some(Message::Action(Action::NeutralAdjust))), "{shifted:?}");
+    assert_eq!(
+        key_message(
+            &Key::Character("0".into()),
+            &Key::Character("0".into()),
+            Modifiers::empty(),
+            Modes::default()
+        )
+        .map(|_| ()),
+        None,
+        "no tool: nothing"
+    );
+    let crop = Modes { crop: true, ..Modes::default() };
+    assert_eq!(action(Key::Character("a".into()), crop), Action::NextAspect, "crop: A is the aspect");
     assert_eq!(action(Key::Named(Named::Enter), tool), Action::CloseTool);
     assert_eq!(action(Key::Named(Named::Escape), Modes { fullscreen: true, ..tool }), Action::CancelTool);
     let help = Modes { help: true, ..tool };
@@ -1636,6 +1687,19 @@ fn exposure_slider_drag_and_double_click() {
     let target = Some(Target::Point(Point::new(b.x + 20.0, b.center_y())));
     h.run(Interaction::Mouse(Mouse::Click { button: Button::Left, target: target.clone() }));
     h.run(Interaction::Mouse(Mouse::Click { button: Button::Left, target }));
+    assert_eq!(h.ev(), opening);
+    // The panel's two resets: No change (0 EV), then Auto (the opening value).
+    let click = |h: &mut Harness<_>, id| {
+        let target = Some(Target::Point(h.bounds(id).unwrap().center()));
+        h.run(Interaction::Mouse(Mouse::Click { button: Button::Left, target }));
+    };
+    click(&mut h, "tool-neutral");
+    assert_eq!(h.ev(), "+0.00 EV");
+    click(&mut h, "tool-auto");
+    assert_eq!(h.ev(), opening);
+    h.keys(Key::Character("0".into()), 1);
+    assert_eq!(h.ev(), "+0.00 EV");
+    h.keys(Key::Character("A".into()), 1); // Shift+A: what the simulator sends for it
     assert_eq!(h.ev(), opening);
     h.keys(Key::Named(Named::Enter), 1);
     assert!(h.bounds("tool").is_none(), "Enter: done");

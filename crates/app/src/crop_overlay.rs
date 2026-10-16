@@ -83,8 +83,10 @@ pub const SHORTCUTS: &[(&str, &str)] = &[
     ("Ctrl+K", "Find an action by name"),
     ("Ctrl+O", "Open folder"),
     ("C", "Crop on / off"),
-    ("E", "Exposure (opens at auto); double-click the slider: back to auto"),
-    ("D", "Auto levels, for documents (opens at strength 1; 2: whiter paper)"),
+    ("E", "Exposure (opens at auto)"),
+    ("A", "Auto levels, for documents (opens at strength 1; 2: whiter paper)"),
+    ("Shift+A", "Tool: back to auto (or double-click the slider)"),
+    ("0", "Tool: no change (the photo as it was)"),
     ("Shift+R  Shift+L", "Turn right / left"),
     ("Ctrl+Z  u", "Undo"),
     ("Ctrl+Shift+Z  Ctrl+Y", "Redo"),
@@ -141,6 +143,7 @@ pub fn key_message(key: &Key, modified: &Key, mods: keyboard::Modifiers, m: Mode
             "u" => Some(Action::Undo),
             "R" => Some(Action::RotateRight),
             "L" => Some(Action::RotateLeft),
+            "A" if m.tool => Some(Action::AutoAdjust),
             _ => None,
         };
         if let Some(action) = action {
@@ -180,10 +183,14 @@ pub fn key_message(key: &Key, modified: &Key, mods: keyboard::Modifiers, m: Mode
         Key::Character(c) if plain && c.eq_ignore_ascii_case("e") => {
             Action::OpenTool { tool: Tool::Exposure }.into()
         }
-        Key::Character(c) if plain && c.eq_ignore_ascii_case("d") => {
+        Key::Character(c) if plain && m.crop && c.eq_ignore_ascii_case("a") => Action::NextAspect.into(),
+        Key::Character(c) if plain && c.eq_ignore_ascii_case("a") => {
             Action::OpenTool { tool: Tool::Levels }.into()
         }
-        Key::Character(c) if plain && m.crop && c.eq_ignore_ascii_case("a") => Action::NextAspect.into(),
+        // `0` typed or the key under it (Czech layout: `é`, Shift gives `0`).
+        Key::Character(c) if plain && m.tool && (c == "0" || modified.as_ref() == Key::Character("0")) => {
+            Action::NeutralAdjust.into()
+        }
         Key::Character(c) if plain && m.crop && c.eq_ignore_ascii_case("x") => Action::SwapAspect.into(),
         Key::Character(c) if plain && c.eq_ignore_ascii_case("f") => Action::ToggleFullscreen.into(),
         Key::Character(c) if plain && c.eq_ignore_ascii_case("n") => Action::ToggleNames.into(),

@@ -8,8 +8,9 @@
 //! `help` (shortcuts panel), `about`, `aspects` (the crop's aspect buttons in the footer),
 //! `aspect-panel` and `aspect-input` (the custom aspect field), `apply` (the crop's
 //! Apply button), `failed` (the dot on a grid cell whose save failed), `palette`,
-//! `palette-input` and `palette-focus` (the command palette, its field, its focused row), `tool`
-//! and `tool-slider` (the open tool's panel in the footer, its slider).
+//! `palette-input` and `palette-focus` (the command palette, its field, its focused row), `tool`,
+//! `tool-slider`, `tool-auto` and `tool-neutral` (the open tool's panel in the footer, its
+//! slider, its Auto and No change buttons).
 
 use crate::action::Action;
 use crate::adjust_panel::Slider;
@@ -354,10 +355,26 @@ fn tool_panel<'a>(s: &'a State, p: &'a ToolPanel) -> Element<'a, Message> {
         .padding([3, 10])
         .style(theme::flat(true))
         .on_press(Action::CloseTool.into());
-    let content =
-        row![text(p.tool.label()).size(13), slider, text(p.tool.format(value)).size(13).width(64), done,]
-            .spacing(10)
-            .align_y(Center);
+    // The two resets, each greyed out while the slider is already there.
+    let reset = |label: &'static str, to: Option<f32>, action: Action, id: &'static str| {
+        let b = button(text(label).size(13))
+            .padding([3, 8])
+            .style(theme::flat(false))
+            .on_press_maybe(to.filter(|v| *v != value).map(|_| action.into()));
+        container(b).id(id)
+    };
+    let auto = reset("Auto", p.opening, Action::AutoAdjust, "tool-auto");
+    let neutral =
+        reset("No change", p.opening.map(|_| p.tool.neutral()), Action::NeutralAdjust, "tool-neutral");
+    let content = row![
+        text(p.tool.label()).size(13),
+        slider,
+        text(p.tool.format(value)).size(13).width(64),
+        row![auto, neutral].spacing(2),
+        done,
+    ]
+    .spacing(10)
+    .align_y(Center);
     container(content).padding([0, 8]).id("tool").into()
 }
 

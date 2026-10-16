@@ -135,7 +135,10 @@ pub fn flat(active: bool) -> impl Fn(&Theme, btn::Status) -> btn::Style {
         };
         btn::Style {
             background: bg.map(|c| Background::Color(color(c))),
-            text_color: color(t.background.on),
+            text_color: match status {
+                btn::Status::Disabled => Color { a: 0.4, ..color(t.background.on) },
+                _ => color(t.background.on),
+            },
             border: Border::default().rounded(8),
             ..btn::Style::default()
         }

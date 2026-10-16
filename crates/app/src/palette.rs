@@ -143,8 +143,13 @@ fn edits(s: &State, c: &mut Vec<Command>) {
         let label = p.tool.label();
         c.push(cmd(format!("{label}: done"), "Enter", Action::CloseTool));
         c.push(cmd(format!("{label}: cancel"), "Esc", Action::CancelTool));
-        if p.opening.is_some() {
-            c.push(cmd(format!("{label}: reset"), "", Action::ResetAdjust));
+        // Left out when the slider is already there.
+        let value = p.value(&s.stack());
+        if p.opening.is_some_and(|o| o != value) {
+            c.push(cmd(format!("{label}: auto"), "Shift+A", Action::AutoAdjust));
+        }
+        if p.opening.is_some() && value != p.tool.neutral() {
+            c.push(cmd(format!("{label}: no change"), "0", Action::NeutralAdjust));
         }
     }
     c.push(cmd("Turn right", "Shift+R", Action::RotateRight));

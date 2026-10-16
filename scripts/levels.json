@@ -3,5 +3,5 @@
   { "action": "set_crop", "x": 60, "y": 0, "w": 260, "h": 240 },
   { "action": "open_tool", "tool": "levels" },
   { "action": "set_adjust", "value": 2 },
-  { "action": "reset_adjust" }
+  { "action": "auto_adjust" }
 ]
