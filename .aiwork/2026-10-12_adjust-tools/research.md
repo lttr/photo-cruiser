@@ -4,6 +4,7 @@ references:
   - https://docs.darktable.org/usermanual/development/en/overview/workflow/process/
   - https://docs.darktable.org/usermanual/development/en/module-reference/processing-modules/exposure/
   - https://docs.darktable.org/usermanual/development/en/module-reference/processing-modules/sigmoid/
+  - https://docs.darktable.org/usermanual/development/en/module-reference/processing-modules/rgb-levels/
   - https://discuss.pixls.us/t/can-you-edit-jpeg-with-a-scene-referred-workflow/36245
   - https://discuss.pixls.us/t/quick-and-simple-settings-for-darktable-to-get-great-results-quickly/36987
   - https://discuss.pixls.us/t/how-to-get-darktable-sharpness-to-match-lightroom/35125
@@ -38,6 +39,7 @@ advise against adding a scene-referred tone curve on top. So the app's baseline 
 | Sharpen | amount 0.5 (radius 2, threshold 0.5 fixed) | 0–1 | sharpen defaults |
 | Dehaze | strength 0.2 (distance 0.2 fixed) | 0–1 | haze removal defaults |
 | Contrast | ~1.2 (unverified guess) | 1.0–2.0 | sigmoid default 1.5 is meant for raws; "neutral gray" preset uses 1.22 |
+| Auto levels | strength 1: auto black/white point per channel, 0.5% clipped at each end | strength 0–2: 0–1 blends from original, 1–2 raises clip to 5% | rgb levels "auto", independent channels; for photos of documents |
 
 Color balance rgb vibrance is `v·(1 − Y^|v|)`, which favours low-chroma pixels.
 
@@ -53,3 +55,4 @@ Color balance rgb vibrance is `v·(1 − Y^|v|)`, which favours low-chroma pixel
 - No community consensus values were found for haze strength or sharpen amount.
 - The raws-only auto-apply comes from reading darktable's source, not from testing.
 - The Contrast opening value (~1.2) needs checking on real photos.
+- The darktable manual doesn't say which percentiles rgb levels "auto" clips at; 0.5% is a guess.
