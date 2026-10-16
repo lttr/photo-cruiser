@@ -145,6 +145,19 @@ pub fn flat(active: bool) -> impl Fn(&Theme, btn::Status) -> btn::Style {
     }
 }
 
+/// The footer's press-and-hold Original label: a button, pressed while `held`.
+pub fn held(held: bool) -> impl Fn(&Theme) -> container::Style {
+    move |_| {
+        let t = get();
+        container::Style {
+            background: Some(color(if held { t.button.pressed } else { t.button.base }).into()),
+            text_color: Some(color(t.background.on)),
+            border: Border::default().rounded(8),
+            ..container::Style::default()
+        }
+    }
+}
+
 /// A grid cell: an accent border when `selected` (the current photo), a tint on hover.
 /// Unpadded (justified) cells are plain: the photo covers them.
 pub fn cell(selected: bool, padded: bool) -> impl Fn(&Theme, btn::Status) -> btn::Style {

@@ -10,10 +10,10 @@
 //! Apply button), `failed` (the dot on a grid cell whose save failed), `palette`,
 //! `palette-input` and `palette-focus` (the command palette, its field, its focused row), `tool`,
 //! `tool-slider`, `tool-auto` and `tool-neutral` (the open tool's panel in the footer, its
-//! slider, its Auto and No change buttons).
+//! slider, its Auto and No change buttons), `original-button` (press and hold: the original).
 
 use crate::action::Action;
-use crate::adjust_panel::Slider;
+use crate::adjust_panel::{Hold, Slider};
 use crate::app::App;
 use crate::crop_overlay::{Modes, Overlay, SHORTCUTS};
 use crate::grid::LABEL;
@@ -57,13 +57,18 @@ pub fn view(app: &App) -> Element<'_, Message> {
                 if let Some(under) = s.underlay() {
                     layers = layers.push(img(under, 1.0));
                 }
-                match (&s.preview, s.fade_progress()) {
+                layers = match (&s.preview, s.fade_progress()) {
                     // The open tool's live preview.
                     (Some(p), _) if p.index == s.index => layers.push(img(&p.handle, 1.0)),
                     (_, Some((from, t))) => layers.push(img(from, 1.0 - t)).push(img(&shown.handle, t)),
                     _ => layers.push(img(&shown.handle, 1.0)),
+                };
+                // Held: the original over it all (the edited image stays drawn, so it is
+                // still on the GPU when let go).
+                if let Some(original) = s.original_handle() {
+                    layers = layers.push(img(original, 1.0));
                 }
-                .into()
+                layers.into()
             }
             // First image of a folder still decoding: nothing to show yet.
             None => space().into(),
@@ -87,6 +92,7 @@ pub fn view(app: &App) -> Element<'_, Message> {
             crop: s.mode == Mode::Crop,
             tool: s.tool.is_some(),
             fullscreen: s.fullscreen,
+            original: s.original,
             grid,
         },
         selection: s.crop.selection,
@@ -114,6 +120,12 @@ pub fn view(app: &App) -> Element<'_, Message> {
             .style(theme::flat(true))
             .on_press_maybe(s.crop.selection.map(|_| Action::ApplyCrop.into()));
         footer = footer.push(container(apply).padding([0, 8]).id("apply"));
+    }
+    // Press and hold to see the photo without its edits.
+    if !grid && s.mode == Mode::Browse && (s.tool.is_some() || !s.stack().is_empty()) {
+        let label = container(text("Original").size(13)).padding([3, 10]).style(theme::held(s.original));
+        let hold = stack![label, canvas(Hold).width(Fill).height(Fill)];
+        footer = footer.push(container(hold).padding([0, 8]).id("original-button"));
     }
     if let (Some(p), false) = (&s.tool, grid) {
         footer = footer.push(tool_panel(s, p));

@@ -6,7 +6,8 @@ use crate::message::Message;
 use crate::script::{self, Runner, ScriptConfig};
 use crate::settings::Settings;
 use crate::state::{
-    DEFAULT_MAX_SIDE, DEFAULT_TRANSITION, Effect, Loaded, State, decode_job, io_job, size_job, thumb_job,
+    DEFAULT_MAX_SIDE, DEFAULT_TRANSITION, Effect, Loaded, State, decode_job, io_job, original_job, size_job,
+    thumb_job,
 };
 use crate::{menu, palette, theme, view};
 use iced::widget::operation::AbsoluteOffset;
@@ -97,6 +98,8 @@ pub struct App {
     /// The main image last asked to be put on the GPU.
     uploading: Option<iced_runtime::core::image::Id>,
     allocation: Option<iced_runtime::image::Allocation>,
+    /// Keeps the current photo's original on the GPU, ready to be shown.
+    original_allocation: Option<iced_runtime::image::Allocation>,
 }
 
 impl App {
@@ -112,6 +115,7 @@ impl App {
             resumed: None,
             uploading: None,
             allocation: None,
+            original_allocation: None,
             settings,
             icon: {
                 let (w, h, rgba) = icon_rgba();
@@ -173,6 +177,15 @@ impl App {
                 self.state.finish(job, result);
                 Task::none()
             }
+            Message::Original(job, result) => {
+                self.state.finish_original(job, result);
+                // Onto the GPU now, so holding the key shows it at once.
+                if let Some(h) = self.state.original_ready().cloned() {
+                    let id = h.id();
+                    return iced_runtime::image::allocate(h).map(move |r| Message::Uploaded(id, r.ok()));
+                }
+                Task::none()
+            }
             Message::Thumb(job, result) => {
                 self.state.finish_thumb(job, result);
                 Task::none()
@@ -194,11 +207,13 @@ impl App {
                 Task::none()
             }
             Message::Uploaded(id, allocation) => {
-                if let Some(a) = allocation
-                    && self.state.uploaded(id)
-                {
-                    // Keeps it on the GPU while it is the main image.
-                    self.allocation = Some(a);
+                if let Some(a) = allocation {
+                    if self.state.uploaded(id) {
+                        // Keeps it on the GPU while it is the main image.
+                        self.allocation = Some(a);
+                    } else if self.state.original_ready().is_some_and(|h| h.id() == id) {
+                        self.original_allocation = Some(a);
+                    }
                 }
                 Task::none()
             }
@@ -305,6 +320,12 @@ impl App {
                 Task::perform(on_thread(decode), move |r| Message::Decoded(job, r.unwrap_or_else(panicked)))
             })
             .collect();
+        tasks.extend(std::iter::from_fn(|| self.state.next_original_job()).map(|job| {
+            let j = job.clone();
+            Task::perform(on_thread(move || original_job(&j)), move |r| {
+                Message::Original(job.clone(), r.unwrap_or_else(panicked))
+            })
+        }));
         tasks.extend(std::iter::from_fn(|| self.state.next_thumb_job()).map(|(job, path)| {
             let decode = move || thumb_job(&path, job.side);
             Task::perform(on_thread(decode), move |r| Message::Thumb(job, r.unwrap_or_else(panicked)))

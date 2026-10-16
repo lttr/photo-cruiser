@@ -33,6 +33,8 @@ pub struct Modes {
     /// A one-slider tool is open (`Enter` closes it, `Esc` cancels it).
     pub tool: bool,
     pub fullscreen: bool,
+    /// The original is held to be seen (its key's release ends it).
+    pub original: bool,
     /// The grid shows (not a single photo).
     pub grid: bool,
 }
@@ -93,6 +95,7 @@ pub const SHORTCUTS: &[(&str, &str)] = &[
     ("Ctrl+S", "Save now (leaving a photo saves it)"),
     ("R", "Crop: next aspect ratio (original, free, 1:1, 3:2, …)"),
     ("X", "Crop: portrait / landscape"),
+    ("O  \\  (hold)", "Show the original photo, without edits"),
     ("F  F11", "Full screen on / off"),
     ("N", "File names on / off"),
     ("Z", "Grid: small / big thumbnails / justified"),
@@ -144,6 +147,7 @@ pub fn key_message(key: &Key, modified: &Key, mods: keyboard::Modifiers, m: Mode
             "R" => Some(Action::RotateRight),
             "L" => Some(Action::RotateLeft),
             "A" if m.tool => Some(Action::AutoAdjust),
+            "\\" if !m.grid && !m.crop => Some(Action::ShowOriginal { on: true }),
             _ => None,
         };
         if let Some(action) = action {
@@ -196,8 +200,17 @@ pub fn key_message(key: &Key, modified: &Key, mods: keyboard::Modifiers, m: Mode
         Key::Character(c) if plain && c.eq_ignore_ascii_case("f") => Action::ToggleFullscreen.into(),
         Key::Character(c) if plain && c.eq_ignore_ascii_case("n") => Action::ToggleNames.into(),
         Key::Character(c) if plain && c.eq_ignore_ascii_case("z") => Action::NextLayout.into(),
+        Key::Character(c) if plain && !m.grid && !m.crop && c.eq_ignore_ascii_case("o") => {
+            Action::ShowOriginal { on: true }.into()
+        }
         _ => return None,
     })
+}
+
+/// A key let go: releasing `O` or `\` ends showing the original.
+pub fn key_release_message(key: &Key, modified: &Key, m: Modes) -> Option<Message> {
+    let original = |k: &Key| matches!(k, Key::Character(c) if c.eq_ignore_ascii_case("o") || c == "\\");
+    (m.original && (original(key) || original(modified))).then(|| Action::ShowOriginal { on: false }.into())
 }
 
 impl canvas::Program<Message> for Overlay {
@@ -211,8 +224,19 @@ impl canvas::Program<Message> for Overlay {
         cursor: Cursor,
     ) -> Option<canvas::Action<Message>> {
         let (kind, pos) = match event {
+            // Held: the key repeats, but it is already showing.
+            Event::Keyboard(keyboard::Event::KeyPressed { repeat: true, .. }) if self.modes.original => {
+                return None;
+            }
             Event::Keyboard(keyboard::Event::KeyPressed { key, modified_key, modifiers, .. }) => {
                 return key_message(key, modified_key, *modifiers, self.modes).map(canvas::Action::publish);
+            }
+            Event::Keyboard(keyboard::Event::KeyReleased { key, modified_key, .. }) => {
+                return key_release_message(key, modified_key, self.modes).map(canvas::Action::publish);
+            }
+            // The window lost the keyboard: the release may never come.
+            Event::Window(iced::window::Event::Unfocused) if self.modes.original => {
+                return Some(canvas::Action::publish(Action::ShowOriginal { on: false }.into()));
             }
             Event::Window(iced::window::Event::RedrawRequested(_)) if self.body != Some(bounds.size()) => {
                 return Some(canvas::Action::publish(Message::Body(bounds.size())));

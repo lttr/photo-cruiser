@@ -129,3 +129,44 @@ impl canvas::Program<Message> for Slider {
         }
     }
 }
+
+/// Transparent layer over the footer's Original label: pressed, it shows the original
+/// ([`Action::ShowOriginal`]) until the button is let go, wherever the pointer is then.
+/// (iced's `mouse_area` only sees a release over itself.)
+pub struct Hold;
+
+#[derive(Default)]
+pub struct HoldState {
+    pressed: bool,
+}
+
+impl canvas::Program<Message> for Hold {
+    type State = HoldState;
+
+    fn update(
+        &self,
+        state: &mut HoldState,
+        event: &Event,
+        bounds: Rectangle,
+        cursor: Cursor,
+    ) -> Option<canvas::Action<Message>> {
+        let on = match event {
+            Event::Mouse(mouse::Event::ButtonPressed(Button::Left)) if cursor.is_over(bounds) => true,
+            Event::Mouse(mouse::Event::ButtonReleased(Button::Left)) if state.pressed => false,
+            _ => return None,
+        };
+        state.pressed = on;
+        Some(canvas::Action::publish(Action::ShowOriginal { on }.into()).and_capture())
+    }
+
+    fn draw(&self, _: &HoldState, _: &Renderer, _: &Theme, _: Rectangle, _: Cursor) -> Vec<Geometry> {
+        vec![]
+    }
+
+    fn mouse_interaction(&self, state: &HoldState, bounds: Rectangle, cursor: Cursor) -> Interaction {
+        match state.pressed || cursor.is_over(bounds) {
+            true => Interaction::Pointer,
+            false => Interaction::default(),
+        }
+    }
+}

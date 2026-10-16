@@ -18,7 +18,9 @@ use crate::crop_overlay::Modes;
 use crate::grid::Layout;
 use crate::message::Message;
 use crate::settings::Settings;
-use crate::state::{Display, Effect, Mode, State, View, decode_job, io_job, size_job, thumb_job};
+use crate::state::{
+    Display, Effect, Mode, State, View, decode_job, io_job, original_job, size_job, thumb_job,
+};
 use iced::futures::channel::mpsc;
 use iced::keyboard::{Key, key::Named};
 use iced::mouse::Button;
@@ -85,6 +87,10 @@ fn settle(s: &mut State) {
         }
         while let Some((job, path)) = s.next_thumb_job() {
             s.finish_thumb(job, thumb_job(&path, job.side));
+        }
+        while let Some(job) = s.next_original_job() {
+            let r = original_job(&job);
+            s.finish_original(job, r);
         }
         if s.is_idle() {
             break;
@@ -1788,4 +1794,111 @@ fn update_tool_images_never_blank_or_stale() {
     s.apply(&Action::Next);
     settle(&mut s);
     assert!(s.underlay().is_none());
+}
+
+#[test]
+fn update_hold_to_see_the_original() {
+    use photo_cruiser_core::Tool;
+    let mut s = opened(&fixtures());
+    s.apply(&Action::ShowPhoto { index: Some(1) }); // img2.jpg, 320×240
+    settle(&mut s);
+    // Unedited: it already is the original; nothing to fetch.
+    s.apply(&Action::ShowOriginal { on: true });
+    assert!(s.original && s.original_handle().is_none() && s.original_ready().is_none());
+    // Cropped and brightened: the original is fetched ahead, whole and without edits.
+    s.apply(&Action::SetCrop(Rect::new(0.0, 0.0, 100.0, 80.0)));
+    s.apply(&Action::ApplyCrop);
+    s.apply(&Action::OpenTool { tool: Tool::Exposure });
+    s.apply(&Action::SetAdjust { value: 1.5 });
+    settle(&mut s);
+    assert!(!s.original, "any other action ends it");
+    let ready = s.original_ready().expect("fetched ahead").id();
+    s.apply(&Action::ShowOriginal { on: true });
+    assert_eq!(s.original_handle().map(|h| h.id()), Some(ready), "shows at once");
+    assert_eq!(s.image_handle().map(|h| h.id()), Some(ready), "on top");
+    assert!(s.tool.is_some(), "with the tool open");
+    assert!(s.status().contains("original"), "{}", s.status());
+    let v = serde_json::to_value(s.dump(None, None)).unwrap();
+    assert_eq!(v["original"], true);
+    let iced::widget::image::Handle::Rgba { width, height, .. } = s.original_handle().unwrap() else {
+        panic!()
+    };
+    assert_eq!((*width, *height), (320, 240), "uncropped");
+    s.apply(&Action::ShowOriginal { on: false });
+    assert!(s.original_handle().is_none());
+    assert_eq!(s.stack().adjust(Tool::Exposure), Some(1.5), "the edits are untouched");
+    s.apply(&Action::ShowOriginal { on: true });
+    s.apply(&Action::DragAdjust { value: 0.2 });
+    assert!(s.original_handle().is_none(), "anything else ends it");
+    // Not in crop mode, not in the grid.
+    s.apply(&Action::ToggleCrop);
+    s.apply(&Action::ShowOriginal { on: true });
+    assert!(!s.original);
+    s.apply(&Action::ShowGrid);
+    s.apply(&Action::ShowOriginal { on: true });
+    assert!(!s.original);
+    // Saved: the original comes from the backup.
+    settle(&mut s);
+    s.apply(&Action::ShowPhoto { index: Some(1) });
+    settle(&mut s);
+    assert!(s.backup().is_some());
+    s.apply(&Action::ShowOriginal { on: true });
+    settle(&mut s);
+    let iced::widget::image::Handle::Rgba { width, .. } = s.original_handle().unwrap() else { panic!() };
+    assert_eq!(*width, 320, "from the backup, not the saved crop");
+    assert!(s.errors.is_empty(), "{:?}", s.errors);
+}
+
+#[test]
+fn original_key_and_button_held() {
+    use crate::crop_overlay::{key_message, key_release_message};
+    use iced::keyboard::Modifiers;
+    let photo = Modes::default();
+    let on =
+        |k: &str, m| key_message(&Key::Character(k.into()), &Key::Character(k.into()), Modifiers::empty(), m);
+    for k in ["o", "O", "\\"] {
+        assert!(matches!(on(k, photo), Some(Message::Action(Action::ShowOriginal { on: true }))), "{k}");
+    }
+    assert!(
+        on("o", Modes { grid: true, ..photo }).is_none() && on("o", Modes { crop: true, ..photo }).is_none()
+    );
+    let off = |k: &str, m| key_release_message(&Key::Character(k.into()), &Key::Character(k.into()), m);
+    assert!(off("o", photo).is_none(), "a release while not held: nothing (it would close the menu)");
+    let held = Modes { original: true, ..photo };
+    assert!(matches!(off("o", held), Some(Message::Action(Action::ShowOriginal { on: false }))));
+    assert!(off("x", held).is_none());
+
+    // Through the widget tree: an exposed photo, then O down / up and the footer button.
+    let mut h = harness(); // img1.png
+    h.until("img1 shown", |h| h.bounds("photo").is_some());
+    h.keys(Key::Character("e".into()), 1);
+    h.until("slider", |h| h.bounds("tool-slider").is_some());
+    h.emu.update(&h.prog, Action::SetAdjust { value: 2.0 }.into());
+    h.until("Original button", |h| h.bounds("original-button").is_some());
+    let centre = h.bounds("body").unwrap().center();
+    let edited = mean(&h.snapshot("edited"), centre);
+    let press = |h: &mut Harness<_>, event| {
+        let messages: Vec<Message> = {
+            let mut sim = h.sim();
+            sim.simulate([event]);
+            sim.into_messages().collect()
+        };
+        assert_eq!(messages.len(), 1, "{messages:?}");
+        h.emu.update(&h.prog, messages[0].clone());
+    };
+    press(&mut h, iced_test::simulator::press_key(Key::Character("o".into()), None));
+    h.until("the original", |h| h.has_text("original, without edits"));
+    let original = mean(&h.snapshot("original"), centre);
+    assert!(original < edited - 20.0, "the original is darker than +2 EV: {original} vs {edited}");
+    press(&mut h, iced_test::simulator::release_key(Key::Character("o".into())));
+    assert!(!h.has_text("original, without edits"), "{}", h.status());
+    assert!((mean(&h.snapshot("again"), centre) - edited).abs() < 2.0, "edits back on release");
+    // The footer button: down shows it, up anywhere (here: over the photo) ends it.
+    let b = h.bounds("original-button").unwrap().center();
+    h.run(Interaction::Mouse(Mouse::Press { button: Button::Left, target: Some(Target::Point(b)) }));
+    assert!(h.has_text("original, without edits"));
+    h.run(Interaction::Mouse(Mouse::Move(Target::Point(centre))));
+    h.run(Interaction::Mouse(Mouse::Release { button: Button::Left, target: Some(Target::Point(centre)) }));
+    assert!(!h.has_text("original, without edits"));
+    assert!(h.bounds("tool").is_some(), "the tool stays open");
 }

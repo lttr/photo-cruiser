@@ -27,6 +27,8 @@ pub enum Message {
     CloseRequested,
     /// A background decode finished.
     Decoded(Job, Loaded),
+    /// A photo's original (for showing it without edits) finished decoding.
+    Original(crate::state::OriginalJob, Loaded),
     /// A grid thumbnail finished.
     Thumb(ThumbJob, Loaded),
     /// Photo sizes probed (`None`: unreadable, or the probe thread died).

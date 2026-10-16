@@ -1,0 +1,4 @@
+[
+  { "action": "show_photo", "index": 0 },
+  { "action": "show_original", "on": true }
+]

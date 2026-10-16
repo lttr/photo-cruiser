@@ -81,6 +81,31 @@ impl Picture {
 
 pub type Loaded = Result<Picture, String>;
 
+/// Decode a photo's original file (its backup, once saved) for showing it without edits,
+/// at most `side` px.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct OriginalJob {
+    pub index: usize,
+    pub path: PathBuf,
+    pub side: u32,
+}
+
+/// Run an [`OriginalJob`] (blocking).
+pub fn original_job(job: &OriginalJob) -> Loaded {
+    let d = photo_cruiser_core::decode::decode_max_side(&job.path, Some(job.side))
+        .map_err(|e| e.to_string().trim_end().to_string())?;
+    let (w, h) = d.image.dimensions();
+    Ok(Picture { source: d.source_size(), handle: Handle::from_rgba(w, h, d.image.into_raw()), base: None })
+}
+
+/// The current photo's original, without any edits (what holding `O` shows).
+#[derive(Clone, Debug)]
+struct Original {
+    job: OriginalJob,
+    /// `None` while it decodes.
+    image: Option<Loaded>,
+}
+
 /// A loader job: the photo (or its original, for a full decode) and the edits to render.
 #[derive(Clone, Debug)]
 pub struct LoadJob {
@@ -374,6 +399,11 @@ pub struct State {
     /// The open one-slider tool.
     pub tool: Option<ToolPanel>,
     pub preview: Option<Preview>,
+    /// The original is held to be seen (`O`, `\`, the footer's Original button).
+    pub original: bool,
+    /// The current photo's original file, decoded (or decoding) for that. Fetched ahead
+    /// for an edited photo, so holding the key shows it at once.
+    original_image: Option<Original>,
     /// Fixed time for tests (the preview's pacing); `None`: the real clock.
     pub clock: Option<Instant>,
     /// The image area's top image as last seen: photo index, display geometry, handle.
@@ -424,6 +454,8 @@ impl State {
             notice: None,
             tool: None,
             preview: None,
+            original: false,
+            original_image: None,
             clock: None,
             top: None,
             under: None,
@@ -462,7 +494,9 @@ impl State {
         let side = self.layout.thumb_side();
         let thumbs = self.view != View::Grid || self.thumbs.is_idle(self.visible(), self.len(), side);
         let sizes = self.layout != grid::Layout::Justified || self.sizes.is_done();
+        let original = self.original_image.as_ref().is_some_and(|o| o.image.is_none());
         self.loader.is_idle(self.index, self.len())
+            && !original
             && self.fade_progress().is_none()
             && thumbs
             && sizes
@@ -587,6 +621,10 @@ impl State {
             | Action::PaletteActivate => self.palette.take(),
             _ => None,
         };
+        // Only while it is held: anything else ends it (a key released elsewhere).
+        if !matches!(action, Action::ShowOriginal { .. }) {
+            self.original = false;
+        }
         let effect = self.act(action);
         self.sync_display();
         self.sync_tool();
@@ -748,6 +786,10 @@ impl State {
                 None => self.error("neutral_adjust: no tool is open".into()),
             },
             Action::CloseTool => self.close_tool(),
+            Action::ShowOriginal { on } => {
+                self.original =
+                    *on && self.view == View::Photo && self.mode == Mode::Browse && self.len() > 0;
+            }
             Action::CancelTool => {
                 if let Some(p) = self.tool.take() {
                     self.change_stack(p.before);
@@ -1099,7 +1141,7 @@ impl State {
 
     /// The image area's top image (script mode puts it on the GPU before the shot).
     pub fn image_handle(&self) -> Option<&Handle> {
-        self.main_handle()
+        self.original_handle().or(self.main_handle())
     }
 
     /// Leaving the current photo: a draft crop is applied (crop mode stays on, for the
@@ -1220,6 +1262,58 @@ impl State {
             self.thumbs.invalidate(i);
             self.sizes.unset(i);
             self.displayed.remove(&i);
+            if self.original_image.as_ref().is_some_and(|o| o.job.index == i) {
+                self.original_image = None;
+            }
+        }
+    }
+
+    /// The original-decode the current photo needs: while it is held, or ahead of time for
+    /// an edited photo once its own image is loaded. Call until `None`.
+    pub fn next_original_job(&mut self) -> Option<OriginalJob> {
+        if self.view != View::Photo || self.mode != Mode::Browse {
+            return None;
+        }
+        let photo = self.current_path()?.to_path_buf();
+        let edited = !self.stack().is_empty();
+        if !edited || !(self.original || self.current().is_some()) {
+            return None;
+        }
+        let path = self.edits.get(&photo).and_then(|p| p.edits.backup.clone()).unwrap_or(photo);
+        let body = self.body_size();
+        let side = ((body.width.max(body.height) * PREVIEW_SCALE) as u32).min(self.max_side);
+        let job = OriginalJob { index: self.index, path, side };
+        if self.original_image.as_ref().is_some_and(|o| o.job == job) {
+            return None;
+        }
+        self.original_image = Some(Original { job: job.clone(), image: None });
+        Some(job)
+    }
+
+    pub fn finish_original(&mut self, job: OriginalJob, result: Loaded) {
+        if let Some(o) = self.original_image.as_mut().filter(|o| o.job == job) {
+            if let Err(e) = &result {
+                eprintln!("photo-cruiser: original of {}: {e}", job.path.display());
+            }
+            o.image = Some(result);
+        }
+    }
+
+    /// The current photo's original, decoded (held or not).
+    pub fn original_ready(&self) -> Option<&Handle> {
+        match &self.original_image.as_ref().filter(|o| o.job.index == self.index)?.image {
+            Some(Ok(p)) => Some(&p.handle),
+            _ => None,
+        }
+    }
+
+    /// The original, while it is held and decoded (an unedited photo shows as it is).
+    pub fn original_handle(&self) -> Option<&Handle> {
+        let o = self.original_image.as_ref().filter(|o| self.original && o.job.index == self.index)?;
+        let edited = !self.stack().is_empty();
+        match &o.image {
+            Some(Ok(p)) if edited && self.view == View::Photo && self.mode == Mode::Browse => Some(&p.handle),
+            _ => None,
         }
     }
 
@@ -1448,6 +1542,9 @@ impl State {
             let n = self.saving().len();
             return format!("Saving {n} photo{}…", if n == 1 { "" } else { "s" });
         }
+        if self.original_handle().is_some() {
+            s += " · original, without edits";
+        }
         if let Some(px) = self.crop_pixels() {
             s += &format!(" · crop {px}");
         } else if self.mode == Mode::Crop {
@@ -1512,6 +1609,7 @@ impl State {
             }),
             preview: self.preview.as_ref().is_some_and(|p| p.index == self.index),
             underlay: self.underlay().is_some(),
+            original: self.original_handle().is_some(),
             dirty: self.dirty(),
             saved: self
                 .current_path()
@@ -1578,6 +1676,8 @@ pub struct Dump {
     /// The image the main one replaced still shows under it: the main one isn't
     /// confirmed on the GPU yet (no blank frames while it uploads).
     pub underlay: bool,
+    /// The original shows, without edits (held: `show_original`).
+    pub original: bool,
     /// Its edits differ from what its file was saved with.
     pub dirty: bool,
     /// The stack its file was saved with (`null`: never saved).

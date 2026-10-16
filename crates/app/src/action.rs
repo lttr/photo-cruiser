@@ -79,6 +79,12 @@ pub enum Action {
     /// Set the open tool to its neutral value, the photo as it was: Exposure 0 EV, Levels 0
     /// (`0`, footer "No change", palette): one undoable step.
     NeutralAdjust,
+    /// Show the photo's original, without any edits (uncropped, unturned), while it is held
+    /// (`O` or `\` down / up, the footer's Original button). Any other action ends it.
+    /// Photo view only, not in crop mode.
+    ShowOriginal {
+        on: bool,
+    },
     /// Close the tool, keeping its value (`Enter`, footer "Done").
     CloseTool,
     /// Close the tool and drop what it did since it opened (`Esc`; undoable).
