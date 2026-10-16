@@ -44,11 +44,6 @@ pub fn view(app: &App) -> Element<'_, Message> {
         (Some(_), _) if s.view == View::Grid => grid(s),
         (Some(_), Some(Err(e))) => text(e.clone()).size(20).into(),
         (Some(_), _) => match &s.shown {
-            // The open tool's live preview.
-            Some(_) if s.preview.as_ref().is_some_and(|p| p.index == s.index) => {
-                let handle = s.preview.as_ref().map(|p| p.handle.clone()).expect("checked");
-                image(handle).content_fit(ContentFit::Contain).width(Fill).height(Fill).into()
-            }
             Some(shown) => {
                 let img = |h: &image::Handle, opacity: f32| {
                     image(h.clone())
@@ -57,10 +52,18 @@ pub fn view(app: &App) -> Element<'_, Message> {
                         .height(Fill)
                         .opacity(opacity)
                 };
-                match s.fade_progress() {
-                    Some((from, t)) => stack![img(from, 1.0 - t), img(&shown.handle, t)].into(),
-                    None => img(&shown.handle, 1.0).into(),
+                // Underneath: the image the main one replaced, until that is uploaded.
+                let mut layers = stack![];
+                if let Some(under) = s.underlay() {
+                    layers = layers.push(img(under, 1.0));
                 }
+                match (&s.preview, s.fade_progress()) {
+                    // The open tool's live preview.
+                    (Some(p), _) if p.index == s.index => layers.push(img(&p.handle, 1.0)),
+                    (_, Some((from, t))) => layers.push(img(from, 1.0 - t)).push(img(&shown.handle, t)),
+                    _ => layers.push(img(&shown.handle, 1.0)),
+                }
+                .into()
             }
             // First image of a folder still decoding: nothing to show yet.
             None => space().into(),

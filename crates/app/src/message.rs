@@ -13,8 +13,10 @@ pub enum Message {
     /// `Ctrl+O` / menu: show the folder picker (interactive only, not an `Action`).
     OpenDialog,
     FolderPicked(Option<PathBuf>),
-    /// Redraw tick while a fade runs.
+    /// Redraw tick while a fade runs or a dragged preview waits to be rendered.
     Frame,
+    /// The image with this id is on the GPU (`None`: the upload failed).
+    Uploaded(iced_runtime::core::image::Id, Option<iced_runtime::image::Allocation>),
     /// The window was resized (maybe into or out of full screen).
     Resized(iced::window::Id),
     /// The window's real mode after a resize: full screen or not.

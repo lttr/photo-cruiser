@@ -94,6 +94,9 @@ pub struct App {
     settings: Option<(PathBuf, Settings)>,
     /// The app icon, shown in the About panel.
     pub icon: iced::widget::image::Handle,
+    /// The main image last asked to be put on the GPU.
+    uploading: Option<iced_runtime::core::image::Id>,
+    allocation: Option<iced_runtime::image::Allocation>,
 }
 
 impl App {
@@ -107,6 +110,8 @@ impl App {
             script: cfg.script.map(Runner::new),
             resume: std::env::var_os("PC_RESUME_FILE").map(PathBuf::from),
             resumed: None,
+            uploading: None,
+            allocation: None,
             settings,
             icon: {
                 let (w, h, rgba) = icon_rgba();
@@ -128,11 +133,12 @@ impl App {
         self.state.title()
     }
 
-    /// Redraw every frame while a fade runs; watch resizes for full-screen changes.
+    /// Redraw every frame while a fade runs or a dragged preview waits ([`State::tick`]);
+    /// watch resizes for full-screen changes.
     pub fn subscription(&self) -> Subscription<Message> {
-        let frames = match self.state.fade_progress() {
-            Some(_) => window::frames().map(|_| Message::Frame),
-            None => Subscription::none(),
+        let frames = match self.state.fade_progress().is_some() || self.state.preview_pending() {
+            true => window::frames().map(|_| Message::Frame),
+            false => Subscription::none(),
         };
         Subscription::batch([
             frames,
@@ -183,7 +189,19 @@ impl App {
                 self.state.grid_offset = y;
                 Task::none()
             }
-            Message::Frame => Task::none(),
+            Message::Frame => {
+                self.state.tick();
+                Task::none()
+            }
+            Message::Uploaded(id, allocation) => {
+                if let Some(a) = allocation
+                    && self.state.uploaded(id)
+                {
+                    // Keeps it on the GPU while it is the main image.
+                    self.allocation = Some(a);
+                }
+                Task::none()
+            }
             // The window manager may change the mode itself; every resize re-reads it.
             Message::Resized(id) => {
                 return window::mode(id).map(|m| Message::WindowMode(m == window::Mode::Fullscreen));
@@ -210,7 +228,19 @@ impl App {
             Some(y) => iced::widget::operation::scroll_to("grid", AbsoluteOffset { x: None, y: Some(y) }),
             None => Task::none(),
         };
-        Task::batch([task, scroll, self.load_next(), self.run_io()])
+        Task::batch([task, scroll, self.load_next(), self.run_io(), self.upload()])
+    }
+
+    /// Ask the renderer to put a new main image on the GPU and to say when it is there
+    /// (see [`crate::state`]'s underlay).
+    fn upload(&mut self) -> Task<Message> {
+        let Some(handle) = self.state.main_handle().cloned() else { return Task::none() };
+        let id = handle.id();
+        if self.uploading == Some(id) {
+            return Task::none();
+        }
+        (self.uploading, self.allocation) = (Some(id), None);
+        iced_runtime::image::allocate(handle).map(move |r| Message::Uploaded(id, r.ok()))
     }
 
     fn write_resume(&mut self) {

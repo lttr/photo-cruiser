@@ -254,6 +254,8 @@ pub struct ToolPanel {
     base: Option<Arc<RgbaImage>>,
     /// The geometry `base` was made with; a change closes the tool.
     geometry: EditStack,
+    /// When the preview was last rendered while dragging (for [`PREVIEW_EVERY`]).
+    rendered_at: Option<Instant>,
 }
 
 impl ToolPanel {
@@ -269,12 +271,31 @@ impl ToolPanel {
 pub struct Preview {
     pub index: usize,
     /// What it shows (with the dragged value).
-    stack: EditStack,
+    pub stack: EditStack,
     pub handle: Handle,
 }
 
 /// The preview's base is at most the image area's size times this (sharp on HiDPI).
 const PREVIEW_SCALE: f32 = 2.0;
+
+/// While the slider is dragged, the preview is rendered at most this often; the value
+/// the drag rests on (or is released at) is always rendered ([`State::tick`]).
+pub const PREVIEW_EVERY: Duration = Duration::from_millis(100);
+
+/// An image drawn under the image area's top image until that one is on the GPU.
+///
+/// The renderer uploads big images (over 2 MB) on a worker thread and draws nothing for
+/// them until the upload is done; images not drawn in a frame are dropped from the GPU.
+/// So every new image (a re-rendered preview, the reload after closing a tool) would show
+/// the background for a frame or more: a blink. The image it replaces stays underneath
+/// until the runtime reports the new one allocated ([`State::uploaded`]). Only for the
+/// same photo with the same shape: it must cover exactly what the new image covers.
+#[derive(Clone, Debug)]
+struct Underlay {
+    handle: Handle,
+    index: usize,
+    geometry: EditStack,
+}
 
 /// What the runtime must do after an action, beyond scheduling decodes.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -353,6 +374,12 @@ pub struct State {
     /// The open one-slider tool.
     pub tool: Option<ToolPanel>,
     pub preview: Option<Preview>,
+    /// Fixed time for tests (the preview's pacing); `None`: the real clock.
+    pub clock: Option<Instant>,
+    /// The image area's top image as last seen: photo index, display geometry, handle.
+    top: Option<Underlay>,
+    /// What shows under the top image until it is uploaded.
+    under: Option<Underlay>,
 }
 
 impl State {
@@ -397,7 +424,14 @@ impl State {
             notice: None,
             tool: None,
             preview: None,
+            clock: None,
+            top: None,
+            under: None,
         }
+    }
+
+    pub fn now(&self) -> Instant {
+        self.clock.unwrap_or_else(Instant::now)
     }
 
     pub fn len(&self) -> usize {
@@ -511,7 +545,11 @@ impl State {
             [Some(last), Some(before)] => last - before < RAPID && last.elapsed() < RAPID,
             _ => false,
         };
-        let from = self.shown.take().map(|s| s.handle).filter(|_| !rapid && !self.transition.is_zero());
+        // Under a tool's preview (open, or waiting for this reload) the image is the same
+        // state: fading from the photo as it was before would flash that state.
+        let covered = self.preview.as_ref().is_some_and(|p| p.index == self.index);
+        let from =
+            self.shown.take().map(|s| s.handle).filter(|_| !rapid && !covered && !self.transition.is_zero());
         self.fade = from.map(|from| Fade { from, start: Instant::now() });
         self.shown = Some(Shown { index: self.index, handle, sharp });
     }
@@ -552,7 +590,73 @@ impl State {
         let effect = self.act(action);
         self.sync_display();
         self.sync_tool();
+        self.sync_under();
         effect
+    }
+
+    /// Time passed (a frame while [`State::preview_pending`]): render the preview of a
+    /// drag that has rested for [`PREVIEW_EVERY`].
+    pub fn tick(&mut self) {
+        self.sync_tool();
+        self.sync_under();
+    }
+
+    /// A dragged value isn't rendered yet: the runtime should [`State::tick`].
+    pub fn preview_pending(&self) -> bool {
+        let Some(p @ ToolPanel { drag: Some(v), base: Some(_), .. }) = &self.tool else { return false };
+        let mut stack = self.stack();
+        stack.set_adjust(p.tool, Some(*v));
+        self.preview.as_ref().is_none_or(|pr| pr.index != self.index || pr.stack != stack)
+    }
+
+    /// The image area's main image: the tool's preview, else the shown photo (its fade's
+    /// target).
+    pub fn main_handle(&self) -> Option<&Handle> {
+        match &self.preview {
+            Some(p) if p.index == self.index => Some(&p.handle),
+            _ => self.shown.as_ref().map(|s| &s.handle),
+        }
+    }
+
+    /// The image under the main one while that is being uploaded (see [`Underlay`]).
+    pub fn underlay(&self) -> Option<&Handle> {
+        let u = self.under.as_ref()?;
+        let same = self.view == View::Photo
+            && u.index == self.index
+            && u.geometry == self.display_stack(self.index).geometry()
+            && self.shown.as_ref().is_some_and(|s| s.index == self.index);
+        same.then_some(&u.handle)
+    }
+
+    /// The main image changed: the one it replaces goes underneath, unless an earlier one
+    /// (the last known to be on the GPU) is still there.
+    fn sync_under(&mut self) {
+        let id = self.main_handle().map(Handle::id);
+        if self.top.as_ref().map(|t| t.handle.id()) == id {
+            return;
+        }
+        let old = self.top.take();
+        if self.underlay().is_none() {
+            self.under = old;
+        }
+        self.top = self.main_handle().cloned().map(|handle| Underlay {
+            handle,
+            index: self.index,
+            geometry: self.display_stack(self.index).geometry(),
+        });
+        if self.underlay().is_none() {
+            self.under = None;
+        }
+    }
+
+    /// The renderer has image `id` on the GPU: if it is the main image, nothing needs to
+    /// show under it any more (returns whether it is).
+    pub fn uploaded(&mut self, id: iced_runtime::core::image::Id) -> bool {
+        let main = self.main_handle().is_some_and(|h| h.id() == id);
+        if main {
+            self.under = None;
+        }
+        main
     }
 
     fn act(&mut self, action: &Action) -> Effect {
@@ -892,6 +996,7 @@ impl State {
             drag: None,
             base: None,
             geometry,
+            rendered_at: None,
         });
     }
 
@@ -935,12 +1040,16 @@ impl State {
             }
         }
         let mut stack = self.stack();
+        let now = self.now();
         match &self.tool {
-            Some(ToolPanel { tool, drag, base: Some(base), .. }) => {
+            Some(ToolPanel { tool, drag, base: Some(base), rendered_at, .. }) => {
                 if let Some(v) = drag {
                     stack.set_adjust(*tool, Some(*v));
                 }
-                if self.preview.as_ref().is_none_or(|pr| pr.index != self.index || pr.stack != stack) {
+                // While dragging, at most every PREVIEW_EVERY; a release renders at once.
+                let wait = drag.is_some() && rendered_at.is_some_and(|t| now < t + PREVIEW_EVERY);
+                if !wait && self.preview.as_ref().is_none_or(|pr| pr.index != self.index || pr.stack != stack)
+                {
                     let t0 = Instant::now();
                     let mut img = (**base).clone();
                     adjust::apply_all(&mut img, &stack);
@@ -951,6 +1060,10 @@ impl State {
                         eprintln!("trace: preview {w}x{h} rendered in {ms:.1} ms");
                     }
                     self.preview = Some(Preview { index: self.index, stack, handle });
+                    let dragging = drag.is_some();
+                    if let Some(p) = &mut self.tool {
+                        p.rendered_at = dragging.then_some(now);
+                    }
                 }
             }
             // Opening: the photo shows as it is.
@@ -984,12 +1097,9 @@ impl State {
         })
     }
 
-    /// The image area's image: the live preview, else the loaded photo.
+    /// The image area's top image (script mode puts it on the GPU before the shot).
     pub fn image_handle(&self) -> Option<&Handle> {
-        match &self.preview {
-            Some(p) if p.index == self.index => Some(&p.handle),
-            _ => self.picture().map(|p| &p.handle),
-        }
+        self.main_handle()
     }
 
     /// Leaving the current photo: a draft crop is applied (crop mode stays on, for the
@@ -1071,6 +1181,7 @@ impl State {
             self.notice = None;
         }
         self.sync_display();
+        self.sync_under();
     }
 
     /// A save finished: the photo may have a new name, its cached images are reloaded,
@@ -1310,6 +1421,7 @@ impl State {
             self.refresh();
             self.sync_tool();
         }
+        self.sync_under();
     }
 
     /// Integer source-pixel selection.
@@ -1399,6 +1511,7 @@ impl State {
                 dragging: p.drag.is_some(),
             }),
             preview: self.preview.as_ref().is_some_and(|p| p.index == self.index),
+            underlay: self.underlay().is_some(),
             dirty: self.dirty(),
             saved: self
                 .current_path()
@@ -1462,6 +1575,9 @@ pub struct Dump {
     pub tool: Option<ToolDump>,
     /// The image area shows the tool's live preview.
     pub preview: bool,
+    /// The image the main one replaced still shows under it: the main one isn't
+    /// confirmed on the GPU yet (no blank frames while it uploads).
+    pub underlay: bool,
     /// Its edits differ from what its file was saved with.
     pub dirty: bool,
     /// The stack its file was saved with (`null`: never saved).

@@ -1704,3 +1704,80 @@ fn exposure_slider_drag_and_double_click() {
     h.keys(Key::Named(Named::Enter), 1);
     assert!(h.bounds("tool").is_none(), "Enter: done");
 }
+
+#[test]
+fn update_drag_preview_paced_last_value_always_rendered() {
+    use crate::state::PREVIEW_EVERY;
+    use photo_cruiser_core::Tool;
+    let mut s = opened(&fixtures());
+    s.apply(&Action::ShowPhoto { index: Some(1) });
+    settle(&mut s);
+    s.apply(&Action::OpenTool { tool: Tool::Exposure });
+    let t0 = Instant::now();
+    let shows = |s: &State| s.preview.as_ref().unwrap().stack.adjust(Tool::Exposure);
+    let at = |s: &mut State, ms: u64| s.clock = Some(t0 + Duration::from_millis(ms));
+    at(&mut s, 0);
+    s.apply(&Action::DragAdjust { value: 0.3 });
+    assert_eq!((shows(&s), s.preview_pending()), (Some(0.3), false), "the first move renders at once");
+    at(&mut s, 10);
+    s.apply(&Action::DragAdjust { value: 0.4 });
+    at(&mut s, 50);
+    s.apply(&Action::DragAdjust { value: 0.5 });
+    assert_eq!((shows(&s), s.preview_pending()), (Some(0.3), true), "too soon: waits");
+    assert_eq!(s.tool.as_ref().unwrap().value(&s.stack()), 0.5, "the slider follows at once");
+    at(&mut s, 99);
+    s.tick();
+    assert_eq!(shows(&s), Some(0.3));
+    // The drag rests: the next frame after PREVIEW_EVERY renders the last value.
+    s.clock = Some(t0 + PREVIEW_EVERY);
+    s.tick();
+    assert_eq!((shows(&s), s.preview_pending()), (Some(0.5), false));
+    at(&mut s, 120);
+    s.apply(&Action::DragAdjust { value: 0.7 });
+    assert_eq!(shows(&s), Some(0.5));
+    // The release renders at once, whatever the time.
+    s.apply(&Action::SetAdjust { value: 0.8 });
+    assert_eq!((shows(&s), s.preview_pending()), (Some(0.8), false));
+}
+
+#[test]
+fn update_tool_images_never_blank_or_stale() {
+    use photo_cruiser_core::Tool;
+    let mut s = State::new(TEST_MAX_SIDE, Duration::from_millis(120));
+    s.apply(&Action::Open { path: fixtures() });
+    s.apply(&Action::ShowPhoto { index: Some(1) });
+    settle(&mut s);
+    let id = |h: Option<&iced::widget::image::Handle>| h.map(|h| h.id());
+    let photo = id(s.main_handle());
+    assert!(s.underlay().is_none());
+    // Opening: the preview replaces the photo; the photo stays under it until uploaded.
+    s.apply(&Action::OpenTool { tool: Tool::Exposure });
+    let first = id(s.main_handle());
+    assert_ne!(first, photo);
+    assert_eq!(id(s.underlay()), photo);
+    // A new preview while the first isn't uploaded yet: still the photo underneath.
+    s.apply(&Action::SetAdjust { value: 0.5 });
+    let second = id(s.main_handle());
+    assert_eq!(id(s.underlay()), photo);
+    // Uploaded: nothing underneath; the next one goes over the uploaded one.
+    assert!(!s.uploaded(first.unwrap()), "not the main image any more");
+    assert!(s.uploaded(second.unwrap()));
+    assert!(s.underlay().is_none());
+    s.apply(&Action::SetAdjust { value: 0.8 });
+    assert_eq!(id(s.underlay()), second);
+    assert!(s.uploaded(id(s.main_handle()).unwrap()));
+    let last = id(s.main_handle());
+    // Done: the preview stays until the photo is reloaded with the edits, then the reload
+    // shows without a fade from the photo as it was before, over the preview.
+    s.apply(&Action::CloseTool);
+    assert_eq!(id(s.main_handle()), last, "preview kept while reloading");
+    settle(&mut s);
+    assert!(s.preview.is_none());
+    assert!(s.fade.is_none(), "no fade from the unedited photo");
+    assert_eq!(id(s.main_handle()), id(s.picture().map(|p| &p.handle)));
+    assert_eq!(id(s.underlay()), last, "the preview stays under it until it is uploaded");
+    // Another photo: never under this one.
+    s.apply(&Action::Next);
+    settle(&mut s);
+    assert!(s.underlay().is_none());
+}
