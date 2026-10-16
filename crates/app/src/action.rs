@@ -4,11 +4,12 @@
 //! JSON form (internally tagged): `{"action": "next"}`, `{"action": "goto", "index": 3}`,
 //! `{"action": "set_crop", "x": 40, "y": 30, "w": 200, "h": 150}`,
 //! `{"action": "open", "path": "fixtures"}`, `{"action": "show_photo", "index": 2}`,
-//! `{"action": "set_aspect", "aspect": "16:9"}`, `{"action": "palette_query", "query": "crop"}`.
+//! `{"action": "set_aspect", "aspect": "16:9"}`, `{"action": "palette_query", "query": "crop"}`,
+//! `{"action": "open_tool", "tool": "exposure"}`, `{"action": "set_adjust", "value": 0.5}`.
 
 use crate::grid::Layout;
-use photo_cruiser_core::Rect;
 use photo_cruiser_core::crop::Aspect;
+use photo_cruiser_core::{Rect, Tool};
 use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
 
@@ -56,6 +57,27 @@ pub enum Action {
     /// it is saved at once.
     RotateRight,
     RotateLeft,
+    /// Open a one-slider tool on the current photo (`E`: exposure; palette). It applies the
+    /// tool's opening value (auto, for this photo) as one undoable step, once the photo is
+    /// loaded. A tool already in the stack keeps its value. Closes when you leave the photo,
+    /// crop or turn it.
+    OpenTool {
+        tool: Tool,
+    },
+    /// Move the open tool's slider: live preview only, the stack is unchanged.
+    DragAdjust {
+        value: f32,
+    },
+    /// Set the open tool's value (slider released): one undoable step.
+    SetAdjust {
+        value: f32,
+    },
+    /// Back to the value the tool opened at (double-click on the slider).
+    ResetAdjust,
+    /// Close the tool, keeping its value (`Enter`, footer "Done").
+    CloseTool,
+    /// Close the tool and drop what it did since it opened (`Esc`; undoable).
+    CancelTool,
     /// Remove all edits of the current photo (menu; undoable). Saved when you leave it.
     ResetEdits,
     /// Back to the original file now: `reset_edits`, then `save` (menu).
@@ -153,7 +175,9 @@ mod tests {
                 {"action":"undo"},{"action":"redo"},{"action":"reset_edits"},{"action":"revert"},{"action":"save"},
                 {"action":"toggle_palette"},{"action":"palette_query","query":"crop"},{"action":"palette_focus","index":1},
                 {"action":"palette_next"},{"action":"palette_prev"},{"action":"palette_activate"},{"action":"close_palette"},
-                {"action":"rotate_right"},{"action":"rotate_left"}]"#,
+                {"action":"rotate_right"},{"action":"rotate_left"},{"action":"open_tool","tool":"exposure"},
+                {"action":"drag_adjust","value":0.5},{"action":"set_adjust","value":-1},{"action":"reset_adjust"},
+                {"action":"close_tool"},{"action":"cancel_tool"}]"#,
         )
         .unwrap();
         assert_eq!(steps[1], Action::Goto { index: 2 });
@@ -177,7 +201,9 @@ mod tests {
         assert_eq!(steps[41], Action::PaletteQuery { query: "crop".into() });
         assert_eq!(steps[45], Action::PaletteActivate);
         assert_eq!(steps[47], Action::RotateRight);
-        assert_eq!(steps.len(), 49);
+        assert_eq!(steps[49], Action::OpenTool { tool: Tool::Exposure });
+        assert_eq!(steps[51], Action::SetAdjust { value: -1.0 });
+        assert_eq!(steps.len(), 55);
         let json = serde_json::to_string(&Action::SetCrop(Rect::new(1.0, 2.0, 3.0, 4.0))).unwrap();
         assert_eq!(json, r#"{"action":"set_crop","x":1.0,"y":2.0,"w":3.0,"h":4.0}"#);
         assert!(parse_script(r#"[{"action":"jump"}]"#).is_err());

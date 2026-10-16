@@ -79,7 +79,13 @@ verify: check
     jq -e '.index == 0 and .dirty == false and .saving == [] and .edits == [{"op":"crop","x":40,"y":30,"w":200,"h":150}] and (.backup | endswith(".photo-cruiser/originals/img1.png")) and .errors == []' \
         "{{artifacts}}/verify-save.json" >/dev/null || { cat "{{artifacts}}/verify-save.json"; exit 1; }
     "$pcr" info "$photos/img1.png" | grep -q "size: 200x150" || { echo "img1.png not saved cropped"; exit 1; }
-    echo "verify ok: {{artifacts}}/verify.png {{artifacts}}/verify-grid.png {{artifacts}}/verify-save.png"
+    # Exposure: opens at auto, set by the slider, saved on leaving; reopened, it keeps its value.
+    "{{root}}/scripts/headless.sh" "{{root}}/target/debug/photo-cruiser" "$photos" --script "{{root}}/scripts/exposure.json" \
+        --shot "{{artifacts}}/verify-exposure.png" --dump-state "{{artifacts}}/verify-exposure.json"
+    jq -e '.index == 1 and .dirty == false and .edits == [{"op":"adjust","tool":"exposure","value":0.8}] and .tool.value == 0.8 and .tool.opening < 0 and .preview == true and (.backup | endswith(".photo-cruiser/originals/img2.jpg")) and .errors == []' \
+        "{{artifacts}}/verify-exposure.json" >/dev/null || { cat "{{artifacts}}/verify-exposure.json"; exit 1; }
+    "$pcr" edits "$photos/img2.jpg" | grep -q '^saved: \[{"op":"adjust","tool":"exposure","value":0.8}\]' || { echo "img2.jpg not saved with exposure"; exit 1; }
+    echo "verify ok: {{artifacts}}/verify.png {{artifacts}}/verify-grid.png {{artifacts}}/verify-save.png {{artifacts}}/verify-exposure.png"
 
 # Release build of the GUI and the CLI (run before `just install`)
 build-release:

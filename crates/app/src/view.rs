@@ -8,16 +8,18 @@
 //! `help` (shortcuts panel), `about`, `aspects` (the crop's aspect buttons in the footer),
 //! `aspect-panel` and `aspect-input` (the custom aspect field), `apply` (the crop's
 //! Apply button), `failed` (the dot on a grid cell whose save failed), `palette`,
-//! `palette-input` and `palette-focus` (the command palette, its field, its focused row).
+//! `palette-input` and `palette-focus` (the command palette, its field, its focused row), `tool`
+//! and `tool-slider` (the open tool's panel in the footer, its slider).
 
 use crate::action::Action;
+use crate::adjust_panel::Slider;
 use crate::app::App;
 use crate::crop_overlay::{Modes, Overlay, SHORTCUTS};
 use crate::grid::LABEL;
 use crate::menu;
 use crate::message::Message;
 use crate::palette;
-use crate::state::{Display, Mode, State, View, tilde};
+use crate::state::{Display, Mode, State, ToolPanel, View, tilde};
 use crate::theme;
 use iced::alignment::Horizontal;
 use iced::widget::{
@@ -41,6 +43,11 @@ pub fn view(app: &App) -> Element<'_, Message> {
         (Some(_), _) if s.view == View::Grid => grid(s),
         (Some(_), Some(Err(e))) => text(e.clone()).size(20).into(),
         (Some(_), _) => match &s.shown {
+            // The open tool's live preview.
+            Some(_) if s.preview.as_ref().is_some_and(|p| p.index == s.index) => {
+                let handle = s.preview.as_ref().map(|p| p.handle.clone()).expect("checked");
+                image(handle).content_fit(ContentFit::Contain).width(Fill).height(Fill).into()
+            }
             Some(shown) => {
                 let img = |h: &image::Handle, opacity: f32| {
                     image(h.clone())
@@ -74,6 +81,7 @@ pub fn view(app: &App) -> Element<'_, Message> {
             input: s.aspect_input.is_some(),
             palette: s.palette.is_some(),
             crop: s.mode == Mode::Crop,
+            tool: s.tool.is_some(),
             fullscreen: s.fullscreen,
             grid,
         },
@@ -102,6 +110,9 @@ pub fn view(app: &App) -> Element<'_, Message> {
             .style(theme::flat(true))
             .on_press_maybe(s.crop.selection.map(|_| Action::ApplyCrop.into()));
         footer = footer.push(container(apply).padding([0, 8]).id("apply"));
+    }
+    if let (Some(p), false) = (&s.tool, grid) {
+        footer = footer.push(tool_panel(s, p));
     }
     let footer = footer.push(
         container(
@@ -327,6 +338,27 @@ fn aspects(s: &State) -> Element<'_, Message> {
         buttons.push(choice(label.into(), false, Action::SwapAspect.into()));
     }
     container(row(buttons).spacing(2).align_y(Center)).padding([0, 8]).id("aspects").into()
+}
+
+/// The open tool: its name, slider, value and a Done button.
+fn tool_panel<'a>(s: &'a State, p: &'a ToolPanel) -> Element<'a, Message> {
+    let value = p.value(&s.stack());
+    let slider: Element<_> = match p.opening {
+        Some(opening) => {
+            let slider = canvas(Slider { tool: p.tool, value, opening: Some(opening) }).width(260).height(24);
+            container(slider).id("tool-slider").into()
+        }
+        None => text("loading…").size(13).style(theme::dim).width(260).into(),
+    };
+    let done = button(text("Done").size(13))
+        .padding([3, 10])
+        .style(theme::flat(true))
+        .on_press(Action::CloseTool.into());
+    let content =
+        row![text(p.tool.label()).size(13), slider, text(p.tool.format(value)).size(13).width(64), done,]
+            .spacing(10)
+            .align_y(Center);
+    container(content).padding([0, 8]).id("tool").into()
 }
 
 /// Three bars: the menu icon (drawn, so it doesn't depend on the font's glyphs).

@@ -1,5 +1,6 @@
 ---
-status: ready
+status: done
+verified: [just check, just verify (incl. headless verify-exposure shot), PC_TRACE preview timing on a 6000x6000 JPEG, /code-review low (partial: core + state.rs)]
 blocked_by: []
 references:
   - "Research: ../research.md"
@@ -11,10 +12,10 @@ references:
 
 ## Acceptance criteria
 
-- [ ] Adjustment steps serialise in the edit stack (version bumped if needed) and combine correctly with crop
-- [ ] Dragging the slider gives a live preview without noticeable lag on a full-size photo
-- [ ] Leaving the photo saves it with no extra step
-- [ ] Opening the tool applies the opening value as one undoable step; Esc reverts it; double-clicking the slider resets it to the opening value
-- [ ] Available from the command palette; works the same through `pcr` (edits JSON, render, save)
-- [ ] Unit test in core for the pixel math; a render golden image
-- [ ] `just verify` passes; headless shot shows the effect
+- [x] Adjustment steps serialise in the edit stack (version bumped if needed) and combine correctly with crop
+- [x] Dragging the slider gives a live preview without noticeable lag on a full-size photo
+- [x] Leaving the photo saves it with no extra step
+- [x] Opening the tool applies the opening value as one undoable step; Esc reverts it; double-clicking the slider resets it to the opening value
+- [x] Available from the command palette; works the same through `pcr` (edits JSON, render, save)
+- [x] Unit test in core for the pixel math; a render golden image
+- [x] `just verify` passes; headless shot shows the effect

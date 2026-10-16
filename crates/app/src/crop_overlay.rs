@@ -13,7 +13,7 @@ use iced::widget::canvas::{self, Event, Frame, Geometry, Stroke};
 use iced::{Color, Rectangle, Renderer, Theme};
 use photo_cruiser_core::crop::{Hit, MouseKind, hit};
 use photo_cruiser_core::geom::ViewMap;
-use photo_cruiser_core::{Point, Rect, Size};
+use photo_cruiser_core::{Point, Rect, Size, Tool};
 
 /// Grab distance around the selection edges, in logical window pixels.
 pub const EDGE: f32 = 8.0;
@@ -30,6 +30,8 @@ pub struct Modes {
     /// The command palette shows: its own layer takes the keys ([`crate::palette::Keys`]).
     pub palette: bool,
     pub crop: bool,
+    /// A one-slider tool is open (`Enter` closes it, `Esc` cancels it).
+    pub tool: bool,
     pub fullscreen: bool,
     /// The grid shows (not a single photo).
     pub grid: bool,
@@ -77,10 +79,11 @@ pub const SHORTCUTS: &[(&str, &str)] = &[
     ("→  ←   l  h", "Next / previous photo"),
     ("↓  ↑   j  k", "Grid: row down / up; photo: next / previous"),
     ("Home  End   g  G", "First / last photo"),
-    ("Enter", "Grid: open the photo; crop: apply"),
+    ("Enter", "Grid: open the photo; crop: apply; tool: done"),
     ("Ctrl+K", "Find an action by name"),
     ("Ctrl+O", "Open folder"),
     ("C", "Crop on / off"),
+    ("E", "Exposure (opens at auto); double-click the slider: back to auto"),
     ("Shift+R  Shift+L", "Turn right / left"),
     ("Ctrl+Z  u", "Undo"),
     ("Ctrl+Shift+Z  Ctrl+Y", "Redo"),
@@ -92,7 +95,7 @@ pub const SHORTCUTS: &[(&str, &str)] = &[
     ("Z", "Grid: small / big thumbnails / justified"),
     ("F10", "Menu: ↑ ↓ Home End to move, Enter to pick"),
     ("?  F1", "Keyboard shortcuts"),
-    ("Esc", "Close menu, drop the crop selection, leave full screen, back to the grid"),
+    ("Esc", "Close menu, cancel the tool, drop the crop selection, leave full screen, back to the grid"),
 ];
 
 /// `key` ignores Shift, `modified` doesn't (Shift+/ is `/` and `?`): symbols like `?` are
@@ -152,9 +155,11 @@ pub fn key_message(key: &Key, modified: &Key, mods: keyboard::Modifiers, m: Mode
         Key::Named(Named::End) => Action::Last.into(),
         Key::Named(Named::Enter) if m.grid => Action::ShowPhoto { index: None }.into(),
         Key::Named(Named::Enter) if m.crop => Action::ApplyCrop.into(),
+        Key::Named(Named::Enter) if m.tool => Action::CloseTool.into(),
         Key::Named(Named::Escape) if m.menu => Action::CloseMenu.into(),
         Key::Named(Named::Escape) if m.help => Action::ToggleHelp.into(),
         Key::Named(Named::Escape) if m.about => Action::ToggleAbout.into(),
+        Key::Named(Named::Escape) if m.tool => Action::CancelTool.into(),
         Key::Named(Named::Escape) if m.crop => Action::ExitCrop.into(),
         Key::Named(Named::Escape) if m.fullscreen || m.grid => Action::ExitFullscreen.into(),
         Key::Named(Named::Escape) => Action::ShowGrid.into(),
@@ -171,6 +176,9 @@ pub fn key_message(key: &Key, modified: &Key, mods: keyboard::Modifiers, m: Mode
         Key::Character(c) if mods.control() && c.eq_ignore_ascii_case("z") => Action::Undo.into(),
         Key::Character(c) if mods.control() && c.eq_ignore_ascii_case("y") => Action::Redo.into(),
         Key::Character(c) if plain && c.eq_ignore_ascii_case("c") => Action::ToggleCrop.into(),
+        Key::Character(c) if plain && c.eq_ignore_ascii_case("e") => {
+            Action::OpenTool { tool: Tool::Exposure }.into()
+        }
         Key::Character(c) if plain && m.crop && c.eq_ignore_ascii_case("a") => Action::NextAspect.into(),
         Key::Character(c) if plain && m.crop && c.eq_ignore_ascii_case("x") => Action::SwapAspect.into(),
         Key::Character(c) if plain && c.eq_ignore_ascii_case("f") => Action::ToggleFullscreen.into(),

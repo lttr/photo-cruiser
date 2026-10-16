@@ -1,5 +1,7 @@
 //! CPU reference pipeline: decoded pixels + edit stack → output pixels. This
-//! implementation defines correctness; a GPU preview must match it.
+//! implementation defines correctness; a GPU preview must match it. The geometry (crop,
+//! rotation) comes first, in stack order, then the adjustments ([`crate::adjust`]), then
+//! the downscale to `max_side`.
 
 use crate::decode::Decoded;
 use crate::edit::{EditStack, Op};
@@ -33,8 +35,10 @@ pub fn render(src: &Decoded, edits: &EditStack, opts: RenderOpts) -> Result<Rgba
                     _ => img,
                 };
             }
+            Op::Adjust { .. } => {}
         }
     }
+    crate::adjust::apply_all(&mut img, edits);
     Ok(match opts.max_side {
         Some(m) => {
             Decoded { source_width: img.width(), source_height: img.height(), image: img, format: src.format }
@@ -81,6 +85,21 @@ mod tests {
         let half = turned(2);
         assert_eq!(half.dimensions(), (30, 40));
         assert_eq!(half.get_pixel(0, 0).0, [39, 59, 0, 255]);
+    }
+
+    #[test]
+    fn adjustments_after_the_geometry() {
+        use crate::adjust::Tool;
+        // Listed before the crop, still applied after it: same result as crop, then adjust.
+        let crop = Op::Crop(Rect::new(10.0, 20.0, 30.0, 40.0));
+        let adjust = Op::Adjust { tool: Tool::Exposure, value: 1.0 };
+        let edits = EditStack::default().with(adjust).with(crop.clone());
+        let out = render(&gradient(100, 100), &edits, RenderOpts::default()).unwrap();
+        let mut expected =
+            render(&gradient(100, 100), &EditStack::default().with(crop), RenderOpts::default()).unwrap();
+        Tool::Exposure.apply(&mut expected, 1.0);
+        assert_eq!(out, expected);
+        assert_ne!(out.get_pixel(0, 0).0, [10, 20, 0, 255]);
     }
 
     #[test]

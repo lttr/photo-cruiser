@@ -1,0 +1,9 @@
+[
+  { "action": "show_photo", "index": 1 },
+  { "action": "open_tool", "tool": "exposure" },
+  { "action": "drag_adjust", "value": 0.4 },
+  { "action": "set_adjust", "value": 0.8 },
+  { "action": "next" },
+  { "action": "prev" },
+  { "action": "open_tool", "tool": "exposure" }
+]

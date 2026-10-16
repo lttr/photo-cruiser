@@ -485,6 +485,15 @@ impl<P: Program<Message = Message> + 'static> Harness<P> {
         self.sim().find(pick).is_ok()
     }
 
+    /// The open tool's value, as the panel shows it (`+0.52 EV`).
+    fn ev(&self) -> String {
+        let pick = |c: Candidate<'_>| match c {
+            Candidate::Text { content, .. } if content.ends_with(" EV") => Some(content.to_owned()),
+            _ => None,
+        };
+        self.sim().find(pick).unwrap_or_default()
+    }
+
     /// Centre of the first text widget showing exactly `needle`.
     fn text_center(&self, needle: &str) -> Point {
         let pick = |c: Candidate<'_>| match c {
@@ -1410,7 +1419,7 @@ fn update_palette_lists_what_can_be_done_sorted() {
     s.apply(&Action::ApplyCrop);
     s.apply(&Action::TogglePalette);
     let edited = palette_labels(&s);
-    for l in ["Crop", "Undo", "Save", "Reset edits", "Revert to original"] {
+    for l in ["Crop", "Exposure", "Undo", "Save", "Reset edits", "Revert to original"] {
         assert!(edited.contains(&l.into()), "{l} in {edited:?}");
     }
     assert!(!edited.contains(&"Redo".into()));
@@ -1464,4 +1473,141 @@ fn palette_type_move_and_pick() {
     let target = Some(Target::Text("Keyboard shortcuts".into()));
     h.run(Interaction::Mouse(Mouse::Click { button: Button::Left, target }));
     assert!(h.bounds("palette").is_none() && h.bounds("help").is_some());
+}
+
+fn exposure(s: &State) -> Option<f32> {
+    s.stack().adjust(photo_cruiser_core::Tool::Exposure)
+}
+
+#[test]
+fn update_exposure_opens_at_auto_drags_live_and_saves_on_leaving() {
+    use photo_cruiser_core::EditStack;
+    use photo_cruiser_core::{Tool, adjust, render};
+    let mut s = opened(&fixtures());
+    s.apply(&Action::ShowPhoto { index: Some(1) }); // img2.jpg: white and blue checks
+    settle(&mut s);
+    let photo = s.current_path().unwrap().to_path_buf();
+    s.apply(&Action::OpenTool { tool: Tool::Exposure });
+    let opening = s.tool.as_ref().unwrap().opening.expect("the photo is loaded");
+    let src = photo_cruiser_core::decode(&photo).unwrap();
+    assert_eq!(opening, adjust::opening(&src, &EditStack::default(), Tool::Exposure).unwrap(), "as pcr");
+    assert!(opening < -0.5, "bright photo comes out darker: {opening}");
+    assert_eq!((exposure(&s), s.dirty()), (Some(opening), true), "applied at once");
+    assert!(s.preview.is_some());
+    s.apply(&Action::TogglePalette);
+    let labels = palette_labels(&s);
+    for l in ["Exposure: done", "Exposure: cancel", "Exposure: reset"] {
+        assert!(labels.contains(&l.into()), "{l} in {labels:?}");
+    }
+    assert!(!labels.contains(&"Exposure".into()), "already open");
+    s.apply(&Action::ClosePalette);
+    assert!(s.tool.is_some());
+
+    // Dragging only changes the preview; the release is one step.
+    s.apply(&Action::DragAdjust { value: 0.3 });
+    s.apply(&Action::DragAdjust { value: 0.5 });
+    assert_eq!(exposure(&s), Some(opening));
+    let v = serde_json::to_value(s.dump(None, None)).unwrap();
+    assert_eq!((v["tool"]["value"].as_f64(), v["tool"]["dragging"].as_bool()), (Some(0.5), Some(true)));
+    assert_eq!(v["preview"], true);
+    s.apply(&Action::SetAdjust { value: 0.5 });
+    assert_eq!(exposure(&s), Some(0.5));
+    s.apply(&Action::Undo);
+    assert_eq!(exposure(&s), Some(opening), "undo: the opening value");
+    assert!(s.tool.is_some(), "undo keeps the tool open");
+    s.apply(&Action::Undo);
+    assert_eq!(exposure(&s), None, "undo again: as before the tool opened");
+    s.apply(&Action::Redo);
+    s.apply(&Action::SetAdjust { value: 1.0 });
+    s.apply(&Action::ResetAdjust);
+    assert_eq!(exposure(&s), Some(opening), "double-click: the opening value");
+    // Esc drops what the tool did.
+    s.apply(&Action::CancelTool);
+    assert!(s.tool.is_none() && s.stack().is_empty() && !s.dirty());
+    settle(&mut s);
+
+    // Crop, then the tool measures the cropped photo; a value already set is kept.
+    let crop = Rect::new(0.0, 0.0, 40.0, 40.0); // a corner with the red square
+    s.apply(&Action::SetCrop(crop));
+    s.apply(&Action::OpenTool { tool: Tool::Exposure });
+    assert_eq!(s.mode, Mode::Browse, "the crop is applied");
+    assert_eq!(s.tool.as_ref().unwrap().opening, None, "waits for the cropped photo");
+    settle(&mut s);
+    let cropped = s.tool.as_ref().unwrap().opening.unwrap();
+    let crop_stack = EditStack::default().with(photo_cruiser_core::Op::Crop(crop));
+    assert_eq!(cropped, adjust::opening(&src, &crop_stack, Tool::Exposure).unwrap());
+    assert_ne!(cropped, opening);
+    s.apply(&Action::DragAdjust { value: 1.25 });
+    s.apply(&Action::CloseTool);
+    assert_eq!(exposure(&s), Some(1.25), "closing keeps a dragged value");
+    s.apply(&Action::OpenTool { tool: Tool::Exposure });
+    settle(&mut s);
+    assert_eq!(exposure(&s), Some(1.25), "reopened: the value stays");
+    // Turning the photo closes the tool.
+    s.apply(&Action::RotateRight);
+    assert!(s.tool.is_none());
+    s.apply(&Action::Undo);
+
+    // Leaving saves it, rendered like pcr renders it.
+    s.apply(&Action::OpenTool { tool: Tool::Exposure });
+    s.apply(&Action::Next);
+    assert!(s.tool.is_none() && s.preview.is_none());
+    settle(&mut s);
+    let saved = image::open(&photo).unwrap().into_rgba8();
+    let stack = crop_stack.clone().with(photo_cruiser_core::Op::Adjust { tool: Tool::Exposure, value: 1.25 });
+    let want = render::render(&src, &stack, Default::default()).unwrap();
+    assert_eq!(saved.dimensions(), want.dimensions());
+    let diffs: Vec<u8> = saved
+        .pixels()
+        .zip(want.pixels())
+        .flat_map(|(a, b)| (0..3).map(move |c| a.0[c].abs_diff(b.0[c])))
+        .collect();
+    let mean = diffs.iter().map(|d| f64::from(*d)).sum::<f64>() / diffs.len() as f64;
+    assert!(
+        mean < 2.0,
+        "saved as rendered, up to the JPEG re-encode: mean diff {mean}, max {:?}",
+        diffs.iter().max()
+    );
+    assert!(s.errors.is_empty(), "{:?}", s.errors);
+}
+
+#[test]
+fn tool_keys() {
+    use crate::crop_overlay::key_message;
+    use iced::keyboard::Modifiers;
+    use photo_cruiser_core::Tool;
+    let tool = Modes { tool: true, ..Modes::default() };
+    let action = |k: Key, m| match key_message(&k, &k, Modifiers::empty(), m) {
+        Some(Message::Action(a)) => a,
+        other => panic!("{other:?}"),
+    };
+    assert_eq!(
+        action(Key::Character("e".into()), Modes::default()),
+        Action::OpenTool { tool: Tool::Exposure }
+    );
+    assert_eq!(action(Key::Named(Named::Escape), tool), Action::CancelTool);
+    assert_eq!(action(Key::Named(Named::Enter), tool), Action::CloseTool);
+    assert_eq!(action(Key::Named(Named::Escape), Modes { fullscreen: true, ..tool }), Action::CancelTool);
+    let help = Modes { help: true, ..tool };
+    assert_eq!(action(Key::Named(Named::Escape), help), Action::ToggleHelp, "panels close first");
+}
+
+#[test]
+fn exposure_slider_drag_and_double_click() {
+    let mut h = harness(); // img1.png
+    h.until("img1 shown", |h| h.bounds("photo").is_some());
+    h.keys(Key::Character("e".into()), 1);
+    h.until("slider", |h| h.bounds("tool-slider").is_some());
+    let opening = h.ev();
+    // Dragged to the right end: +2 EV, live, then set on release.
+    let b = h.bounds("tool-slider").unwrap();
+    h.drag(Point::new(b.center_x(), b.center_y()), Point::new(b.x + b.width + 40.0, b.center_y()));
+    assert_eq!(h.ev(), "+2.00 EV");
+    // Double-click: back to the opening value.
+    let target = Some(Target::Point(Point::new(b.x + 20.0, b.center_y())));
+    h.run(Interaction::Mouse(Mouse::Click { button: Button::Left, target: target.clone() }));
+    h.run(Interaction::Mouse(Mouse::Click { button: Button::Left, target }));
+    assert_eq!(h.ev(), opening);
+    h.keys(Key::Named(Named::Enter), 1);
+    assert!(h.bounds("tool").is_none(), "Enter: done");
 }

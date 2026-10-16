@@ -10,10 +10,11 @@
 //! is empty after clamping to the image, an animated or 16-bit image on save).
 
 use clap::{Parser, Subcommand};
+use photo_cruiser_core::adjust;
 use photo_cruiser_core::export::{self, OutFormat};
 use photo_cruiser_core::render::{self, RenderOpts};
 use photo_cruiser_core::store::{self, PhotoEdits};
-use photo_cruiser_core::{EditStack, Error, Folder, Op, Probe, Rect};
+use photo_cruiser_core::{EditStack, Error, Folder, Op, Probe, Rect, Tool};
 use serde::Serialize;
 use serde_json::{Value, json};
 use std::path::{Path, PathBuf};
@@ -64,6 +65,11 @@ enum Cmd {
         /// image; a crop fully outside it is an `empty_crop` error.
         #[arg(long, value_parser = parse_crop)]
         crop: Option<Rect>,
+        /// A one-slider tool `TOOL[=VALUE]` (e.g. `exposure=0.5`), set after the edits and
+        /// `--crop`. Without a value: the value the app opens the tool at (auto, measured
+        /// on the cropped photo). Repeatable. Tools: exposure (EV, -2..2).
+        #[arg(long, value_name = "TOOL[=VALUE]", value_parser = parse_adjust)]
+        adjust: Vec<(Tool, Option<f32>)>,
         /// Downscale the result so its longer side is at most N.
         #[arg(long, value_name = "N", value_parser = clap::value_parser!(u32).range(1..))]
         max_side: Option<u32>,
@@ -197,16 +203,16 @@ fn run(cmd: Cmd) -> Result<ExitCode, Fail> {
     match cmd {
         Cmd::List { dir, probe, json } => list(&dir, probe, json)?,
         Cmd::Info { file, json } => info(&file, json)?,
-        Cmd::Render { file, edits, no_edits, crop, max_side, output, json } => {
+        Cmd::Render { file, edits, no_edits, crop, adjust, max_side, output, json } => {
             let mut stack = stack_for(&file, edits.as_deref(), no_edits)?;
             if let Some(r) = crop {
                 stack.ops.push(Op::Crop(r));
             }
-            write_rendered(&file, &stack, max_side, &output, 90, json)?
+            write_rendered(&file, &stack, &adjust, max_side, &output, 90, json)?
         }
         Cmd::Export { file, edits, no_edits, output, quality, json } => {
             let stack = stack_for(&file, edits.as_deref(), no_edits)?;
-            write_rendered(&file, &stack, None, &output, quality, json)?
+            write_rendered(&file, &stack, &[], None, &output, quality, json)?
         }
         Cmd::Edits { file, json } => show_edits(&file, json)?,
         Cmd::Save { file, edits, json } => {
@@ -319,6 +325,7 @@ fn info(file: &Path, json: bool) -> Result<(), Fail> {
 fn write_rendered(
     file: &Path,
     edits: &EditStack,
+    adjust: &[(Tool, Option<f32>)],
     max_side: Option<u32>,
     output: &Path,
     quality: u8,
@@ -327,11 +334,19 @@ fn write_rendered(
     // Check the output extension before the (possibly slow) decode.
     let format = OutFormat::from_path(output, quality)?;
     let src = photo_cruiser_core::decode(&store::original(file))?;
-    let img = render::render(&src, edits, RenderOpts { max_side })?;
+    let mut edits = edits.clone();
+    for (tool, value) in adjust {
+        let value = match value {
+            Some(v) => *v,
+            None => adjust::opening(&src, &edits, *tool)?,
+        };
+        edits.set_adjust(*tool, Some(value));
+    }
+    let img = render::render(&src, &edits, RenderOpts { max_side })?;
     export::save(&img, output, format)?;
     let (width, height) = img.dimensions();
     if json {
-        print_json(&RenderJson { path: output, width, height });
+        print_json(&RenderJson { path: output, width, height, ops: &edits.ops });
     } else {
         println!("{} {width}x{height}", output.display());
     }
@@ -343,6 +358,8 @@ struct RenderJson<'a> {
     path: &'a Path,
     width: u32,
     height: u32,
+    /// The edits rendered (with `--crop` and `--adjust` values filled in).
+    ops: &'a [Op],
 }
 
 fn read_edits(path: &Path) -> Result<EditStack, Fail> {
@@ -447,6 +464,18 @@ fn parse_crop(s: &str) -> Result<Rect, String> {
     match v[..] {
         [x, y, w, h] if v.iter().all(|n| n.is_finite()) && w > 0.0 && h > 0.0 => Ok(Rect::new(x, y, w, h)),
         _ => Err("expected x,y,w,h with w,h > 0".into()),
+    }
+}
+
+/// `exposure` or `exposure=0.5`.
+fn parse_adjust(s: &str) -> Result<(Tool, Option<f32>), String> {
+    let (name, value) = match s.split_once('=') {
+        Some((n, v)) => (n, Some(v.trim().parse::<f32>().map_err(|e| format!("{v:?}: {e}"))?)),
+        None => (s, None),
+    };
+    match value {
+        Some(v) if !v.is_finite() => Err(format!("{v}: not a number")),
+        _ => Ok((name.trim().parse()?, value)),
     }
 }
 

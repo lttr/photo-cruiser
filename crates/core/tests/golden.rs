@@ -10,7 +10,7 @@
 
 use image::RgbaImage;
 use photo_cruiser_core::render::{RenderOpts, render};
-use photo_cruiser_core::{EditStack, Op, Rect, decode};
+use photo_cruiser_core::{EditStack, Op, Rect, Tool, decode};
 use std::path::{Path, PathBuf};
 
 const MAX_DIFF: u8 = 4;
@@ -21,29 +21,41 @@ struct Case {
     fixture: &'static str,
     crop: Option<Rect>,
     max_side: Option<u32>,
+    /// A tool at its opening value for the cropped photo.
+    adjust: Option<Tool>,
 }
 
 const CASES: &[Case] = &[
-    Case { name: "png-full", fixture: "img1.png", crop: None, max_side: None },
+    Case { name: "png-full", fixture: "img1.png", crop: None, max_side: None, adjust: None },
     Case {
         name: "jpeg-crop",
         fixture: "img2.jpg",
         crop: Some(Rect::new(40.0, 30.0, 200.0, 150.0)),
         max_side: None,
+        adjust: None,
     },
     Case {
         name: "jpeg-exif6-crop",
         fixture: "img3-exif6.jpg",
         crop: Some(Rect::new(20.0, 100.0, 180.0, 120.0)),
         max_side: None,
+        adjust: None,
     },
     Case {
         name: "heic-crop-clamped-max-side",
         fixture: "img5.HEIC",
         crop: Some(Rect::new(200.0, -40.0, 300.0, 200.0)),
         max_side: Some(64),
+        adjust: None,
     },
-    Case { name: "avif-max-side", fixture: "img4.AVIF", crop: None, max_side: Some(100) },
+    Case {
+        name: "jpeg-crop-auto-exposure",
+        fixture: "img2.jpg",
+        crop: Some(Rect::new(40.0, 30.0, 200.0, 150.0)),
+        max_side: None,
+        adjust: Some(Tool::Exposure),
+    },
+    Case { name: "avif-max-side", fixture: "img4.AVIF", crop: None, max_side: Some(100), adjust: None },
 ];
 
 fn root() -> PathBuf {
@@ -58,7 +70,11 @@ fn artifacts() -> PathBuf {
 
 fn render_case(c: &Case) -> RgbaImage {
     let src = decode(&root().join("../../fixtures").join(c.fixture)).unwrap();
-    let edits = c.crop.map_or_else(EditStack::default, |r| EditStack::default().with(Op::Crop(r)));
+    let mut edits = c.crop.map_or_else(EditStack::default, |r| EditStack::default().with(Op::Crop(r)));
+    if let Some(tool) = c.adjust {
+        let value = tool.opening(&render(&src, &edits, RenderOpts::default()).unwrap());
+        edits.set_adjust(tool, Some(value));
+    }
     render(&src, &edits, RenderOpts { max_side: c.max_side }).unwrap()
 }
 

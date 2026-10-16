@@ -26,6 +26,8 @@ use crate::grid;
 use crate::menu;
 use crate::palette::{self, Palette};
 use iced::widget::image::Handle;
+use image::RgbaImage;
+use photo_cruiser_core::adjust::{self, Tool};
 use photo_cruiser_core::crop::{Aspect, CropTool, MouseKind};
 use photo_cruiser_core::geom::PixelRect;
 use photo_cruiser_core::loader::{Job, Kind, Loader, SizeJob, Sizes, ThumbJob, Thumbs};
@@ -35,6 +37,7 @@ use serde::Serialize;
 use std::collections::{HashMap, VecDeque};
 use std::ops::Range;
 use std::path::{Path, PathBuf};
+use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 /// Longest side of the displayed (GPU) image. Real GPUs take 8192+; 4096 keeps uploads
@@ -53,11 +56,26 @@ pub struct Picture {
     pub handle: Handle,
     /// Full-resolution size of what is shown (after orientation and crop), in source pixels.
     pub source: (u32, u32),
+    /// The image before its adjustments, if it has any (else the handle's pixels are).
+    pub base: Option<Arc<RgbaImage>>,
 }
 
 impl Picture {
     pub fn source_size(&self) -> Size {
         self.source.into()
+    }
+
+    /// The pixels with the geometry applied but no adjustments.
+    pub fn unadjusted(&self) -> Option<RgbaImage> {
+        if let Some(base) = &self.base {
+            return Some((**base).clone());
+        }
+        match &self.handle {
+            Handle::Rgba { width, height, pixels, .. } => {
+                RgbaImage::from_raw(*width, *height, pixels.to_vec())
+            }
+            _ => None,
+        }
     }
 }
 
@@ -89,12 +107,22 @@ pub fn decode_job(load: &LoadJob, max_side: u32) -> Loaded {
         None => full,
     };
     let source = if load.stack.rotation() % 2 == 1 { (h, w) } else { (w, h) };
-    let img = match load.stack.is_empty() {
+    let geometry = load.stack.geometry();
+    let img = match geometry.is_empty() {
         true => d.image,
-        false => photo_cruiser_core::render::render(&d, &load.stack, Default::default()).map_err(msg)?,
+        false => photo_cruiser_core::render::render(&d, &geometry, Default::default()).map_err(msg)?,
+    };
+    // Same as rendering the whole stack, keeping the image before the adjustments.
+    let (img, base) = match load.stack.adjustments().next() {
+        None => (img, None),
+        Some(_) => {
+            let mut adjusted = img.clone();
+            adjust::apply_all(&mut adjusted, &load.stack);
+            (adjusted, Some(Arc::new(img)))
+        }
     };
     let (w, h) = img.dimensions();
-    Ok(Picture { source, handle: Handle::from_rgba(w, h, img.into_raw()) })
+    Ok(Picture { source, handle: Handle::from_rgba(w, h, img.into_raw()), base })
 }
 
 /// The edits of one photo this session: the sidecar's content and the undo history.
@@ -146,7 +174,7 @@ pub fn io_job(io: Io) -> IoDone {
 pub fn thumb_job(path: &Path, side: u32) -> Loaded {
     let d = photo_cruiser_core::thumbnail(path, side).map_err(|e| e.to_string().trim_end().to_string())?;
     let (w, h) = d.image.dimensions();
-    Ok(Picture { source: d.source_size(), handle: Handle::from_rgba(w, h, d.image.into_raw()) })
+    Ok(Picture { source: d.source_size(), handle: Handle::from_rgba(w, h, d.image.into_raw()), base: None })
 }
 
 /// Probe the displayed sizes of `paths` (blocking); `None` for unreadable ones.
@@ -207,6 +235,46 @@ pub enum Mode {
     Browse,
     Crop,
 }
+
+/// The open one-slider tool ([`adjust`]). While it is open the image area shows a live
+/// [`Preview`] at screen size: dragging the slider re-renders only that, never the photo.
+#[derive(Clone, Debug)]
+pub struct ToolPanel {
+    pub tool: Tool,
+    /// The photo it is open on.
+    pub index: usize,
+    /// The value it opened at; `None` until the photo is loaded (then it is applied).
+    pub opening: Option<f32>,
+    /// The stack before the tool opened (`Esc` goes back to it).
+    pub before: EditStack,
+    /// The slider's value while it is dragged (not in the stack yet).
+    pub drag: Option<f32>,
+    /// The photo at screen size, with its geometry but no adjustments: the preview's
+    /// source and what the opening value was measured on (so on the cropped photo).
+    base: Option<Arc<RgbaImage>>,
+    /// The geometry `base` was made with; a change closes the tool.
+    geometry: EditStack,
+}
+
+impl ToolPanel {
+    /// The value the slider shows.
+    pub fn value(&self, stack: &EditStack) -> f32 {
+        self.drag.or(stack.adjust(self.tool)).unwrap_or(self.tool.neutral())
+    }
+}
+
+/// The adjusted photo at screen size, shown instead of the loaded image while a tool is
+/// open, and after that until the photo is reloaded with the new edits.
+#[derive(Clone, Debug)]
+pub struct Preview {
+    pub index: usize,
+    /// What it shows (with the dragged value).
+    stack: EditStack,
+    pub handle: Handle,
+}
+
+/// The preview's base is at most the image area's size times this (sharp on HiDPI).
+const PREVIEW_SCALE: f32 = 2.0;
 
 /// What the runtime must do after an action, beyond scheduling decodes.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -282,6 +350,9 @@ pub struct State {
     pub quitting: bool,
     /// A one-line notice for the status line (saving edits left from last time).
     pub notice: Option<String>,
+    /// The open one-slider tool.
+    pub tool: Option<ToolPanel>,
+    pub preview: Option<Preview>,
 }
 
 impl State {
@@ -324,6 +395,8 @@ impl State {
             displayed: HashMap::new(),
             quitting: false,
             notice: None,
+            tool: None,
+            preview: None,
         }
     }
 
@@ -478,6 +551,7 @@ impl State {
         };
         let effect = self.act(action);
         self.sync_display();
+        self.sync_tool();
         effect
     }
 
@@ -552,6 +626,23 @@ impl State {
                 };
                 if changed {
                     self.stored(path);
+                }
+            }
+            Action::OpenTool { tool } => self.open_tool(*tool),
+            Action::DragAdjust { value } => match &mut self.tool {
+                Some(p) => p.drag = Some(p.tool.clamp(*value)),
+                None => self.error("drag_adjust: no tool is open".into()),
+            },
+            Action::SetAdjust { value } => self.set_adjust(*value),
+            Action::ResetAdjust => {
+                if let Some(v) = self.tool.as_ref().and_then(|p| p.opening) {
+                    self.set_adjust(v);
+                }
+            }
+            Action::CloseTool => self.close_tool(),
+            Action::CancelTool => {
+                if let Some(p) = self.tool.take() {
+                    self.change_stack(p.before);
                 }
             }
             Action::RotateRight => self.rotate(1),
@@ -775,13 +866,136 @@ impl State {
         }
     }
 
+    /// Open `tool` on the current photo (see [`Action::OpenTool`]); [`State::sync_tool`]
+    /// finishes opening it once the photo shows with its current edits.
+    fn open_tool(&mut self, tool: Tool) {
+        if self.current_path().is_none() {
+            return self.error("open_tool: no photo".into());
+        }
+        self.apply_crop();
+        self.view = View::Photo;
+        if self.tool.as_ref().is_some_and(|p| p.tool == tool && p.index == self.index) {
+            return;
+        }
+        self.close_tool();
+        let before = self.stack();
+        let geometry = before.geometry();
+        self.tool = Some(ToolPanel {
+            tool,
+            index: self.index,
+            opening: None,
+            before,
+            drag: None,
+            base: None,
+            geometry,
+        });
+    }
+
+    /// Set the open tool's value as one undoable step.
+    fn set_adjust(&mut self, value: f32) {
+        let mut stack = self.stack();
+        let Some(p) = &mut self.tool else { return self.error("set_adjust: no tool is open".into()) };
+        p.drag = None;
+        stack.set_adjust(p.tool, Some(value));
+        self.change_stack(stack);
+    }
+
+    /// Close the tool, keeping a value still being dragged.
+    fn close_tool(&mut self) {
+        if let Some(v) = self.tool.as_ref().and_then(|p| p.drag) {
+            self.set_adjust(v);
+        }
+        self.tool = None;
+    }
+
+    /// Keep the tool and its preview in step with the photo: close the tool when the
+    /// photo, its shape or the view changed; finish opening it once the photo shows;
+    /// re-render the preview when the values changed; drop a preview no longer needed.
+    fn sync_tool(&mut self) {
+        if let Some(p) = &self.tool {
+            let same_shape = p.base.is_none() || p.geometry == self.stack().geometry();
+            if p.index != self.index || self.view != View::Photo || self.mode != Mode::Browse || !same_shape {
+                self.close_tool();
+            }
+        }
+        if self.tool.as_ref().is_some_and(|p| p.base.is_none())
+            && let Some(base) = self.preview_base()
+        {
+            let stack = self.stack();
+            let Some(p) = &mut self.tool else { return };
+            let opening = p.tool.opening(&base);
+            (p.base, p.opening, p.geometry) = (Some(Arc::new(base)), Some(opening), stack.geometry());
+            if stack.adjust(p.tool).is_none() {
+                self.set_adjust(opening);
+                self.sync_display();
+            }
+        }
+        let mut stack = self.stack();
+        match &self.tool {
+            Some(ToolPanel { tool, drag, base: Some(base), .. }) => {
+                if let Some(v) = drag {
+                    stack.set_adjust(*tool, Some(*v));
+                }
+                if self.preview.as_ref().is_none_or(|pr| pr.index != self.index || pr.stack != stack) {
+                    let t0 = Instant::now();
+                    let mut img = (**base).clone();
+                    adjust::apply_all(&mut img, &stack);
+                    let (w, h) = img.dimensions();
+                    let handle = Handle::from_rgba(w, h, img.into_raw());
+                    if self.trace {
+                        let ms = t0.elapsed().as_secs_f64() * 1000.0;
+                        eprintln!("trace: preview {w}x{h} rendered in {ms:.1} ms");
+                    }
+                    self.preview = Some(Preview { index: self.index, stack, handle });
+                }
+            }
+            // Opening: the photo shows as it is.
+            Some(_) => {}
+            None => {
+                if self
+                    .preview
+                    .as_ref()
+                    .is_some_and(|pr| pr.index != self.index || pr.stack != stack || self.picture().is_some())
+                {
+                    self.preview = None;
+                }
+            }
+        }
+    }
+
+    /// The current photo, loaded with its current geometry, at screen size without
+    /// adjustments.
+    fn preview_base(&self) -> Option<RgbaImage> {
+        let img = self.picture()?.unadjusted()?;
+        let body = self.body_size();
+        let (w, h) = img.dimensions();
+        let k = (body.width * PREVIEW_SCALE / w as f32).min(body.height * PREVIEW_SCALE / h as f32);
+        Some(match k < 1.0 {
+            true => {
+                let (nw, nh) =
+                    (((w as f32 * k).round() as u32).max(1), ((h as f32 * k).round() as u32).max(1));
+                image::imageops::thumbnail(&img, nw, nh)
+            }
+            false => img,
+        })
+    }
+
+    /// The image area's image: the live preview, else the loaded photo.
+    pub fn image_handle(&self) -> Option<&Handle> {
+        match &self.preview {
+            Some(p) if p.index == self.index => Some(&p.handle),
+            _ => self.picture().map(|p| &p.handle),
+        }
+    }
+
     /// Leaving the current photo: a draft crop is applied (crop mode stays on, for the
-    /// next photo), a dirty photo saved.
+    /// next photo), an open tool closed, a dirty photo saved.
     fn leave(&mut self) {
         if self.view != View::Photo {
             return;
         }
         self.apply_draft();
+        self.close_tool();
         if self.dirty()
             && let Some(path) = self.current_path().map(Path::to_path_buf)
         {
@@ -1090,6 +1304,7 @@ impl State {
         }
         if fresh && job.index == self.index {
             self.refresh();
+            self.sync_tool();
         }
     }
 
@@ -1173,6 +1388,13 @@ impl State {
             loading: self.current_path().is_some() && self.current().is_none(),
             display: self.display(),
             edits: self.stack().ops,
+            tool: self.tool.as_ref().map(|p| ToolDump {
+                tool: p.tool,
+                value: p.value(&self.stack()),
+                opening: p.opening,
+                dragging: p.drag.is_some(),
+            }),
+            preview: self.preview.as_ref().is_some_and(|p| p.index == self.index),
             dirty: self.dirty(),
             saved: self
                 .current_path()
@@ -1232,6 +1454,10 @@ pub struct Dump {
     pub display: Display,
     /// The current photo's edit stack.
     pub edits: Vec<Op>,
+    /// The open one-slider tool.
+    pub tool: Option<ToolDump>,
+    /// The image area shows the tool's live preview.
+    pub preview: bool,
     /// Its edits differ from what its file was saved with.
     pub dirty: bool,
     /// The stack its file was saved with (`null`: never saved).
@@ -1244,6 +1470,16 @@ pub struct Dump {
     /// Logical size of the window (from the screenshot or `window::size`).
     pub window: Option<WindowSize>,
     pub shot: Option<String>,
+}
+
+#[derive(Debug, Serialize)]
+pub struct ToolDump {
+    pub tool: Tool,
+    /// What the slider shows.
+    pub value: f32,
+    /// The value it opened at (`null` while the photo loads).
+    pub opening: Option<f32>,
+    pub dragging: bool,
 }
 
 /// `path` for display, with the home directory shortened to `~`.

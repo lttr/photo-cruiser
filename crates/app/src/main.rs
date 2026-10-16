@@ -14,6 +14,7 @@ use std::sync::atomic::Ordering;
 use std::time::Duration;
 
 mod action;
+mod adjust_panel;
 mod app;
 mod crop_overlay;
 mod grid;

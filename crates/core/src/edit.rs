@@ -1,5 +1,6 @@
 //! Non-destructive edits: an ordered stack of operations, serialised as versioned JSON.
 
+use crate::adjust::Tool;
 use crate::geom::Rect;
 use crate::{Error, Result};
 use serde::{Deserialize, Serialize};
@@ -13,6 +14,8 @@ pub enum Op {
     Crop(Rect),
     /// Turn clockwise by `quarters` × 90° (1–3), after the crop.
     Rotate { quarters: u8 },
+    /// A one-slider tool at `value` (see [`crate::adjust`]). Applied after the geometry.
+    Adjust { tool: Tool, value: f32 },
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]

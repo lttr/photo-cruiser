@@ -100,8 +100,8 @@ pub fn update(app: &mut App, event: Event) -> Task<Message> {
             // `App::update` batches the decode this may need; the tick waits for it.
             Task::batch([effect, after(POLL, Event::Tick)])
         }
-        Event::Tick => match app.state.picture() {
-            Some(p) => image::allocate(p.handle.clone()).map(|r| Message::Script(Event::Allocated(Some(r)))),
+        Event::Tick => match app.state.image_handle() {
+            Some(h) => image::allocate(h.clone()).map(|r| Message::Script(Event::Allocated(Some(r)))),
             None => Task::done(Message::Script(Event::Allocated(None))),
         },
         Event::Allocated(result) => {

@@ -327,3 +327,40 @@ fn read_only_folder_keeps_edits_in_the_fallback() {
     let fallback: Vec<_> = std::fs::read_dir(dir.path().join("data/photo-cruiser/edits")).unwrap().collect();
     assert_eq!(fallback.len(), 1);
 }
+
+#[test]
+fn adjust_render_and_save() {
+    let (dir, p) = temp_copies(&["img2.jpg"]);
+    let photo = &p[0];
+    let out = dir.path().join("out.png").to_string_lossy().into_owned();
+    // No value: the app's opening value, measured on the cropped photo.
+    let v = json_in(
+        &dir,
+        &["render", photo, "--crop", "40,30,200,150", "--adjust", "exposure", "-o", &out, "--json"],
+        0,
+    );
+    assert_eq!(v["ops"][1]["op"], "adjust");
+    assert_eq!(v["ops"][1]["tool"], "exposure");
+    let auto = v["ops"][1]["value"].as_f64().unwrap();
+    assert!((-2.0..-0.1).contains(&auto), "white and blue checks come out darker: {auto}");
+    let pixel = |path: &str| image::open(path).unwrap().into_rgba8().get_pixel(0, 0).0;
+    let auto_px = pixel(&out);
+
+    // The same through edits JSON, then saved into the photo.
+    let edits = dir.path().join("e.json");
+    let stack = json!({"version": 1, "ops": [{"op": "crop", "x": 40, "y": 30, "w": 200, "h": 150},
+        {"op": "adjust", "tool": "exposure", "value": auto}]});
+    std::fs::write(&edits, stack.to_string()).unwrap();
+    let edits = edits.to_string_lossy().into_owned();
+    json_in(&dir, &["render", photo, "--edits", &edits, "-o", &out, "--json"], 0);
+    assert_eq!(pixel(&out), auto_px);
+    let v = json_in(&dir, &["save", photo, "--edits", &edits, "--json"], 0);
+    assert_eq!((&v["action"], &v["width"]), (&json!("saved"), &json!(200)));
+    let v = json_in(&dir, &["edits", photo, "--json"], 0);
+    assert_eq!((&v["ops"][1]["tool"], &v["dirty"]), (&json!("exposure"), &json!(false)));
+    let saved = image::open(photo).unwrap().into_rgba8().get_pixel(0, 0).0;
+    assert!(saved.iter().zip(auto_px).all(|(s, a)| s.abs_diff(a) <= 6), "{saved:?} vs {auto_px:?}");
+
+    let v = json_in(&dir, &["render", photo, "--adjust", "blur", "-o", &out, "--json"], 1);
+    assert_eq!(v["error"]["kind"], "usage");
+}

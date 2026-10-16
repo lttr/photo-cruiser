@@ -4,6 +4,7 @@
 //! While it shows, [`Keys`] (stacked over it) takes the keys the text field doesn't.
 
 use crate::action::Action;
+use crate::adjust_panel;
 use crate::grid::Layout;
 use crate::message::Message;
 use crate::state::{Mode, State, View};
@@ -11,6 +12,7 @@ use iced::keyboard::{self, Key, key::Named};
 use iced::mouse::Cursor;
 use iced::widget::canvas::{self, Event, Geometry};
 use iced::{Rectangle, Renderer, Theme};
+use photo_cruiser_core::Tool;
 use photo_cruiser_core::crop::Aspect;
 use serde::Serialize;
 
@@ -132,6 +134,18 @@ fn edits(s: &State, c: &mut Vec<Command>) {
         }
     } else {
         c.push(cmd("Crop", "C", Action::ToggleCrop));
+    }
+    let open = s.tool.as_ref().map(|p| p.tool);
+    for tool in Tool::ALL.into_iter().filter(|t| Some(*t) != open) {
+        c.push(cmd(tool.label(), adjust_panel::key(tool), Action::OpenTool { tool }));
+    }
+    if let Some(p) = &s.tool {
+        let label = p.tool.label();
+        c.push(cmd(format!("{label}: done"), "Enter", Action::CloseTool));
+        c.push(cmd(format!("{label}: cancel"), "Esc", Action::CancelTool));
+        if p.opening.is_some() {
+            c.push(cmd(format!("{label}: reset"), "", Action::ResetAdjust));
+        }
     }
     c.push(cmd("Turn right", "Shift+R", Action::RotateRight));
     c.push(cmd("Turn left", "Shift+L", Action::RotateLeft));
