@@ -1,6 +1,7 @@
 ---
 status: done
-verified: [just check, just verify (incl. headless verify-levels shot), behaviour (headless shots at strength 0/1/2 with state dumps), /code-review low (no findings)]
+verified: [checks, behaviour, review]
+reviewed_sha: c0ee5cb
 blocked_by: [01]
 references:
   - "Research: ../research.md"

@@ -1,6 +1,7 @@
 ---
 status: done
-verified: [just check, just verify (incl. headless verify-exposure shot), PC_TRACE preview timing on a 6000x6000 JPEG, /code-review low (partial: core + state.rs)]
+verified: [checks, behaviour, review]
+reviewed_sha: 3cc2d2f
 blocked_by: []
 references:
   - "Research: ../research.md"
