@@ -25,6 +25,9 @@ struct Case {
     adjust: Option<Tool>,
 }
 
+/// The page in `adjust/document.jpg`, without the desk.
+const PAGE: Rect = Rect::new(60.0, 0.0, 260.0, 240.0);
+
 const CASES: &[Case] = &[
     Case { name: "png-full", fixture: "img1.png", crop: None, max_side: None, adjust: None },
     Case {
@@ -54,6 +57,13 @@ const CASES: &[Case] = &[
         crop: Some(Rect::new(40.0, 30.0, 200.0, 150.0)),
         max_side: None,
         adjust: Some(Tool::Exposure),
+    },
+    Case {
+        name: "document-crop-levels",
+        fixture: "adjust/document.jpg",
+        crop: Some(PAGE),
+        max_side: None,
+        adjust: Some(Tool::Levels),
     },
     Case { name: "avif-max-side", fixture: "img4.AVIF", crop: None, max_side: Some(100), adjust: None },
 ];
@@ -149,4 +159,55 @@ fn compare_reports_differences() {
     let msg = compare(&a, &b).unwrap();
     assert!(msg.contains("max channel diff 20 at (3,0)") && msg.contains("1 of 16 pixels"), "{msg}");
     assert!(compare(&a, &RgbaImage::new(4, 5)).unwrap().contains("size (4, 5)"));
+}
+
+/// Auto levels on a photo of a document (`adjust/document.jpg`): yellowish paper, grey-brown
+/// text, a shadow in a corner, a dark desk left of the page.
+#[test]
+fn levels_on_a_document() {
+    let src = decode(&root().join("../../fixtures/adjust/document.jpg")).unwrap();
+    let page = EditStack::default().with(Op::Crop(PAGE));
+    let at = |stack: &EditStack, strength: f32| {
+        let mut s = stack.clone();
+        s.set_adjust(Tool::Levels, Some(strength));
+        render(&src, &s, RenderOpts::default()).unwrap()
+    };
+    let original = at(&page, 0.0);
+    assert_eq!(original, render(&src, &page, RenderOpts::default()).unwrap(), "strength 0: unchanged");
+    // Paper and text, told apart on the original.
+    let paper = |img: &RgbaImage| -> Vec<[u8; 3]> {
+        img.enumerate_pixels()
+            .filter(|(x, y, _)| {
+                original.get_pixel(*x, *y).0[..3].iter().map(|c| u32::from(*c)).sum::<u32>() > 330
+            })
+            .map(|(_, _, p)| [p.0[0], p.0[1], p.0[2]])
+            .collect()
+    };
+    let white = |img: &RgbaImage| {
+        let p = paper(img);
+        p.iter().filter(|c| c.iter().all(|c| *c >= 245)).count() as f32 / p.len() as f32
+    };
+    let (text, corner) = ((22, 27), (5, 5));
+    let px = |img: &RgbaImage, (x, y): (u32, u32)| img.get_pixel(x, y).0;
+    // About [85, 76, 61] and [205, 192, 150]: grey-brown on yellowish.
+    assert!(px(&original, text)[..3].iter().all(|c| (55..=95).contains(c)), "{:?}", px(&original, text));
+    assert!(px(&original, corner)[2] < 160 && white(&original) == 0.0);
+
+    let one = at(&page, 1.0);
+    assert!(px(&one, corner)[..3].iter().all(|c| *c >= 245), "white paper: {:?}", px(&one, corner));
+    assert!(px(&one, text)[..3].iter().all(|c| *c <= 30), "dark text: {:?}", px(&one, text));
+    // Strength 2 clips more: much more of the paper turns white.
+    let two = at(&page, 2.0);
+    assert!(
+        white(&two) > 0.4 && white(&one) < 0.2,
+        "white paper: {} at 1, {} at 2",
+        white(&one),
+        white(&two)
+    );
+
+    // Measured on the crop: on the whole photo the dark desk is the black point, so the
+    // text stays grey.
+    let whole = at(&EditStack::default(), 1.0);
+    let on_whole = px(&whole, (text.0 + 60, text.1));
+    assert!(on_whole[..3].iter().all(|c| *c >= 60), "desk as the black point: {on_whole:?}");
 }

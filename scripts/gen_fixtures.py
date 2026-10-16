@@ -16,6 +16,10 @@ previews/: photos with embedded thumbnails (80×60, a downscaled copy):
   thumb.HEIC (HEIF thumbnail item), thumb-exif6.jpg (EXIF IFD1 thumbnail, orientation 6),
   letterbox.jpg (16:9 photo, 4:3 thumbnail: aspect mismatch → no preview),
   rounded.jpg (4:3 photo, 80×64 thumbnail like a phone's: no preview, but a grid thumbnail)
+
+adjust/: inputs for the adjustment tools:
+  document.jpg (photo of a page: yellowish paper with a shadow in a corner and grey-brown
+  text, on a dark desk at the left; the page is x 60..320)
 """
 
 import io
@@ -100,6 +104,38 @@ wide = marked(gradient(320, 180), "16:9")
 wide.save(previews / "letterbox.jpg", quality=90, exif=exif_with_thumbnail(gradient(80, 60), 1))
 rounded = marked(gradient(), "4:3")
 rounded.save(previews / "rounded.jpg", quality=90, exif=exif_with_thumbnail(rounded.resize((80, 64)), 1))
+
+
+
+def document(w=W, h=H, desk=60):
+    """A weak-contrast photo of a page: yellowish paper, a little darker to the right and
+    in a shadow at the bottom right corner, lines of grey-brown "words", and a dark desk
+    left of x = desk."""
+
+    def light(x, y):
+        corner = ((w - x) ** 2 + (h - y) ** 2) ** 0.5 / 110
+        return 1.0 - 0.03 * (x - desk) / (w - desk) - 0.25 * max(0.0, 1.0 - corner)
+
+    img = Image.new("RGB", (w, h))
+    px = img.load()
+    for y in range(h):
+        for x in range(w):
+            px[x, y] = tuple(round(c * light(x, y)) for c in (205, 192, 150))
+    d = ImageDraw.Draw(img)
+    for row, y in enumerate(range(24, h - 20, 18)):
+        x = desk + 20
+        for i in range(12):
+            word = 12 + (row * 7 + i * 13) % 26
+            if x + word > w - 20:
+                break
+            d.rectangle([x, y, x + word, y + 7], fill=tuple(round(c * light(x, y)) for c in (85, 76, 62)))
+            x += word + 7
+    d.rectangle([0, 0, desk - 1, h - 1], fill=(38, 34, 32))
+    return img
+
+
+(out / "adjust").mkdir(exist_ok=True)
+document().save(out / "adjust" / "document.jpg", quality=95, subsampling=0)
 
 from PIL import ImageCms
 

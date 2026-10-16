@@ -17,6 +17,9 @@ use std::sync::OnceLock;
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum Tool {
+    /// Auto levels at a strength, 0–2: per channel, the darkest and brightest pixels
+    /// become black and white. For photos of documents.
+    Levels,
     /// Brightness in EV (stops): linear light × 2^value.
     Exposure,
 }
@@ -25,11 +28,14 @@ pub enum Tool {
 pub const MIDDLE_GREY: f32 = 0.1842;
 
 impl Tool {
-    /// Every tool, in the order they are applied.
-    pub const ALL: [Tool; 1] = [Tool::Exposure];
+    /// Every tool, in the order they are applied (the enum's order). Levels comes before
+    /// exposure: it stretches each channel to the full range, so it would undo an exposure
+    /// done before it.
+    pub const ALL: [Tool; 2] = [Tool::Levels, Tool::Exposure];
 
     pub fn label(self) -> &'static str {
         match self {
+            Tool::Levels => "Auto levels",
             Tool::Exposure => "Exposure",
         }
     }
@@ -37,6 +43,7 @@ impl Tool {
     /// The slider's range; values outside it are clamped.
     pub fn range(self) -> RangeInclusive<f32> {
         match self {
+            Tool::Levels => 0.0..=2.0,
             Tool::Exposure => -2.0..=2.0,
         }
     }
@@ -44,13 +51,14 @@ impl Tool {
     /// The value that changes nothing.
     pub fn neutral(self) -> f32 {
         match self {
-            Tool::Exposure => 0.0,
+            Tool::Levels | Tool::Exposure => 0.0,
         }
     }
 
     /// The value as the panel shows it.
     pub fn format(self, value: f32) -> String {
         match self {
+            Tool::Levels => format!("{value:.2}"),
             Tool::Exposure => format!("{value:+.2} EV"),
         }
     }
@@ -61,9 +69,11 @@ impl Tool {
     }
 
     /// The value the tool opens at for `img`: auto exposure brings the average brightness
-    /// to middle grey. Rounded to 0.01.
+    /// to middle grey; levels opens at strength 1 (it measures the image as it applies).
+    /// Rounded to 0.01.
     pub fn opening(self, img: &RgbaImage) -> f32 {
         let v = match self {
+            Tool::Levels => 1.0,
             Tool::Exposure => auto_exposure(img),
         };
         // `+ 0.0`: no "-0.00".
@@ -77,7 +87,11 @@ impl Tool {
             return;
         }
         match self {
-            Tool::Exposure => map_rgb(img, &exposure_lut(value)),
+            Tool::Levels => {
+                let luts = levels_luts(img, value);
+                map_rgb(img, &luts)
+            }
+            Tool::Exposure => map_rgb(img, &[exposure_lut(value); 3]),
         }
     }
 }
@@ -128,10 +142,10 @@ fn to_byte(v: f32) -> u8 {
     (v * 255.0).round().clamp(0.0, 255.0) as u8
 }
 
-/// The same 8-bit curve on R, G and B; alpha stays.
-fn map_rgb(img: &mut RgbaImage, lut: &[u8; 256]) {
+/// An 8-bit curve each on R, G and B; alpha stays.
+fn map_rgb(img: &mut RgbaImage, luts: &[[u8; 256]; 3]) {
     for px in img.pixels_mut() {
-        for c in &mut px.0[..3] {
+        for (c, lut) in px.0[..3].iter_mut().zip(luts) {
             *c = lut[*c as usize];
         }
     }
@@ -142,6 +156,47 @@ fn exposure_lut(ev: f32) -> [u8; 256] {
     let k = ev.exp2();
     let lin = linear_lut();
     std::array::from_fn(|i| to_byte(linear_to_srgb(lin[i] * k)))
+}
+
+/// Auto levels at `strength` (0–2) for `img`, one curve per channel. Per channel, the
+/// darkest and the brightest 0.5% of the pixels (alpha-weighted) become black and white,
+/// linear in between, on the sRGB-encoded values: so the grey point is midway as you see
+/// it, like classic levels. Strength 0–1 blends from the original to that; 1–2 raises the
+/// clipping at each end from 0.5% to 5%. A channel with a single value stays.
+fn levels_luts(img: &RgbaImage, strength: f32) -> [[u8; 256]; 3] {
+    let mut hist = [[0f64; 256]; 3];
+    let mut weight = 0f64;
+    for px in img.pixels() {
+        let a = f64::from(px.0[3]) / 255.0;
+        weight += a;
+        for c in 0..3 {
+            hist[c][px.0[c] as usize] += a;
+        }
+    }
+    let clip = weight * f64::from(0.005 + 0.045 * (strength - 1.0).clamp(0.0, 1.0));
+    let blend = strength.clamp(0.0, 1.0);
+    // The first value, walking `bins`, with more than `clip` of the weight behind it.
+    fn point<'a>(mut bins: impl Iterator<Item = (usize, &'a f64)>, clip: f64) -> Option<usize> {
+        let mut sum = 0.0;
+        bins.find(|(_, n)| {
+            sum += **n;
+            sum > clip
+        })
+        .map(|(i, _)| i)
+    }
+    std::array::from_fn(|c| {
+        let h = &hist[c];
+        let black = point(h.iter().enumerate(), clip);
+        let white = point(h.iter().enumerate().rev(), clip);
+        std::array::from_fn(|i| match (black, white) {
+            (Some(b), Some(w)) if w > b => {
+                let v = i as f32;
+                let stretched = ((v - b as f32) / (w - b) as f32 * 255.0).clamp(0.0, 255.0);
+                (v + (stretched - v) * blend).round() as u8
+            }
+            _ => i as u8,
+        })
+    })
 }
 
 /// Rec. 709 luminance weights of linear R, G, B.
@@ -295,6 +350,58 @@ mod tests {
         assert_eq!(Tool::Exposure.opening(&RgbaImage::new(0, 0)), 0.0);
     }
 
+    /// 100 columns, 10 pixels each, sRGB 50, 51.5, … 198.5 (rounded) from left to right.
+    fn ramp() -> RgbaImage {
+        RgbaImage::from_fn(100, 10, |x, _| {
+            let v = (50.0 + 1.5 * x as f32).round() as u8;
+            Rgba([v, v, v, 255])
+        })
+    }
+
+    #[test]
+    fn levels_pixel_math() {
+        let at = |strength: f32, x: u32| {
+            let mut img = ramp();
+            Tool::Levels.apply(&mut img, strength);
+            img.get_pixel(x, 0).0[0]
+        };
+        // 0.5% of 1000 pixels is 5: inside the first and last column (50 and 199).
+        assert_eq!((at(1.0, 0), at(1.0, 99)), (0, 255), "black and white points");
+        // Linear in between: 125 is midway between 50 and 199 → 127.
+        assert_eq!(at(1.0, 50), ((125.0 - 50.0) / 149.0 * 255.0f32).round() as u8);
+        // Half strength: half way from the original.
+        assert_eq!((at(0.5, 0), at(0.5, 99)), (25, 227));
+        // Strength 2 clips 5% (50 pixels, 5 columns) at each end: the next columns, 58 and
+        // 191, are the black and white points.
+        assert_eq!((at(2.0, 5), at(2.0, 6), at(2.0, 93), at(2.0, 94)), (0, 2, 253, 255));
+        assert!(at(1.5, 3) < at(1.0, 3) && at(1.5, 3) > 0, "between");
+        // Strength 0, and out of range, change nothing / clamp.
+        let mut img = ramp();
+        Tool::Levels.apply(&mut img, 0.0);
+        assert_eq!(img, ramp());
+        assert_eq!((at(-1.0, 0), at(9.0, 4)), (50, 0));
+    }
+
+    #[test]
+    fn levels_whiten_tinted_paper_per_channel() {
+        // Yellowish paper with dark-brown text: each channel stretches on its own.
+        let mut doc = RgbaImage::from_fn(10, 10, |x, _| {
+            if x == 0 { Rgba([70, 60, 40, 255]) } else { Rgba([200, 190, 140, 255]) }
+        });
+        doc.put_pixel(5, 5, Rgba([0, 0, 0, 0]));
+        Tool::Levels.apply(&mut doc, 1.0);
+        assert_eq!(doc.get_pixel(0, 0).0, [0, 0, 0, 255], "text black");
+        assert_eq!(doc.get_pixel(1, 0).0, [255, 255, 255, 255], "paper white");
+        // A transparent pixel doesn't count as black.
+        assert_eq!(doc.get_pixel(5, 5).0, [0, 0, 0, 0]);
+        // A flat image (one value per channel) stays, and so does an empty one.
+        let mut paper = RgbaImage::from_pixel(4, 4, Rgba([200, 190, 140, 255]));
+        Tool::Levels.apply(&mut paper, 2.0);
+        assert_eq!(paper.get_pixel(0, 0).0, [200, 190, 140, 255]);
+        Tool::Levels.apply(&mut RgbaImage::new(0, 0), 1.0);
+        assert_eq!(Tool::Levels.opening(&paper), 1.0);
+    }
+
     #[test]
     fn one_step_per_tool_after_the_geometry() {
         let mut s = EditStack::default();
@@ -317,6 +424,10 @@ mod tests {
         s.set_adjust(Tool::Exposure, Some(0.0));
         assert_eq!((s.adjust(Tool::Exposure), s.ops.len()), (None, 2), "neutral is no step");
         assert_eq!("exposure".parse::<Tool>(), Ok(Tool::Exposure));
-        assert!("blur".parse::<Tool>().unwrap_err().contains("one of exposure"));
+        assert!("blur".parse::<Tool>().unwrap_err().contains("one of levels, exposure"));
+        // Levels goes before exposure, whatever order they're set in.
+        s.set_adjust(Tool::Exposure, Some(0.5));
+        s.set_adjust(Tool::Levels, Some(1.0));
+        assert_eq!(s.adjustments().collect::<Vec<_>>(), [(Tool::Levels, 1.0), (Tool::Exposure, 0.5)]);
     }
 }

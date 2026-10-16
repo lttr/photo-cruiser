@@ -1,5 +1,6 @@
 ---
-status: ready
+status: done
+verified: [just check, just verify (incl. headless verify-levels shot), behaviour (headless shots at strength 0/1/2 with state dumps), /code-review low (no findings)]
 blocked_by: [01]
 references:
   - "Research: ../research.md"
@@ -17,10 +18,10 @@ Strength opens at 1, slider 0–2:
 
 ## Acceptance criteria
 
-- [ ] A photo of a document with grey or yellowish paper comes out with white paper and dark text at strength 1; strength 2 whitens paper that is still grey at 1
-- [ ] Strength 0 leaves the photo unchanged
-- [ ] Black and white points are measured on the cropped area, not the whole photo
-- [ ] Opening the tool applies strength 1 as one undoable step; Esc reverts it; double-clicking the slider resets it to 1
-- [ ] Available from the command palette; works the same through `pcr` (edits JSON, render, save)
-- [ ] Unit test in core for the pixel math; a render golden image
-- [ ] `just verify` passes; headless shot shows the effect
+- [x] A photo of a document with grey or yellowish paper comes out with white paper and dark text at strength 1; strength 2 whitens paper that is still grey at 1
+- [x] Strength 0 leaves the photo unchanged
+- [x] Black and white points are measured on the cropped area, not the whole photo
+- [x] Opening the tool applies strength 1 as one undoable step; Esc reverts it; double-clicking the slider resets it to 1
+- [x] Available from the command palette; works the same through `pcr` (edits JSON, render, save)
+- [x] Unit test in core for the pixel math; a render golden image
+- [x] `just verify` passes; headless shot shows the effect

@@ -85,7 +85,12 @@ verify: check
     jq -e '.index == 1 and .dirty == false and .edits == [{"op":"adjust","tool":"exposure","value":0.8}] and .tool.value == 0.8 and .tool.opening < 0 and .preview == true and (.backup | endswith(".photo-cruiser/originals/img2.jpg")) and .errors == []' \
         "{{artifacts}}/verify-exposure.json" >/dev/null || { cat "{{artifacts}}/verify-exposure.json"; exit 1; }
     "$pcr" edits "$photos/img2.jpg" | grep -q '^saved: \[{"op":"adjust","tool":"exposure","value":0.8}\]' || { echo "img2.jpg not saved with exposure"; exit 1; }
-    echo "verify ok: {{artifacts}}/verify.png {{artifacts}}/verify-grid.png {{artifacts}}/verify-save.png {{artifacts}}/verify-exposure.png"
+    # Auto levels on the page of a document photo: opens at 1, double-click back to 1.
+    "{{root}}/scripts/headless.sh" "{{root}}/target/debug/photo-cruiser" "$photos/adjust" --script "{{root}}/scripts/levels.json" \
+        --shot "{{artifacts}}/verify-levels.png" --dump-state "{{artifacts}}/verify-levels.json"
+    jq -e '.edits == [{"op":"crop","x":60,"y":0,"w":260,"h":240},{"op":"adjust","tool":"levels","value":1}] and .tool.tool == "levels" and .tool.value == 1 and .tool.opening == 1 and .preview == true and .dirty == true and .errors == []' \
+        "{{artifacts}}/verify-levels.json" >/dev/null || { cat "{{artifacts}}/verify-levels.json"; exit 1; }
+    echo "verify ok: {{artifacts}}/verify.png {{artifacts}}/verify-grid.png {{artifacts}}/verify-save.png {{artifacts}}/verify-exposure.png {{artifacts}}/verify-levels.png"
 
 # Release build of the GUI and the CLI (run before `just install`)
 build-release:

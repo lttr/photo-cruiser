@@ -2,7 +2,7 @@
 
 use assert_cmd::Command;
 use serde_json::{Value, json};
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 fn fixtures() -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../fixtures")
@@ -241,7 +241,7 @@ fn temp_copies(names: &[&str]) -> (tempfile::TempDir, Vec<String>) {
     let paths = names
         .iter()
         .map(|n| {
-            let to = dir.path().join("photos").join(n);
+            let to = dir.path().join("photos").join(Path::new(n).file_name().unwrap());
             std::fs::copy(fixtures().join(n), &to).unwrap();
             to.to_string_lossy().into_owned()
         })
@@ -363,4 +363,38 @@ fn adjust_render_and_save() {
 
     let v = json_in(&dir, &["render", photo, "--adjust", "blur", "-o", &out, "--json"], 1);
     assert_eq!(v["error"]["kind"], "usage");
+}
+
+#[test]
+fn levels_render_and_save() {
+    let (dir, p) = temp_copies(&["adjust/document.jpg"]);
+    let photo = &p[0];
+    let out = dir.path().join("out.png").to_string_lossy().into_owned();
+    let page = "60,0,260,240";
+    // No value: strength 1, the paper (top left of the page) turns white.
+    let v = json_in(&dir, &["render", photo, "--crop", page, "--adjust", "levels", "-o", &out, "--json"], 0);
+    assert_eq!(v["ops"][1], json!({"op": "adjust", "tool": "levels", "value": 1.0}));
+    let pixel = |path: &str| image::open(path).unwrap().into_rgba8().get_pixel(5, 5).0;
+    let auto_px = pixel(&out);
+    assert!(auto_px[..3].iter().all(|c| *c >= 245), "{auto_px:?}");
+    // Strength 0 is no step at all.
+    let v =
+        json_in(&dir, &["render", photo, "--crop", page, "--adjust", "levels=0", "-o", &out, "--json"], 0);
+    assert_eq!(v["ops"].as_array().unwrap().len(), 1);
+    assert!(pixel(&out)[2] < 170, "yellowish paper: {:?}", pixel(&out));
+
+    // The same through edits JSON, then saved into the photo.
+    let edits = dir.path().join("e.json");
+    let stack = json!({"version": 1, "ops": [{"op": "crop", "x": 60, "y": 0, "w": 260, "h": 240},
+        {"op": "adjust", "tool": "levels", "value": 1}]});
+    std::fs::write(&edits, stack.to_string()).unwrap();
+    let edits = edits.to_string_lossy().into_owned();
+    json_in(&dir, &["render", photo, "--edits", &edits, "-o", &out, "--json"], 0);
+    assert_eq!(pixel(&out), auto_px);
+    let v = json_in(&dir, &["save", photo, "--edits", &edits, "--json"], 0);
+    assert_eq!((&v["action"], &v["width"]), (&json!("saved"), &json!(260)));
+    let v = json_in(&dir, &["edits", photo, "--json"], 0);
+    assert_eq!((&v["ops"][1]["tool"], &v["dirty"]), (&json!("levels"), &json!(false)));
+    let saved = image::open(photo).unwrap().into_rgba8().get_pixel(5, 5).0;
+    assert!(saved.iter().zip(auto_px).all(|(s, a)| s.abs_diff(a) <= 6), "{saved:?} vs {auto_px:?}");
 }

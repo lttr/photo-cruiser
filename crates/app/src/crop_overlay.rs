@@ -84,6 +84,7 @@ pub const SHORTCUTS: &[(&str, &str)] = &[
     ("Ctrl+O", "Open folder"),
     ("C", "Crop on / off"),
     ("E", "Exposure (opens at auto); double-click the slider: back to auto"),
+    ("D", "Auto levels, for documents (opens at strength 1; 2: whiter paper)"),
     ("Shift+R  Shift+L", "Turn right / left"),
     ("Ctrl+Z  u", "Undo"),
     ("Ctrl+Shift+Z  Ctrl+Y", "Redo"),
@@ -178,6 +179,9 @@ pub fn key_message(key: &Key, modified: &Key, mods: keyboard::Modifiers, m: Mode
         Key::Character(c) if plain && c.eq_ignore_ascii_case("c") => Action::ToggleCrop.into(),
         Key::Character(c) if plain && c.eq_ignore_ascii_case("e") => {
             Action::OpenTool { tool: Tool::Exposure }.into()
+        }
+        Key::Character(c) if plain && c.eq_ignore_ascii_case("d") => {
+            Action::OpenTool { tool: Tool::Levels }.into()
         }
         Key::Character(c) if plain && m.crop && c.eq_ignore_ascii_case("a") => Action::NextAspect.into(),
         Key::Character(c) if plain && m.crop && c.eq_ignore_ascii_case("x") => Action::SwapAspect.into(),

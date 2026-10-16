@@ -57,9 +57,9 @@ pub enum Action {
     /// it is saved at once.
     RotateRight,
     RotateLeft,
-    /// Open a one-slider tool on the current photo (`E`: exposure; palette). It applies the
-    /// tool's opening value (auto, for this photo) as one undoable step, once the photo is
-    /// loaded. A tool already in the stack keeps its value. Closes when you leave the photo,
+    /// Open a one-slider tool on the current photo (`E`: exposure, `D`: auto levels;
+    /// palette). It applies the tool's opening value (auto, for this photo) as one undoable
+    /// step, once the photo is loaded. A tool already in the stack keeps its value. Closes when you leave the photo,
     /// crop or turn it.
     OpenTool {
         tool: Tool,

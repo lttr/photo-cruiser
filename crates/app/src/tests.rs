@@ -1419,7 +1419,7 @@ fn update_palette_lists_what_can_be_done_sorted() {
     s.apply(&Action::ApplyCrop);
     s.apply(&Action::TogglePalette);
     let edited = palette_labels(&s);
-    for l in ["Crop", "Exposure", "Undo", "Save", "Reset edits", "Revert to original"] {
+    for l in ["Crop", "Exposure", "Auto levels", "Undo", "Save", "Reset edits", "Revert to original"] {
         assert!(edited.contains(&l.into()), "{l} in {edited:?}");
     }
     assert!(!edited.contains(&"Redo".into()));
@@ -1572,6 +1572,34 @@ fn update_exposure_opens_at_auto_drags_live_and_saves_on_leaving() {
 }
 
 #[test]
+fn update_levels_opens_at_one_on_the_crop() {
+    use photo_cruiser_core::{EditStack, Op, Tool};
+    let levels = |s: &State| s.stack().adjust(Tool::Levels);
+    let mut s = opened(&fixtures().join("adjust")); // document.jpg
+    s.apply(&Action::ShowPhoto { index: Some(0) });
+    settle(&mut s);
+    let page = Rect::new(60.0, 0.0, 260.0, 240.0);
+    s.apply(&Action::SetCrop(page));
+    s.apply(&Action::OpenTool { tool: Tool::Levels });
+    settle(&mut s);
+    assert_eq!(s.tool.as_ref().unwrap().opening, Some(1.0));
+    assert_eq!((levels(&s), s.dirty(), s.preview.is_some()), (Some(1.0), true, true));
+    let crop = EditStack::default().with(Op::Crop(page));
+    s.apply(&Action::Undo);
+    assert_eq!(s.stack(), crop, "opening is one step");
+    s.apply(&Action::Redo);
+    s.apply(&Action::SetAdjust { value: 2.0 });
+    s.apply(&Action::ResetAdjust);
+    assert_eq!(levels(&s), Some(1.0), "double-click: strength 1");
+    s.apply(&Action::SetAdjust { value: 0.0 });
+    assert_eq!(s.stack(), crop, "strength 0 is no step");
+    s.apply(&Action::SetAdjust { value: 1.5 });
+    s.apply(&Action::CancelTool);
+    assert!(s.tool.is_none() && s.stack() == crop, "Esc: as before the tool opened");
+    assert!(s.errors.is_empty(), "{:?}", s.errors);
+}
+
+#[test]
 fn tool_keys() {
     use crate::crop_overlay::key_message;
     use iced::keyboard::Modifiers;
@@ -1585,6 +1613,7 @@ fn tool_keys() {
         action(Key::Character("e".into()), Modes::default()),
         Action::OpenTool { tool: Tool::Exposure }
     );
+    assert_eq!(action(Key::Character("D".into()), Modes::default()), Action::OpenTool { tool: Tool::Levels });
     assert_eq!(action(Key::Named(Named::Escape), tool), Action::CancelTool);
     assert_eq!(action(Key::Named(Named::Enter), tool), Action::CloseTool);
     assert_eq!(action(Key::Named(Named::Escape), Modes { fullscreen: true, ..tool }), Action::CancelTool);

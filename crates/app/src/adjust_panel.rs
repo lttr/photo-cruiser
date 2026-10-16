@@ -16,6 +16,7 @@ const PAD: f32 = 8.0;
 /// The tool's shortcut, or `""`.
 pub fn key(tool: Tool) -> &'static str {
     match tool {
+        Tool::Levels => "D",
         Tool::Exposure => "E",
     }
 }

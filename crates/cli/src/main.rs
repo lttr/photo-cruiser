@@ -67,7 +67,8 @@ enum Cmd {
         crop: Option<Rect>,
         /// A one-slider tool `TOOL[=VALUE]` (e.g. `exposure=0.5`), set after the edits and
         /// `--crop`. Without a value: the value the app opens the tool at (auto, measured
-        /// on the cropped photo). Repeatable. Tools: exposure (EV, -2..2).
+        /// on the cropped photo). Repeatable. Tools: levels (auto levels strength, 0..2,
+        /// opens at 1), exposure (EV, -2..2).
         #[arg(long, value_name = "TOOL[=VALUE]", value_parser = parse_adjust)]
         adjust: Vec<(Tool, Option<f32>)>,
         /// Downscale the result so its longer side is at most N.
