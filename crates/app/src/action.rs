@@ -94,7 +94,7 @@ pub enum Action {
     SetAspect {
         aspect: Aspect,
     },
-    /// The next preset aspect (`A`).
+    /// The next preset aspect (`R` in crop mode).
     NextAspect,
     /// Turn the crop aspect portrait ↔ landscape (`X`, footer).
     SwapAspect,

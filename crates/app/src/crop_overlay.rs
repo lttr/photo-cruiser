@@ -91,7 +91,7 @@ pub const SHORTCUTS: &[(&str, &str)] = &[
     ("Ctrl+Z  u", "Undo"),
     ("Ctrl+Shift+Z  Ctrl+Y", "Redo"),
     ("Ctrl+S", "Save now (leaving a photo saves it)"),
-    ("A", "Crop: next aspect ratio (original, free, 1:1, 3:2, …)"),
+    ("R", "Crop: next aspect ratio (original, free, 1:1, 3:2, …)"),
     ("X", "Crop: portrait / landscape"),
     ("F  F11", "Full screen on / off"),
     ("N", "File names on / off"),
@@ -183,7 +183,8 @@ pub fn key_message(key: &Key, modified: &Key, mods: keyboard::Modifiers, m: Mode
         Key::Character(c) if plain && c.eq_ignore_ascii_case("e") => {
             Action::OpenTool { tool: Tool::Exposure }.into()
         }
-        Key::Character(c) if plain && m.crop && c.eq_ignore_ascii_case("a") => Action::NextAspect.into(),
+        // Shift+R (turn right) is matched above, on the typed `R`.
+        Key::Character(c) if plain && m.crop && c.eq_ignore_ascii_case("r") => Action::NextAspect.into(),
         Key::Character(c) if plain && c.eq_ignore_ascii_case("a") => {
             Action::OpenTool { tool: Tool::Levels }.into()
         }

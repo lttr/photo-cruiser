@@ -688,8 +688,8 @@ fn crop_aspect_presets_custom_and_swap() {
     h.drag(at(0.1, 0.1), at(0.6, 0.3));
     assert_close(parse_crop(&h.status()), [160.0, 120.0, 32.0, 24.0]);
 
-    // `A` twice: original → free → 1:1, the selection reshaped around its centre.
-    h.keys(Key::Character("a".into()), 2);
+    // `R` twice: original → free → 1:1, the selection reshaped around its centre.
+    h.keys(Key::Character("r".into()), 2);
     let [cw, ch, ..] = parse_crop(&h.status());
     assert!((cw - ch).abs() <= 1.0, "{}", h.status());
     assert!(!h.has_text("Landscape"), "no orientation for a square");
@@ -1665,7 +1665,15 @@ fn tool_keys() {
         "no tool: nothing"
     );
     let crop = Modes { crop: true, ..Modes::default() };
-    assert_eq!(action(Key::Character("a".into()), crop), Action::NextAspect, "crop: A is the aspect");
+    assert_eq!(action(Key::Character("r".into()), crop), Action::NextAspect, "crop: R is the aspect");
+    assert_eq!(
+        action(Key::Character("a".into()), crop),
+        Action::OpenTool { tool: Tool::Levels },
+        "A: only levels"
+    );
+    let shift_r =
+        key_message(&Key::Character("r".into()), &Key::Character("R".into()), Modifiers::SHIFT, crop);
+    assert!(matches!(shift_r, Some(Message::Action(Action::RotateRight))), "crop: Shift+R still turns");
     assert_eq!(action(Key::Named(Named::Enter), tool), Action::CloseTool);
     assert_eq!(action(Key::Named(Named::Escape), Modes { fullscreen: true, ..tool }), Action::CancelTool);
     let help = Modes { help: true, ..tool };

@@ -127,7 +127,7 @@ fn edits(s: &State, c: &mut Vec<Command>) {
             c.push(cmd(format!("Aspect ratio {name}"), "", Action::SetAspect { aspect }));
         }
         c.push(cmd("Aspect ratio custom…", "", Action::ToggleCustomAspect));
-        c.push(cmd("Next aspect ratio", "A", Action::NextAspect));
+        c.push(cmd("Next aspect ratio", "R", Action::NextAspect));
         if let Some(r) = s.crop_ratio().filter(|r| (r - 1.0).abs() > 1e-3) {
             let label = if r > 1.0 { "Crop portrait" } else { "Crop landscape" };
             c.push(cmd(label, "X", Action::SwapAspect));
