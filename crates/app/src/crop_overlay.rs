@@ -32,6 +32,8 @@ pub struct Modes {
     pub crop: bool,
     /// A one-slider tool is open (`Enter` closes it, `Esc` cancels it).
     pub tool: bool,
+    /// Its slider has a value not set yet (dragged, or stepped with a key still down).
+    pub adjusting: bool,
     pub fullscreen: bool,
     /// The original is held to be seen (its key's release ends it).
     pub original: bool,
@@ -79,7 +81,8 @@ pub struct OverlayState {
 /// Every shortcut, for the shortcuts panel. Keep in sync with [`key_message`].
 pub const SHORTCUTS: &[(&str, &str)] = &[
     ("→  ←   l  h", "Next / previous photo"),
-    ("↓  ↑   j  k", "Grid: row down / up; photo: next / previous"),
+    ("↓  ↑   j  k", "Grid: row down / up; photo: next / previous; tool: slider down / up"),
+    ("Alt+↓  Alt+↑", "Tool: slider down / up in fine steps (also Alt+J, Alt+K)"),
     ("Home  End   g  G", "First / last photo"),
     ("Enter", "Grid: open the photo; crop: apply; tool: done"),
     ("Ctrl+K", "Find an action by name"),
@@ -131,6 +134,20 @@ pub fn key_message(key: &Key, modified: &Key, mods: keyboard::Modifiers, m: Mode
         };
         if let Some(action) = action {
             return Some(action.into());
+        }
+    }
+    // A tool open: up / down move its slider instead of the photo, Alt in fine steps.
+    // (Not Ctrl: Ctrl+K is the palette.)
+    if m.tool && !m.menu && !mods.control() && !mods.logo() && !mods.shift() {
+        let steps = match key {
+            Key::Named(Named::ArrowUp) => Some(1),
+            Key::Named(Named::ArrowDown) => Some(-1),
+            Key::Character(c) if c == "k" => Some(1),
+            Key::Character(c) if c == "j" => Some(-1),
+            _ => None,
+        };
+        if let Some(steps) = steps {
+            return Some(Action::StepAdjust { steps, fine: mods.alt() }.into());
         }
     }
     // Symbols and vim keys (g vs G) by what was typed.
@@ -207,9 +224,15 @@ pub fn key_message(key: &Key, modified: &Key, mods: keyboard::Modifiers, m: Mode
     })
 }
 
-/// A key let go: releasing `O` or `\` ends showing the original.
+/// A key let go: releasing `O` or `\` ends showing the original; releasing a tool's step
+/// key sets the stepped value.
 pub fn key_release_message(key: &Key, modified: &Key, m: Modes) -> Option<Message> {
     let original = |k: &Key| matches!(k, Key::Character(c) if c.eq_ignore_ascii_case("o") || c == "\\");
+    let step = matches!(key, Key::Named(Named::ArrowUp | Named::ArrowDown))
+        || matches!(key, Key::Character(c) if c.eq_ignore_ascii_case("j") || c.eq_ignore_ascii_case("k"));
+    if m.adjusting && step {
+        return Some(Action::EndAdjust.into());
+    }
     (m.original && (original(key) || original(modified))).then(|| Action::ShowOriginal { on: false }.into())
 }
 
@@ -237,6 +260,9 @@ impl canvas::Program<Message> for Overlay {
             // The window lost the keyboard: the release may never come.
             Event::Window(iced::window::Event::Unfocused) if self.modes.original => {
                 return Some(canvas::Action::publish(Action::ShowOriginal { on: false }.into()));
+            }
+            Event::Window(iced::window::Event::Unfocused) if self.modes.adjusting => {
+                return Some(canvas::Action::publish(Action::EndAdjust.into()));
             }
             Event::Window(iced::window::Event::RedrawRequested(_)) if self.body != Some(bounds.size()) => {
                 return Some(canvas::Action::publish(Message::Body(bounds.size())));

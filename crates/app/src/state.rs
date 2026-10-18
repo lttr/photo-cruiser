@@ -776,6 +776,22 @@ impl State {
                 None => self.error("drag_adjust: no tool is open".into()),
             },
             Action::SetAdjust { value } => self.set_adjust(*value),
+            Action::StepAdjust { steps, fine } => {
+                let stack = self.stack();
+                match &mut self.tool {
+                    // Opening: no value to step from yet.
+                    Some(p) if p.opening.is_some() => {
+                        p.drag = Some(p.tool.step(p.value(&stack), *steps, *fine))
+                    }
+                    Some(_) => {}
+                    None => self.error("step_adjust: no tool is open".into()),
+                }
+            }
+            Action::EndAdjust => {
+                if let Some(v) = self.tool.as_ref().and_then(|p| p.drag) {
+                    self.set_adjust(v);
+                }
+            }
             Action::AutoAdjust => {
                 if let Some(v) = self.tool.as_ref().and_then(|p| p.opening) {
                     self.set_adjust(v);

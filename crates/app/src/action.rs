@@ -72,6 +72,17 @@ pub enum Action {
     SetAdjust {
         value: f32,
     },
+    /// Move the open tool's slider by `steps` (negative: down) of 0.1, or 0.01 if `fine`
+    /// (`k`/`↑`, `j`/`↓`; with `Alt`: fine). Like a drag: live preview only, until
+    /// [`Action::EndAdjust`] (the key's release) makes it one undoable step.
+    StepAdjust {
+        steps: i32,
+        #[serde(default)]
+        fine: bool,
+    },
+    /// Set the value being dragged or stepped as one undoable step (the step key
+    /// released). Nothing if there is none.
+    EndAdjust,
     /// Back to the tool's auto value for this photo, the one it opened at (`A`, footer
     /// "Auto", palette, double-click on the slider): one undoable step.
     #[serde(alias = "reset_adjust")]
@@ -189,7 +200,8 @@ mod tests {
                 {"action":"rotate_right"},{"action":"rotate_left"},{"action":"open_tool","tool":"exposure"},
                 {"action":"drag_adjust","value":0.5},{"action":"set_adjust","value":-1},{"action":"reset_adjust"},
                 {"action":"auto_adjust"},{"action":"neutral_adjust"},
-                {"action":"close_tool"},{"action":"cancel_tool"}]"#,
+                {"action":"close_tool"},{"action":"cancel_tool"},
+                {"action":"step_adjust","steps":-2},{"action":"step_adjust","steps":1,"fine":true},{"action":"end_adjust"}]"#,
         )
         .unwrap();
         assert_eq!(steps[1], Action::Goto { index: 2 });
@@ -217,7 +229,9 @@ mod tests {
         assert_eq!(steps[51], Action::SetAdjust { value: -1.0 });
         assert_eq!(steps[52], Action::AutoAdjust, "the old name still parses");
         assert_eq!((&steps[53], &steps[54]), (&Action::AutoAdjust, &Action::NeutralAdjust));
-        assert_eq!(steps.len(), 57);
+        assert_eq!(steps[57], Action::StepAdjust { steps: -2, fine: false });
+        assert_eq!(steps[58], Action::StepAdjust { steps: 1, fine: true });
+        assert_eq!(steps.len(), 60);
         let json = serde_json::to_string(&Action::SetCrop(Rect::new(1.0, 2.0, 3.0, 4.0))).unwrap();
         assert_eq!(json, r#"{"action":"set_crop","x":1.0,"y":2.0,"w":3.0,"h":4.0}"#);
         assert!(parse_script(r#"[{"action":"jump"}]"#).is_err());

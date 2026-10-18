@@ -68,6 +68,14 @@ impl Tool {
         if value.is_nan() { self.neutral() } else { value.clamp(*r.start(), *r.end()) }
     }
 
+    /// `value` moved by `steps` keyboard steps (negative: down), within the range and
+    /// rounded to 0.01. A step is 0.1 (EV or strength), a `fine` one 0.01.
+    pub fn step(self, value: f32, steps: i32, fine: bool) -> f32 {
+        let size = if fine { 0.01 } else { 0.1 };
+        // `+ 0.0`: no "-0.00".
+        (self.clamp(value + steps as f32 * size) * 100.0).round() / 100.0 + 0.0
+    }
+
     /// The value the tool opens at for `img`: auto exposure brings the average brightness
     /// to middle grey; levels opens at strength 1 (it measures the image as it applies).
     /// Rounded to 0.01.
@@ -293,6 +301,18 @@ mod tests {
 
     fn flat(v: u8) -> RgbaImage {
         RgbaImage::from_pixel(8, 8, Rgba([v, v, v, 255]))
+    }
+
+    #[test]
+    fn keyboard_steps() {
+        assert_eq!(Tool::Exposure.step(0.37, 1, false), 0.47);
+        assert_eq!(Tool::Exposure.step(0.37, -3, true), 0.34);
+        assert_eq!(Tool::Exposure.step(1.95, 1, false), 2.0, "clamped to the range");
+        assert_eq!(Tool::Levels.step(0.05, -1, false), 0.0);
+        assert_eq!(Tool::Exposure.step(0.1, -1, false).to_string(), "0", "no -0");
+        // Ten fine steps make one, without drift.
+        let v = (0..10).fold(0.0, |v, _| Tool::Exposure.step(v, 1, true));
+        assert_eq!(v, Tool::Exposure.step(0.0, 1, false));
     }
 
     #[test]

@@ -1687,6 +1687,63 @@ fn tool_keys() {
 }
 
 #[test]
+fn tool_step_keys() {
+    use crate::crop_overlay::{key_message, key_release_message};
+    use iced::keyboard::Modifiers;
+    let tool = Modes { tool: true, ..Modes::default() };
+    let on = |k: Key, mods, m| match key_message(&k, &k, mods, m) {
+        Some(Message::Action(a)) => a,
+        other => panic!("{other:?}"),
+    };
+    let step = |steps, fine| Action::StepAdjust { steps, fine };
+    let none = Modifiers::empty();
+    assert_eq!(on(Key::Character("k".into()), none, tool), step(1, false));
+    assert_eq!(on(Key::Character("j".into()), none, tool), step(-1, false));
+    assert_eq!(on(Key::Named(Named::ArrowUp), none, tool), step(1, false));
+    assert_eq!(on(Key::Named(Named::ArrowDown), Modifiers::ALT, tool), step(-1, true));
+    assert_eq!(on(Key::Character("k".into()), Modifiers::ALT, tool), step(1, true));
+    assert_eq!(on(Key::Character("k".into()), Modifiers::CTRL, tool), Action::TogglePalette, "Ctrl+K stays");
+    assert_eq!(on(Key::Character("l".into()), none, tool), Action::Next, "left / right still move");
+    assert_eq!(on(Key::Character("j".into()), none, Modes::default()), Action::Next, "no tool: the photo");
+    assert_eq!(on(Key::Character("j".into()), none, Modes { menu: true, ..tool }), Action::MenuNext);
+    // The release sets the value, but only while there is one to set (it would close the menu).
+    let off = |k: &str, m| key_release_message(&Key::Character(k.into()), &Key::Character(k.into()), m);
+    assert!(off("k", tool).is_none());
+    let adjusting = Modes { adjusting: true, ..tool };
+    assert!(matches!(off("k", adjusting), Some(Message::Action(Action::EndAdjust))));
+    assert!(off("x", adjusting).is_none());
+
+    // Through the widget tree: k held (repeats) moves the slider live, its release is one step.
+    let mut h = harness(); // img1.png
+    h.until("img1 shown", |h| h.bounds("photo").is_some());
+    h.keys(Key::Character("e".into()), 1);
+    h.until("slider", |h| h.bounds("tool-slider").is_some());
+    h.emu.update(&h.prog, Action::SetAdjust { value: 0.5 }.into());
+    let press = |h: &mut Harness<_>, event| {
+        let messages: Vec<Message> = {
+            let mut sim = h.sim();
+            sim.simulate([event]);
+            sim.into_messages().collect()
+        };
+        assert_eq!(messages.len(), 1, "{messages:?}");
+        h.emu.update(&h.prog, messages[0].clone());
+    };
+    let k = || Key::Character("k".into());
+    for _ in 0..3 {
+        press(&mut h, iced_test::simulator::press_key(k(), None));
+    }
+    assert_eq!(h.ev(), "+0.80 EV");
+    press(&mut h, iced_test::simulator::release_key(k()));
+    assert_eq!(h.ev(), "+0.80 EV");
+    h.emu.update(&h.prog, Action::Undo.into());
+    assert_eq!(h.ev(), "+0.50 EV", "three steps, one undo");
+    h.emu.update(&h.prog, Action::StepAdjust { steps: -1, fine: true }.into());
+    h.emu.update(&h.prog, Action::EndAdjust.into());
+    assert_eq!(h.ev(), "+0.49 EV");
+    assert!(h.bounds("tool").is_some(), "the tool stays open");
+}
+
+#[test]
 fn exposure_slider_drag_and_double_click() {
     let mut h = harness(); // img1.png
     h.until("img1 shown", |h| h.bounds("photo").is_some());

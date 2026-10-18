@@ -91,6 +91,7 @@ pub fn view(app: &App) -> Element<'_, Message> {
             palette: s.palette.is_some(),
             crop: s.mode == Mode::Crop,
             tool: s.tool.is_some(),
+            adjusting: s.tool.as_ref().is_some_and(|p| p.drag.is_some()),
             fullscreen: s.fullscreen,
             original: s.original,
             grid,
