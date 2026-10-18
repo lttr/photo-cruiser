@@ -16,6 +16,8 @@ pub struct Settings {
     pub layout: Layout,
     /// File names shown (`N`).
     pub names: bool,
+    /// The edits panel shown (`I`).
+    pub edits_panel: bool,
 }
 
 /// `$XDG_CONFIG_HOME`, else `~/.config`.
@@ -67,12 +69,12 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("sub").join("settings.json");
         assert_eq!(Settings::load(&path), Settings::default(), "missing");
-        let s = Settings { layout: Layout::Justified, names: true };
+        let s = Settings { layout: Layout::Justified, names: true, edits_panel: true };
         s.save(&path).unwrap();
         assert_eq!(Settings::load(&path), s);
         assert!(std::fs::read_to_string(&path).unwrap().contains(r#""layout": "justified""#));
         std::fs::write(&path, r#"{"layout": "big", "future": 1}"#).unwrap();
-        let partial = Settings { layout: Layout::Big, names: false };
+        let partial = Settings { layout: Layout::Big, ..Settings::default() };
         assert_eq!(Settings::load(&path), partial, "unknown fields ignored, missing ones default");
         std::fs::write(&path, "{nope").unwrap();
         assert_eq!(Settings::load(&path), Settings::default(), "broken");

@@ -1,5 +1,5 @@
 //! Layout: image area (the grid of thumbnails, or one image with the crop overlay
-//! stacked over it), then a footer with the status line and the menu button. The menu
+//! stacked over it), the edits panel right of it (`I`), then a footer with the status line and the menu button. The menu
 //! opens upwards from the button, over the image. Full screen shows only the image area.
 //! Widget ids used by tests: `photo` (the current photo, sharp), `preview` (its embedded
 //! preview, or still the previous photo while it decodes), `message` (error / empty),
@@ -10,7 +10,9 @@
 //! Apply button), `failed` (the dot on a grid cell whose save failed), `palette`,
 //! `palette-input` and `palette-focus` (the command palette, its field, its focused row), `tool`,
 //! `tool-slider`, `tool-auto` and `tool-neutral` (the open tool's panel in the footer, its
-//! slider, its Auto and No change buttons), `original-button` (press and hold: the original).
+//! slider, its Auto and No change buttons), `original-button` (press and hold: the original),
+//! `edits-panel` (the current photo's edits, right of the image area), `edit-<i>` and
+//! `remove-edit-<i>` (its rows and their remove buttons).
 
 use crate::action::Action;
 use crate::adjust_panel::{Hold, Slider};
@@ -28,6 +30,7 @@ use iced::widget::{
     text_input,
 };
 use iced::{Center, Color, ContentFit, Element, Fill};
+use photo_cruiser_core::Op;
 use photo_cruiser_core::crop::Aspect;
 
 const BG: Color = Color::from_rgb(0x11 as f32 / 255.0, 0x11 as f32 / 255.0, 0x11 as f32 / 255.0);
@@ -140,6 +143,10 @@ pub fn view(app: &App) -> Element<'_, Message> {
         )
         .id("menu-button"),
     );
+    let body: Element<_> = match s.edits_panel {
+        true => row![body, edits_panel(s)].into(),
+        false => body.into(),
+    };
     let main = column![
         body,
         container(footer).padding(iced::Padding::from([2, 4]).left(12)).width(Fill).style(theme::bar)
@@ -392,6 +399,62 @@ fn tool_panel<'a>(s: &'a State, p: &'a ToolPanel) -> Element<'a, Message> {
     .spacing(10)
     .align_y(Center);
     container(content).padding([0, 8]).id("tool").into()
+}
+
+/// The current photo's edits in the order they apply. A click on a row opens what made
+/// it (the crop, the tool); `×` removes it. Under them, whether the file has them.
+fn edits_panel(s: &State) -> Element<'_, Message> {
+    let stack = s.stack();
+    let open = s.tool.as_ref().map(|p| p.tool);
+    let rows = stack.ops.iter().enumerate().map(|(i, op)| {
+        let (open_it, active) = match op {
+            Op::Crop(_) => (Some(Action::ToggleCrop), s.mode == Mode::Crop),
+            Op::Rotate { .. } => (None, false),
+            Op::Adjust { tool, .. } => (Some(Action::OpenTool { tool: *tool }), open == Some(*tool)),
+        };
+        let content = column![text(op.label()).size(13), text(op.detail()).size(12).style(theme::dim)];
+        // Nothing to open (a turn): not a button, which would look disabled.
+        let item: Element<_> = match open_it {
+            Some(action) => button(content)
+                .padding([4, 8])
+                .width(Fill)
+                .style(theme::flat(active))
+                .on_press(action.into())
+                .into(),
+            None => container(content).padding([4, 8]).width(Fill).into(),
+        };
+        let remove = button(text("×").size(15))
+            .padding([2, 8])
+            .style(theme::flat(false))
+            .on_press(Action::RemoveEdit { index: i }.into());
+        let remove = container(remove).id(format!("remove-edit-{i}"));
+        container(row![item, remove].align_y(Center)).id(format!("edit-{i}")).into()
+    });
+    let mut list = column(rows).spacing(2);
+    if stack.is_empty() {
+        list = list.push(container(text("No edits").size(13).style(theme::dim)).padding([4, 8]));
+    }
+    let saved = s.current_path().and_then(|p| s.edits.get(p)).and_then(|p| p.edits.saved.as_ref());
+    let state = match (s.dirty(), saved) {
+        _ if s.current_path().is_none() => None,
+        (true, _) => Some("Not saved to the file yet"),
+        (false, Some(_)) => Some("Saved to the file"),
+        (false, None) => None,
+    };
+    let mut notes = column![].spacing(4);
+    if let Some(state) = state {
+        notes = notes.push(text(state).size(12).style(theme::dim));
+    }
+    if s.backup().is_some() {
+        notes = notes.push(text("Original kept in a backup").size(12).style(theme::dim));
+    }
+    let content = column![
+        container(text("Edits").size(15)).padding([0, 8]),
+        scrollable(list).height(Fill),
+        container(notes).padding([0, 8]),
+    ]
+    .spacing(8);
+    container(content).padding([12, 6]).width(240).height(Fill).style(theme::bar).id("edits-panel").into()
 }
 
 /// Three bars: the menu icon (drawn, so it doesn't depend on the font's glyphs).

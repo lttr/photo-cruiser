@@ -123,7 +123,7 @@ impl App {
             },
         };
         if let Some((_, s)) = &app.settings {
-            (app.state.layout, app.state.names) = (s.layout, s.names);
+            (app.state.layout, app.state.names, app.state.edits_panel) = (s.layout, s.names, s.edits_panel);
         }
         if let Some(folder) = cfg.folder {
             app.state.apply(&Action::Open { path: folder });
@@ -269,7 +269,11 @@ impl App {
     /// Save the settings when they changed.
     fn write_settings(&mut self) {
         let Some((path, saved)) = &mut self.settings else { return };
-        let now = Settings { layout: self.state.layout, names: self.state.names };
+        let now = Settings {
+            layout: self.state.layout,
+            names: self.state.names,
+            edits_panel: self.state.edits_panel,
+        };
         if now != *saved {
             if let Err(e) = now.save(path) {
                 eprintln!("photo-cruiser: cannot save {}: {e}", path.display());

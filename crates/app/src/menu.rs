@@ -16,13 +16,14 @@ pub enum Item {
     Revert,
     Fullscreen,
     Names,
+    EditsPanel,
     Layout,
     Shortcuts,
     About,
 }
 
 /// Top to bottom.
-pub const ITEMS: [Item; 11] = [
+pub const ITEMS: [Item; 12] = [
     Item::OpenFolder,
     Item::Switch,
     Item::Crop,
@@ -31,6 +32,7 @@ pub const ITEMS: [Item; 11] = [
     Item::Revert,
     Item::Fullscreen,
     Item::Names,
+    Item::EditsPanel,
     Item::Layout,
     Item::Shortcuts,
     Item::About,
@@ -50,6 +52,8 @@ impl Item {
             Item::Fullscreen => "Full screen",
             Item::Names if s.names => "Hide file names",
             Item::Names => "Show file names",
+            Item::EditsPanel if s.edits_panel => "Hide edits",
+            Item::EditsPanel => "Show edits",
             Item::Layout => s.layout.next().label(),
             Item::Shortcuts => "Keyboard shortcuts",
             Item::About => "About Photo Cruiser",
@@ -66,6 +70,7 @@ impl Item {
             Item::ResetEdits | Item::Revert => "",
             Item::Fullscreen => "F",
             Item::Names => "N",
+            Item::EditsPanel => "I",
             Item::Layout => "Z",
             Item::Shortcuts => "?",
             Item::About => "",
@@ -83,6 +88,7 @@ impl Item {
             Item::Revert => Action::Revert.into(),
             Item::Fullscreen => Action::ToggleFullscreen.into(),
             Item::Names => Action::ToggleNames.into(),
+            Item::EditsPanel => Action::ToggleEditsPanel.into(),
             Item::Layout => Action::NextLayout.into(),
             Item::Shortcuts => Action::ToggleHelp.into(),
             Item::About => Action::ToggleAbout.into(),

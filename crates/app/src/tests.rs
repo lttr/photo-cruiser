@@ -996,7 +996,7 @@ fn layouts_cycled_with_z() {
 }
 
 #[test]
-fn layout_and_names_remembered_in_settings() {
+fn layout_names_and_edits_panel_remembered_in_settings() {
     let dir = tempfile::tempdir().unwrap();
     let path = dir.path().join("settings.json");
     let with_settings = || {
@@ -1014,10 +1014,13 @@ fn layout_and_names_remembered_in_settings() {
     assert!(!path.exists(), "nothing written until something changes");
     h.keys(Key::Character("z".into()), 1);
     h.keys(Key::Character("n".into()), 1);
-    assert_eq!(Settings::load(&path), Settings { layout: Layout::Big, names: true });
-    // A new run starts big, with names.
+    assert!(h.bounds("edits-panel").is_none());
+    h.keys(Key::Character("i".into()), 1);
+    assert_eq!(Settings::load(&path), Settings { layout: Layout::Big, names: true, edits_panel: true });
+    // A new run starts big, with names and the edits panel.
     let h = with_settings();
     assert!(h.bounds("selected").unwrap().width > small.width);
+    assert!(h.bounds("edits-panel").is_some());
     assert!(h.status().starts_with("img1.png · "), "{}", h.status());
 }
 
@@ -1984,4 +1987,76 @@ fn original_key_and_button_held() {
     h.run(Interaction::Mouse(Mouse::Release { button: Button::Left, target: Some(Target::Point(centre)) }));
     assert!(!h.has_text("original, without edits"));
     assert!(h.bounds("tool").is_some(), "the tool stays open");
+}
+
+#[test]
+fn update_remove_edit() {
+    use photo_cruiser_core::{Op, Tool};
+    let mut s = opened(&fixtures());
+    s.apply(&Action::ShowPhoto { index: Some(1) }); // img2.jpg
+    settle(&mut s);
+    s.apply(&Action::SetCrop(Rect::new(0.0, 0.0, 200.0, 100.0)));
+    s.apply(&Action::ApplyCrop);
+    s.apply(&Action::RotateRight);
+    s.apply(&Action::OpenTool { tool: Tool::Exposure });
+    settle(&mut s);
+    s.apply(&Action::DragAdjust { value: 1.0 });
+    let crop = Op::Crop(Rect::new(0.0, 0.0, 200.0, 100.0));
+    let exposure = Op::Adjust { tool: Tool::Exposure, value: 1.0 };
+
+    // A dragged value is kept, the tool closed, the crop gone.
+    s.apply(&Action::RemoveEdit { index: 0 });
+    assert_eq!(s.stack().ops, [Op::Rotate { quarters: 1 }, exposure.clone()]);
+    assert!(s.tool.is_none());
+    s.apply(&Action::Undo);
+    assert_eq!(s.stack().ops, [crop, Op::Rotate { quarters: 1 }, exposure]);
+
+    // In crop mode: leaves it.
+    s.apply(&Action::ToggleCrop);
+    s.apply(&Action::RemoveEdit { index: 2 });
+    assert_eq!((s.mode, s.stack().ops.len()), (Mode::Browse, 2));
+    settle(&mut s);
+    assert_eq!(s.picture().unwrap().source, (100, 200), "re-rendered without exposure");
+
+    s.apply(&Action::RemoveEdit { index: 5 });
+    assert_eq!(s.stack().ops.len(), 2);
+    assert_eq!(s.errors, ["remove_edit 5: out of range (2 edits)"]);
+}
+
+#[test]
+fn edits_panel_lists_opens_and_removes() {
+    use photo_cruiser_core::Tool;
+    let mut h = harness(); // img1.png
+    h.until("img1 shown", |h| h.bounds("photo").is_some());
+    let wide = h.bounds("body").unwrap().width;
+    h.keys(Key::Character("i".into()), 1);
+    assert!(h.bounds("body").unwrap().width < wide, "the panel takes room from the image");
+    assert!(h.has_text("No edits"));
+
+    h.emu.update(&h.prog, Action::RotateRight.into());
+    h.emu.update(&h.prog, Action::OpenTool { tool: Tool::Exposure }.into());
+    h.until("slider", |h| h.bounds("tool-slider").is_some());
+    h.emu.update(&h.prog, Action::SetAdjust { value: 0.5 }.into());
+    h.emu.update(&h.prog, Action::CloseTool.into());
+    h.until("both listed", |h| h.bounds("edit-1").is_some());
+    assert!(h.has_text("90° right") && h.has_text("+0.50 EV") && !h.has_text("No edits"));
+    assert!(h.has_text("Not saved to the file yet"));
+
+    // A click on the Exposure row opens the tool.
+    let row = h.text_center("Exposure");
+    h.run(Interaction::Mouse(Mouse::Click { button: Button::Left, target: Some(Target::Point(row)) }));
+    h.until("tool open", |h| h.bounds("tool").is_some());
+
+    // × removes the turn.
+    let x = h.bounds("remove-edit-0").unwrap().center();
+    h.run(Interaction::Mouse(Mouse::Click { button: Button::Left, target: Some(Target::Point(x)) }));
+    assert!(!h.has_text("90° right") && h.has_text("+0.50 EV"));
+    assert!(h.bounds("edit-1").is_none());
+
+    // Shown in the grid too (the selected photo's edits); hidden again with `i`.
+    h.keys(Key::Named(Named::Escape), 1);
+    h.until("grid", |h| h.bounds("grid").is_some());
+    assert!(h.has_text("+0.50 EV"));
+    h.keys(Key::Character("i".into()), 1);
+    assert!(h.bounds("edits-panel").is_none());
 }

@@ -5,7 +5,8 @@
 //! `{"action": "set_crop", "x": 40, "y": 30, "w": 200, "h": 150}`,
 //! `{"action": "open", "path": "fixtures"}`, `{"action": "show_photo", "index": 2}`,
 //! `{"action": "set_aspect", "aspect": "16:9"}`, `{"action": "palette_query", "query": "crop"}`,
-//! `{"action": "open_tool", "tool": "exposure"}`, `{"action": "set_adjust", "value": 0.5}`.
+//! `{"action": "open_tool", "tool": "exposure"}`, `{"action": "set_adjust", "value": 0.5}`,
+//! `{"action": "remove_edit", "index": 0}`.
 
 use crate::grid::Layout;
 use photo_cruiser_core::crop::Aspect;
@@ -102,6 +103,14 @@ pub enum Action {
     CancelTool,
     /// Remove all edits of the current photo (menu; undoable). Saved when you leave it.
     ResetEdits,
+    /// Remove the current photo's edit at `index` in its stack (the edits panel's `×`;
+    /// undoable). Leaves crop mode and closes the tool.
+    RemoveEdit {
+        index: usize,
+    },
+    /// Show/hide the edits panel on the right: the current photo's edits, in order (`I`,
+    /// menu). Off at first start, then remembered.
+    ToggleEditsPanel,
     /// Back to the original file now: `reset_edits`, then `save` (menu).
     Revert,
     /// Save the current photo now (`Ctrl+S`, menu). Leaving a photo saves it anyway.
@@ -201,7 +210,8 @@ mod tests {
                 {"action":"drag_adjust","value":0.5},{"action":"set_adjust","value":-1},{"action":"reset_adjust"},
                 {"action":"auto_adjust"},{"action":"neutral_adjust"},
                 {"action":"close_tool"},{"action":"cancel_tool"},
-                {"action":"step_adjust","steps":-2},{"action":"step_adjust","steps":1,"fine":true},{"action":"end_adjust"}]"#,
+                {"action":"step_adjust","steps":-2},{"action":"step_adjust","steps":1,"fine":true},{"action":"end_adjust"},
+                {"action":"toggle_edits_panel"},{"action":"remove_edit","index":1}]"#,
         )
         .unwrap();
         assert_eq!(steps[1], Action::Goto { index: 2 });
@@ -231,7 +241,8 @@ mod tests {
         assert_eq!((&steps[53], &steps[54]), (&Action::AutoAdjust, &Action::NeutralAdjust));
         assert_eq!(steps[57], Action::StepAdjust { steps: -2, fine: false });
         assert_eq!(steps[58], Action::StepAdjust { steps: 1, fine: true });
-        assert_eq!(steps.len(), 60);
+        assert_eq!((&steps[60], &steps[61]), (&Action::ToggleEditsPanel, &Action::RemoveEdit { index: 1 }));
+        assert_eq!(steps.len(), 62);
         let json = serde_json::to_string(&Action::SetCrop(Rect::new(1.0, 2.0, 3.0, 4.0))).unwrap();
         assert_eq!(json, r#"{"action":"set_crop","x":1.0,"y":2.0,"w":3.0,"h":4.0}"#);
         assert!(parse_script(r#"[{"action":"jump"}]"#).is_err());

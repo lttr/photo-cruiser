@@ -368,6 +368,8 @@ pub struct State {
     pub names: bool,
     /// How the grid arranges thumbnails. Small at first start, then remembered.
     pub layout: grid::Layout,
+    /// The edits panel shows on the right (`I`). Off by default; remembered between runs.
+    pub edits_panel: bool,
     pub max_side: u32,
     /// Rejected actions and folder errors, oldest first.
     pub errors: Vec<String>,
@@ -436,6 +438,7 @@ impl State {
             palette: None,
             names: false,
             layout: grid::Layout::default(),
+            edits_panel: false,
             max_side,
             errors: Vec::new(),
             shown: None,
@@ -817,6 +820,19 @@ impl State {
                 (self.mode, self.crop.selection) = (Mode::Browse, None);
                 self.change_stack(EditStack::default());
             }
+            Action::RemoveEdit { index } => {
+                let n = self.stack().ops.len();
+                if *index < n {
+                    (self.mode, self.crop.selection) = (Mode::Browse, None);
+                    self.close_tool();
+                    let mut stack = self.stack();
+                    stack.ops.remove(*index);
+                    self.change_stack(stack);
+                } else {
+                    self.error(format!("remove_edit {index}: out of range ({n} edits)"));
+                }
+            }
+            Action::ToggleEditsPanel => self.edits_panel = !self.edits_panel,
             Action::Revert => {
                 (self.mode, self.crop.selection) = (Mode::Browse, None);
                 self.change_stack(EditStack::default());
@@ -1611,6 +1627,7 @@ impl State {
             },
             names: self.names,
             layout: self.layout,
+            edits_panel: self.edits_panel,
             crop: self.crop_pixels(),
             title: self.title(),
             status: self.status(),
@@ -1676,6 +1693,8 @@ pub struct Dump {
     pub palette_items: Vec<String>,
     pub names: bool,
     pub layout: grid::Layout,
+    /// The edits panel shows.
+    pub edits_panel: bool,
     /// Integer source pixels.
     pub crop: Option<PixelRect>,
     pub title: String,

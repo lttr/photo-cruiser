@@ -18,6 +18,34 @@ pub enum Op {
     Adjust { tool: Tool, value: f32 },
 }
 
+impl Op {
+    /// What it is, for a list of edits: `Crop`, `Turn`, the tool's name.
+    pub fn label(&self) -> &'static str {
+        match self {
+            Op::Crop(_) => "Crop",
+            Op::Rotate { .. } => "Turn",
+            Op::Adjust { tool, .. } => tool.label(),
+        }
+    }
+
+    /// Its setting, for a list of edits: `1200×800 at 40, 30`, `90° right`, `+0.50 EV`.
+    pub fn detail(&self) -> String {
+        match self {
+            Op::Crop(r) => {
+                let n = |v: f32| v.round() as i64;
+                format!("{}×{} at {}, {}", n(r.w), n(r.h), n(r.x), n(r.y))
+            }
+            Op::Rotate { quarters } => match quarters % 4 {
+                1 => "90° right".into(),
+                2 => "180°".into(),
+                3 => "90° left".into(),
+                _ => "none".into(),
+            },
+            Op::Adjust { tool, value } => tool.format(*value),
+        }
+    }
+}
+
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct EditStack {
     pub version: u32,
@@ -214,6 +242,16 @@ mod tests {
             undos += 1;
         }
         assert_eq!(undos, History::MAX);
+    }
+
+    #[test]
+    fn op_label_and_detail() {
+        let crop = Op::Crop(Rect::new(40.2, 29.6, 1200.0, 799.5));
+        assert_eq!((crop.label(), crop.detail().as_str()), ("Crop", "1200×800 at 40, 30"));
+        let turns = [1, 2, 3].map(|quarters| Op::Rotate { quarters }.detail());
+        assert_eq!(turns, ["90° right", "180°", "90° left"]);
+        let exposure = Op::Adjust { tool: Tool::Exposure, value: 0.5 };
+        assert_eq!((exposure.label(), exposure.detail().as_str()), ("Exposure", "+0.50 EV"));
     }
 
     #[test]
