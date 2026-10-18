@@ -9,7 +9,9 @@
 //! binary), 3 decode (corrupt or unsupported input image, invalid edits JSON, a crop that
 //! is empty after clamping to the image, an animated or 16-bit image on save).
 
-use clap::{Parser, Subcommand};
+mod skill;
+
+use clap::{CommandFactory, Parser, Subcommand};
 use photo_cruiser_core::adjust;
 use photo_cruiser_core::export::{self, OutFormat};
 use photo_cruiser_core::render::{self, RenderOpts};
@@ -125,6 +127,15 @@ enum Cmd {
         #[arg(trailing_var_arg = true, allow_hyphen_values = true)]
         args: Vec<String>,
     },
+    /// Print a Claude Code skill (SKILL.md) that teaches an agent to use pcr: the files,
+    /// the edits format and every command.
+    Skill {
+        /// Write `<DIR>/SKILL.md` instead (e.g. `~/.claude/skills/pcr`), creating DIR.
+        #[arg(short, long, value_name = "DIR")]
+        output: Option<PathBuf>,
+        #[arg(long)]
+        json: bool,
+    },
 }
 
 /// A failure with its exit code and machine-readable kind.
@@ -186,7 +197,8 @@ fn main() -> ExitCode {
         | Cmd::Export { json, .. }
         | Cmd::Edits { json, .. }
         | Cmd::Save { json, .. }
-        | Cmd::Revert { json, .. } => *json,
+        | Cmd::Revert { json, .. }
+        | Cmd::Skill { json, .. } => *json,
         Cmd::App { .. } => false,
     };
     match run(cli.cmd) {
@@ -230,6 +242,7 @@ fn run(cmd: Cmd) -> Result<ExitCode, Fail> {
         }
         Cmd::Revert { file, json } => print_report(&store::revert(&file)?, json),
         Cmd::App { dir, args } => return app(&dir, &args),
+        Cmd::Skill { output, json } => write_skill(output.as_deref(), json)?,
     }
     Ok(ExitCode::SUCCESS)
 }
@@ -457,6 +470,28 @@ fn app(dir: &Path, args: &[String]) -> Result<ExitCode, Fail> {
         .status()
         .map_err(|e| Fail::new(2, "io", format!("{}: {e}", gui.display())))?;
     Ok(ExitCode::from(status.code().map_or(1, |c| c.clamp(0, 255) as u8)))
+}
+
+fn write_skill(dir: Option<&Path>, json: bool) -> Result<(), Fail> {
+    let text = skill::markdown(&mut Cli::command());
+    let Some(dir) = dir else {
+        if json {
+            print_json(&json!({"skill": text}));
+        } else {
+            print!("{text}");
+        }
+        return Ok(());
+    };
+    let path = dir.join("SKILL.md");
+    std::fs::create_dir_all(dir)
+        .and_then(|()| std::fs::write(&path, &text))
+        .map_err(|e| Fail::from(Error::io(&path, e)))?;
+    if json {
+        print_json(&json!({"path": path, "bytes": text.len()}));
+    } else {
+        println!("{}", path.display());
+    }
+    Ok(())
 }
 
 /// `x,y,w,h` in source pixels; `w` and `h` must be positive.

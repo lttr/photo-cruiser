@@ -14,7 +14,7 @@ Processing photos should take as few steps as possible. Whatever the app can do 
 
 - `crates/core`: all photo logic (catalog, decoding, crop and edit stack, rendering, export). No GUI dependencies.
 - `crates/app`: the `photo-cruiser` GUI, built on [iced](https://iced.rs).
-- `crates/cli`: `pcr`, a command line front end over the same core (`list`, `info`, `render`, `export`, `edits`, `save`, `revert`, `app`). Add `--json` for machine-readable output.
+- `crates/cli`: `pcr`, a command line front end over the same core (`list`, `info`, `render`, `export`, `edits`, `save`, `revert`, `app`, `skill`). Add `--json` for machine-readable output.
 
 ## Build and run
 

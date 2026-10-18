@@ -432,3 +432,15 @@ fn colour_render_and_save() {
     let saved = image::open(photo).unwrap().into_rgba8().get_pixel(150, 60).0;
     assert!(saved.iter().zip(one).all(|(s, a)| s.abs_diff(a) <= 6), "{saved:?} vs {one:?}");
 }
+
+#[test]
+fn skill_prints_or_writes() {
+    let out = pcr().arg("skill").assert().success().get_output().stdout.clone();
+    let md = String::from_utf8(out).unwrap();
+    assert!(md.starts_with("---\nname: pcr\n") && md.contains("### `pcr save`"), "{md}");
+    let dir = tempfile::tempdir().unwrap();
+    let target = dir.path().join("skills/pcr");
+    let v = run_json(&["skill", "-o", &target.to_string_lossy(), "--json"], 0);
+    assert_eq!(v["path"], json!(target.join("SKILL.md")));
+    assert_eq!(std::fs::read_to_string(target.join("SKILL.md")).unwrap(), md);
+}
