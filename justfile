@@ -121,6 +121,9 @@ install:
     update-desktop-database -q "{{share}}/applications" 2>/dev/null || true
     echo "installed to {{prefix}}"
 
+# Build and install the latest version for the current user (not for sudo: it builds)
+update: build-release install
+
 # Remove what `install` put in place (same prefix)
 uninstall:
     -rm "{{prefix}}/bin/photo-cruiser" "{{prefix}}/bin/pcr" "{{share}}/applications/{{appid}}.desktop" "{{share}}/icons/hicolor/scalable/apps/{{appid}}.svg"

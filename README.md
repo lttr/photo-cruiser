@@ -29,12 +29,13 @@ just check               # fmt, clippy, tests
 ## Install
 
 ```sh
+just update       # build-release + install
 just build-release
 just install      # ~/.local: photo-cruiser, pcr, desktop entry, icon
 just uninstall
 ```
 
-`sudo just prefix=/usr/local install` installs for all users.
+`sudo just prefix=/usr/local install` installs for all users (run `just build-release` first, as yourself).
 
 ## Keys
 
