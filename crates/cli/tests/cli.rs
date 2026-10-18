@@ -398,3 +398,37 @@ fn levels_render_and_save() {
     let saved = image::open(photo).unwrap().into_rgba8().get_pixel(5, 5).0;
     assert!(saved.iter().zip(auto_px).all(|(s, a)| s.abs_diff(a) <= 6), "{saved:?} vs {auto_px:?}");
 }
+
+#[test]
+fn colour_render_and_save() {
+    let (dir, p) = temp_copies(&["img3-exif6.jpg"]);
+    let photo = &p[0];
+    let out = dir.path().join("out.png").to_string_lossy().into_owned();
+    let pixel = |path: &str| image::open(path).unwrap().into_rgba8().get_pixel(150, 60).0;
+    // No value: 1×. "color" works too.
+    let v = json_in(&dir, &["render", photo, "--adjust", "color", "-o", &out, "--json"], 0);
+    assert_eq!(v["ops"][0], json!({"op": "adjust", "tool": "colour", "value": 1.0}));
+    let one = pixel(&out);
+    json_in(&dir, &["render", photo, "-o", &out, "--json"], 0);
+    let original = pixel(&out);
+    let spread = |p: [u8; 4]| p[..3].iter().max().unwrap() - p[..3].iter().min().unwrap();
+    assert!(spread(one) > spread(original), "more colourful: {one:?} vs {original:?}");
+    let v = json_in(&dir, &["render", photo, "--adjust", "colour=0", "-o", &out, "--json"], 0);
+    assert_eq!(v["ops"].as_array().unwrap().len(), 0, "0× is no step");
+
+    let edits = dir.path().join("e.json");
+    std::fs::write(
+        &edits,
+        json!({"version": 1, "ops": [{"op": "adjust", "tool": "colour", "value": 1}]}).to_string(),
+    )
+    .unwrap();
+    let edits = edits.to_string_lossy().into_owned();
+    json_in(&dir, &["render", photo, "--edits", &edits, "-o", &out, "--json"], 0);
+    assert_eq!(pixel(&out), one);
+    let v = json_in(&dir, &["save", photo, "--edits", &edits, "--json"], 0);
+    assert_eq!(v["action"], "saved");
+    let v = json_in(&dir, &["edits", photo, "--json"], 0);
+    assert_eq!((&v["ops"][0]["tool"], &v["dirty"]), (&json!("colour"), &json!(false)));
+    let saved = image::open(photo).unwrap().into_rgba8().get_pixel(150, 60).0;
+    assert!(saved.iter().zip(one).all(|(s, a)| s.abs_diff(a) <= 6), "{saved:?} vs {one:?}");
+}

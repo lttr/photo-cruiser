@@ -57,7 +57,7 @@ pub enum Action {
     /// it is saved at once.
     RotateRight,
     RotateLeft,
-    /// Open a one-slider tool on the current photo (`E`: exposure, `A`: auto levels;
+    /// Open a one-slider tool on the current photo (`E`: exposure, `A`: auto levels, `S`: colour;
     /// palette). It applies the tool's opening value (auto, for this photo) as one undoable
     /// step, once the photo is loaded. A tool already in the stack keeps its value. Closes when you leave the photo,
     /// crop or turn it.
@@ -87,8 +87,8 @@ pub enum Action {
     /// "Auto", palette, double-click on the slider): one undoable step.
     #[serde(alias = "reset_adjust")]
     AutoAdjust,
-    /// Set the open tool to its neutral value, the photo as it was: Exposure 0 EV, Levels 0
-    /// (`0`, footer "No change", palette): one undoable step.
+    /// Set the open tool to its neutral value, the photo as it was: Exposure 0 EV, Levels 0,
+    /// Colour 0 (`0`, footer "No change", palette): one undoable step.
     NeutralAdjust,
     /// Show the photo's original, without any edits (uncropped, unturned), while it is held
     /// (`O` or `\` down / up, the footer's Original button). Any other action ends it.

@@ -6,6 +6,7 @@
 
 pub mod adjust;
 pub mod catalog;
+pub mod colour;
 pub mod crop;
 pub mod decode;
 pub mod edit;

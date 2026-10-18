@@ -18,6 +18,7 @@ pub fn key(tool: Tool) -> &'static str {
     match tool {
         Tool::Levels => "A",
         Tool::Exposure => "E",
+        Tool::Colour => "S",
     }
 }
 

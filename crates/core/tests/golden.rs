@@ -65,6 +65,13 @@ const CASES: &[Case] = &[
         max_side: None,
         adjust: Some(Tool::Levels),
     },
+    Case {
+        name: "jpeg-exif6-colour",
+        fixture: "img3-exif6.jpg",
+        crop: None,
+        max_side: None,
+        adjust: Some(Tool::Colour),
+    },
     Case { name: "avif-max-side", fixture: "img4.AVIF", crop: None, max_side: Some(100), adjust: None },
 ];
 

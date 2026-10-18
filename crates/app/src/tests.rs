@@ -1621,6 +1621,31 @@ fn update_levels_opens_at_one_on_the_crop() {
 }
 
 #[test]
+fn update_colour_opens_at_one() {
+    use photo_cruiser_core::{EditStack, Tool};
+    let colour = |s: &State| s.stack().adjust(Tool::Colour);
+    let mut s = opened(&fixtures());
+    s.apply(&Action::ShowPhoto { index: Some(0) });
+    settle(&mut s);
+    s.apply(&Action::OpenTool { tool: Tool::Colour });
+    settle(&mut s);
+    assert_eq!(s.tool.as_ref().unwrap().opening, Some(1.0));
+    assert_eq!((colour(&s), s.dirty(), s.preview.is_some()), (Some(1.0), true, true));
+    s.apply(&Action::Undo);
+    assert_eq!(s.stack(), EditStack::default(), "opening is one step");
+    s.apply(&Action::Redo);
+    s.apply(&Action::SetAdjust { value: 1.7 });
+    s.apply(&Action::AutoAdjust);
+    assert_eq!(colour(&s), Some(1.0), "double-click: 1×");
+    s.apply(&Action::NeutralAdjust);
+    assert_eq!(s.stack(), EditStack::default(), "0× is no step");
+    s.apply(&Action::SetAdjust { value: 1.5 });
+    s.apply(&Action::CancelTool);
+    assert!(s.tool.is_none() && s.stack() == EditStack::default(), "Esc: as before the tool opened");
+    assert!(s.errors.is_empty(), "{:?}", s.errors);
+}
+
+#[test]
 fn tool_keys() {
     use crate::crop_overlay::key_message;
     use iced::keyboard::Modifiers;
@@ -1635,6 +1660,7 @@ fn tool_keys() {
         Action::OpenTool { tool: Tool::Exposure }
     );
     assert_eq!(action(Key::Character("a".into()), Modes::default()), Action::OpenTool { tool: Tool::Levels });
+    assert_eq!(action(Key::Character("s".into()), Modes::default()), Action::OpenTool { tool: Tool::Colour });
     assert_eq!(
         key_message(
             &Key::Character("d".into()),

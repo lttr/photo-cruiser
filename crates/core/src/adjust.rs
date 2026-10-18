@@ -22,6 +22,10 @@ pub enum Tool {
     Levels,
     /// Brightness in EV (stops): linear light × 2^value.
     Exposure,
+    /// Colourfulness: darktable's "basic colorfulness: standard" preset × the value, 0–2.
+    /// More in the shadows than in the highlights ([`crate::colour`]).
+    #[serde(alias = "color")]
+    Colour,
 }
 
 /// Linear-light luminance of the middle grey that L* = 50 is.
@@ -30,20 +34,21 @@ pub const MIDDLE_GREY: f32 = 0.1842;
 impl Tool {
     /// Every tool, in the order they are applied (the enum's order). Levels comes before
     /// exposure: it stretches each channel to the full range, so it would undo an exposure
-    /// done before it.
-    pub const ALL: [Tool; 2] = [Tool::Levels, Tool::Exposure];
+    /// done before it. Colour comes after exposure: its masks go by brightness.
+    pub const ALL: [Tool; 3] = [Tool::Levels, Tool::Exposure, Tool::Colour];
 
     pub fn label(self) -> &'static str {
         match self {
             Tool::Levels => "Auto levels",
             Tool::Exposure => "Exposure",
+            Tool::Colour => "Colour",
         }
     }
 
     /// The slider's range; values outside it are clamped.
     pub fn range(self) -> RangeInclusive<f32> {
         match self {
-            Tool::Levels => 0.0..=2.0,
+            Tool::Levels | Tool::Colour => 0.0..=2.0,
             Tool::Exposure => -2.0..=2.0,
         }
     }
@@ -51,7 +56,7 @@ impl Tool {
     /// The value that changes nothing.
     pub fn neutral(self) -> f32 {
         match self {
-            Tool::Levels | Tool::Exposure => 0.0,
+            Tool::Levels | Tool::Exposure | Tool::Colour => 0.0,
         }
     }
 
@@ -60,6 +65,7 @@ impl Tool {
         match self {
             Tool::Levels => format!("{value:.2}"),
             Tool::Exposure => format!("{value:+.2} EV"),
+            Tool::Colour => format!("{value:.2}×"),
         }
     }
 
@@ -77,11 +83,12 @@ impl Tool {
     }
 
     /// The value the tool opens at for `img`: auto exposure brings the average brightness
-    /// to middle grey; levels opens at strength 1 (it measures the image as it applies).
+    /// to middle grey; levels opens at strength 1 (it measures the image as it applies);
+    /// colour at 1, the preset as darktable has it.
     /// Rounded to 0.01.
     pub fn opening(self, img: &RgbaImage) -> f32 {
         let v = match self {
-            Tool::Levels => 1.0,
+            Tool::Levels | Tool::Colour => 1.0,
             Tool::Exposure => auto_exposure(img),
         };
         // `+ 0.0`: no "-0.00".
@@ -100,6 +107,7 @@ impl Tool {
                 map_rgb(img, &luts)
             }
             Tool::Exposure => map_rgb(img, &[exposure_lut(value); 3]),
+            Tool::Colour => crate::colour::apply(img, value),
         }
     }
 }
@@ -444,7 +452,8 @@ mod tests {
         s.set_adjust(Tool::Exposure, Some(0.0));
         assert_eq!((s.adjust(Tool::Exposure), s.ops.len()), (None, 2), "neutral is no step");
         assert_eq!("exposure".parse::<Tool>(), Ok(Tool::Exposure));
-        assert!("blur".parse::<Tool>().unwrap_err().contains("one of levels, exposure"));
+        assert!("blur".parse::<Tool>().unwrap_err().contains("one of levels, exposure, colour"));
+        assert_eq!("color".parse::<Tool>(), Ok(Tool::Colour));
         // Levels goes before exposure, whatever order they're set in.
         s.set_adjust(Tool::Exposure, Some(0.5));
         s.set_adjust(Tool::Levels, Some(1.0));
