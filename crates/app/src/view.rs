@@ -471,15 +471,21 @@ fn info_panel(s: &State) -> Element<'_, Message> {
         None => note("Reading…"),
         Some(Err(e)) => note(e),
         Some(Ok(fields)) => {
-            let rows = fields.iter().map(|f| {
-                row![
+            // A click copies the value: iced text can't be selected.
+            let rows = fields.iter().enumerate().map(|(i, f)| {
+                let content = row![
                     text(f.label).size(12).width(92).style(theme::dim),
                     text(f.value.as_str()).size(12).width(Fill),
                 ]
-                .spacing(8)
-                .into()
+                .spacing(8);
+                let copy = button(content)
+                    .padding([3, 8])
+                    .width(Fill)
+                    .style(theme::flat(false))
+                    .on_press(Action::CopyInfo { index: i }.into());
+                container(copy).id(format!("info-{i}")).into()
             });
-            container(column(rows).spacing(6)).padding([0, 8]).into()
+            column(rows).into()
         }
     };
     let content = column![
@@ -488,7 +494,7 @@ fn info_panel(s: &State) -> Element<'_, Message> {
         scrollable(fields).height(Fill),
     ]
     .spacing(10);
-    container(content).padding([12, 6]).width(260).height(Fill).style(theme::bar).id("info-panel").into()
+    container(content).padding([12, 6]).width(320).height(Fill).style(theme::bar).id("info-panel").into()
 }
 
 /// Three bars: the menu icon (drawn, so it doesn't depend on the font's glyphs).

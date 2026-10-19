@@ -324,12 +324,14 @@ struct Underlay {
 }
 
 /// What the runtime must do after an action, beyond scheduling decodes.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub enum Effect {
     None,
     Quit,
     /// Put the window into (`true`) or out of full screen.
     Fullscreen(bool),
+    /// Put this text on the clipboard.
+    Copy(String),
 }
 
 #[derive(Debug)]
@@ -369,9 +371,9 @@ pub struct State {
     pub names: bool,
     /// How the grid arranges thumbnails. Small at first start, then remembered.
     pub layout: grid::Layout,
-    /// The edits panel shows on the right (`Shift+E`). Off by default; remembered between runs.
+    /// The edits panel shows on the right (`Shift+E`). Closed at every start.
     pub edits_panel: bool,
-    /// The info panel shows on the right (`I`). Off by default; remembered between runs.
+    /// The info panel shows on the right (`I`). Closed at every start.
     pub info_panel: bool,
     /// The info panel's fields of the photos shown with it, by path ([`State::next_info_job`]).
     pub info: HashMap<PathBuf, Result<Vec<Field>, String>>,
@@ -849,6 +851,19 @@ impl State {
             }
             Action::ToggleEditsPanel => self.edits_panel = !self.edits_panel,
             Action::ToggleInfoPanel => self.info_panel = !self.info_panel,
+            Action::CopyInfo { index } => {
+                let field = match self.current_info() {
+                    Some(Ok(fields)) if self.info_panel => fields.get(*index).cloned(),
+                    _ => None,
+                };
+                match field {
+                    Some(f) => {
+                        self.notice = Some(format!("copied {}", f.label.to_lowercase()));
+                        return Effect::Copy(f.value);
+                    }
+                    None => self.error(format!("copy_info {index}: no such field")),
+                }
+            }
             Action::Revert => {
                 (self.mode, self.crop.selection) = (Mode::Browse, None);
                 self.change_stack(EditStack::default());
@@ -1452,6 +1467,7 @@ impl State {
     fn select(&mut self, index: usize) {
         if index != self.index {
             self.leave();
+            self.notice = None;
         }
         let now = Instant::now();
         self.selected_at = [Some(now), self.selected_at[0]];

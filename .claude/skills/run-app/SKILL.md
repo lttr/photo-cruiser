@@ -50,7 +50,7 @@ Put scripts and outputs in `/tmp/photo-cruiser/` (`mkdir -p` it), never in the r
   {"action": "toggle_crop"},
   {"action": "set_crop", "x": 40, "y": 30, "w": 200, "h": 150},
   {"action": "clear_crop"}, {"action": "exit_crop"},
-  {"action": "toggle_edits_panel"}, {"action": "remove_edit", "index": 0}, {"action": "toggle_info_panel"},
+  {"action": "toggle_edits_panel"}, {"action": "remove_edit", "index": 0}, {"action": "toggle_info_panel"}, {"action": "copy_info", "index": 0},
   {"action": "quit"}
 ]
 ```
@@ -60,8 +60,8 @@ Put scripts and outputs in `/tmp/photo-cruiser/` (`mkdir -p` it), never in the r
 - `next_layout` (key `Z`) cycles the grid: `small` → `big` (cells twice as big, thumbnails decoded again at 512 px) → `justified` (rows of photos 4 px apart at their aspect ratio, about as high as the big cells, names over the photos; every photo's size is probed first) → `small`. `set_layout` picks one. The interactive app remembers the layout and `toggle_names` in `~/.config/photo-cruiser/settings.json`; script mode always starts small, names hidden, and never writes that file.
 - `show_photo` opens the current photo (or `index`); `show_grid` goes back. `toggle_crop`/`set_crop` from the grid switch to the photo view.
 - `set_crop` takes source pixels (after orientation), turns crop mode on, and is clamped to the image.
-- `toggle_info_panel` (key `I`) shows a lightness histogram of what the image area shows (the grid: the selected thumbnail) and up to 15 EXIF fields of the current photo (the same as `pcr info`); the interactive app remembers it.
-- `toggle_edits_panel` (key `Shift+E`) shows the current photo's edits on the right, in stack order; the interactive app remembers it. `remove_edit` drops one op by its stack index (undoable).
+- `toggle_info_panel` (key `I`) shows a lightness histogram of what the image area shows (the grid: the selected thumbnail) and up to 15 EXIF fields of the current photo (the same as `pcr info`). `copy_info` copies field `index` to the clipboard, as a click on it does. Panels are closed at every start.
+- `toggle_edits_panel` (key `Shift+E`) shows the current photo's edits on the right, in stack order. `remove_edit` drops one op by its stack index (undoable).
 - `quit` ends the script early; the shot and state files are still written.
 
 The state JSON has these fields: `folder`, `count`, `index` (0-based), `position` (`"i / N"`), `file`, `view` (`grid`|`photo`), `mode` (`browse`|`crop`), `fullscreen`, `menu` (menu open), `help` (shortcuts panel open), `names` (file names shown), `layout` (`small`|`big`|`justified`), `edits_panel`, `info_panel`, `info` (the info panel's fields, `"Label: value"`, while it shows), `crop` (`{x,y,w,h}` or null), `title`, `status`, `loading`, `display` (`sharp`|`preview`|`previous`|`none`: what the image area shows for the current index), `errors`, `window`, `shot`.

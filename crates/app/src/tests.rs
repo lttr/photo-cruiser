@@ -1001,7 +1001,7 @@ fn layouts_cycled_with_z() {
 }
 
 #[test]
-fn layout_names_and_edits_panel_remembered_in_settings() {
+fn layout_and_names_remembered_in_settings_panels_not() {
     let dir = tempfile::tempdir().unwrap();
     let path = dir.path().join("settings.json");
     let with_settings = || {
@@ -1021,14 +1021,11 @@ fn layout_names_and_edits_panel_remembered_in_settings() {
     h.keys(Key::Character("n".into()), 1);
     assert!(h.bounds("edits-panel").is_none());
     h.keys(Key::Character("E".into()), 1);
-    assert_eq!(
-        Settings::load(&path),
-        Settings { layout: Layout::Big, names: true, edits_panel: true, info_panel: false }
-    );
-    // A new run starts big, with names and the edits panel.
+    assert_eq!(Settings::load(&path), Settings { layout: Layout::Big, names: true });
+    // A new run starts big, with names, but no panel open.
     let h = with_settings();
     assert!(h.bounds("selected").unwrap().width > small.width);
-    assert!(h.bounds("edits-panel").is_some());
+    assert!(h.bounds("edits-panel").is_none());
     assert!(h.status().starts_with("img1.png · "), "{}", h.status());
 }
 
@@ -2133,6 +2130,10 @@ fn info_panel_shows_histogram_and_fields() {
     assert!(h.bounds("body").unwrap().width < wide, "the panel takes room from the image");
     assert!(h.bounds("histogram").unwrap().height >= 90.0);
     assert!(h.has_text("PNG · "));
+    // A click on a field copies its value.
+    let at = h.bounds("info-0").unwrap().center();
+    h.run(Interaction::Mouse(Mouse::Click { button: Button::Left, target: Some(Target::Point(at)) }));
+    assert!(h.status().ends_with("— copied size"), "{}", h.status());
     // Both panels at once: info on the far right.
     h.keys(Key::Character("E".into()), 1);
     assert!(h.bounds("edits-panel").unwrap().x < h.bounds("info-panel").unwrap().x);

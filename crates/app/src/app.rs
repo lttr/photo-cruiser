@@ -124,7 +124,6 @@ impl App {
         };
         if let Some((_, s)) = &app.settings {
             (app.state.layout, app.state.names) = (s.layout, s.names);
-            (app.state.edits_panel, app.state.info_panel) = (s.edits_panel, s.info_panel);
         }
         if let Some(folder) = cfg.folder {
             app.state.apply(&Action::Open { path: folder });
@@ -275,12 +274,7 @@ impl App {
     /// Save the settings when they changed.
     fn write_settings(&mut self) {
         let Some((path, saved)) = &mut self.settings else { return };
-        let now = Settings {
-            layout: self.state.layout,
-            names: self.state.names,
-            edits_panel: self.state.edits_panel,
-            info_panel: self.state.info_panel,
-        };
+        let now = Settings { layout: self.state.layout, names: self.state.names };
         if now != *saved {
             if let Err(e) = now.save(path) {
                 eprintln!("photo-cruiser: cannot save {}: {e}", path.display());
@@ -316,6 +310,7 @@ impl App {
             Effect::None if self.state.palette.is_some() => iced::widget::operation::focus("palette-input"),
             Effect::Quit => iced::exit(),
             Effect::Fullscreen(on) => set_fullscreen(on),
+            Effect::Copy(text) => iced::clipboard::write(text),
             Effect::None => Task::none(),
         }
     }
