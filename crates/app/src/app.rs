@@ -123,7 +123,8 @@ impl App {
             },
         };
         if let Some((_, s)) = &app.settings {
-            (app.state.layout, app.state.names, app.state.edits_panel) = (s.layout, s.names, s.edits_panel);
+            (app.state.layout, app.state.names) = (s.layout, s.names);
+            (app.state.edits_panel, app.state.info_panel) = (s.edits_panel, s.info_panel);
         }
         if let Some(folder) = cfg.folder {
             app.state.apply(&Action::Open { path: folder });
@@ -186,6 +187,10 @@ impl App {
                 }
                 Task::none()
             }
+            Message::Info(path, fields) => {
+                self.state.finish_info(path, fields);
+                Task::none()
+            }
             Message::Thumb(job, result) => {
                 self.state.finish_thumb(job, result);
                 Task::none()
@@ -237,6 +242,7 @@ impl App {
             }
             Message::Script(event) => script::update(self, event),
         };
+        self.state.sync_histogram();
         self.write_resume();
         self.write_settings();
         let scroll = match self.state.scroll.take() {
@@ -273,6 +279,7 @@ impl App {
             layout: self.state.layout,
             names: self.state.names,
             edits_panel: self.state.edits_panel,
+            info_panel: self.state.info_panel,
         };
         if now != *saved {
             if let Err(e) = now.save(path) {
@@ -333,6 +340,15 @@ impl App {
         tasks.extend(std::iter::from_fn(|| self.state.next_thumb_job()).map(|(job, path)| {
             let decode = move || thumb_job(&path, job.side);
             Task::perform(on_thread(decode), move |r| Message::Thumb(job, r.unwrap_or_else(panicked)))
+        }));
+        tasks.extend(self.state.next_info_job().map(|path| {
+            let p = path.clone();
+            let read = move || {
+                photo_cruiser_core::info::fields(&p).map_err(|e| e.to_string().trim_end().to_string())
+            };
+            Task::perform(on_thread(read), move |r| {
+                Message::Info(path.clone(), r.unwrap_or_else(|| Err("info thread panicked".into())))
+            })
         }));
         tasks.extend(std::iter::from_fn(|| self.state.next_size_job()).map(|(job, paths)| {
             let n = paths.len();

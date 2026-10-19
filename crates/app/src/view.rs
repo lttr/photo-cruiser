@@ -1,5 +1,5 @@
 //! Layout: image area (the grid of thumbnails, or one image with the crop overlay
-//! stacked over it), the edits panel right of it (`I`), then a footer with the status line and the menu button. The menu
+//! stacked over it), the info (`I`) and edits (`Shift+E`) panels right of it, then a footer with the status line and the menu button. The menu
 //! opens upwards from the button, over the image. Full screen shows only the image area.
 //! Widget ids used by tests: `photo` (the current photo, sharp), `preview` (its embedded
 //! preview, or still the previous photo while it decodes), `message` (error / empty),
@@ -12,13 +12,15 @@
 //! `tool-slider`, `tool-auto` and `tool-neutral` (the open tool's panel in the footer, its
 //! slider, its Auto and No change buttons), `original-button` (press and hold: the original),
 //! `edits-panel` (the current photo's edits, right of the image area), `edit-<i>` and
-//! `remove-edit-<i>` (its rows and their remove buttons).
+//! `remove-edit-<i>` (its rows and their remove buttons), `info-panel` and `histogram` (the
+//! current photo's histogram and EXIF fields).
 
 use crate::action::Action;
 use crate::adjust_panel::{Hold, Slider};
 use crate::app::App;
 use crate::crop_overlay::{Modes, Overlay, SHORTCUTS};
 use crate::grid::LABEL;
+use crate::histogram::Chart;
 use crate::menu;
 use crate::message::Message;
 use crate::palette;
@@ -143,10 +145,13 @@ pub fn view(app: &App) -> Element<'_, Message> {
         )
         .id("menu-button"),
     );
-    let body: Element<_> = match s.edits_panel {
-        true => row![body, edits_panel(s)].into(),
-        false => body.into(),
-    };
+    let mut body = row![body];
+    if s.edits_panel {
+        body = body.push(edits_panel(s));
+    }
+    if s.info_panel {
+        body = body.push(info_panel(s));
+    }
     let main = column![
         body,
         container(footer).padding(iced::Padding::from([2, 4]).left(12)).width(Fill).style(theme::bar)
@@ -455,6 +460,35 @@ fn edits_panel(s: &State) -> Element<'_, Message> {
     ]
     .spacing(8);
     container(content).padding([12, 6]).width(240).height(Fill).style(theme::bar).id("edits-panel").into()
+}
+
+/// The lightness histogram of what shows, then the current photo's main EXIF fields.
+fn info_panel(s: &State) -> Element<'_, Message> {
+    let chart = canvas(Chart(s.histogram().map(|h| h.heights()))).width(Fill).height(90);
+    let note = |t: &str| container(text(t.to_string()).size(12).style(theme::dim)).padding([0, 8]).into();
+    let fields: Element<_> = match s.current_info() {
+        _ if s.current_path().is_none() => note("No photo"),
+        None => note("Reading…"),
+        Some(Err(e)) => note(e),
+        Some(Ok(fields)) => {
+            let rows = fields.iter().map(|f| {
+                row![
+                    text(f.label).size(12).width(92).style(theme::dim),
+                    text(f.value.as_str()).size(12).width(Fill),
+                ]
+                .spacing(8)
+                .into()
+            });
+            container(column(rows).spacing(6)).padding([0, 8]).into()
+        }
+    };
+    let content = column![
+        container(text("Info").size(15)).padding([0, 8]),
+        container(chart).padding([0, 8]).id("histogram"),
+        scrollable(fields).height(Fill),
+    ]
+    .spacing(10);
+    container(content).padding([12, 6]).width(260).height(Fill).style(theme::bar).id("info-panel").into()
 }
 
 /// Three bars: the menu icon (drawn, so it doesn't depend on the font's glyphs).

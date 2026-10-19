@@ -102,7 +102,8 @@ pub const SHORTCUTS: &[(&str, &str)] = &[
     ("O  \\  (hold)", "Show the original photo, without edits"),
     ("F  F11", "Full screen on / off"),
     ("N", "File names on / off"),
-    ("I", "Edits panel on / off: the photo's edits, in order"),
+    ("I", "Info panel on / off: histogram and camera settings"),
+    ("Shift+E", "Edits panel on / off: the photo's edits, in order"),
     ("Z", "Grid: small / big thumbnails / justified"),
     ("F10", "Menu: ↑ ↓ Home End to move, Enter to pick"),
     ("?  F1", "Keyboard shortcuts"),
@@ -165,6 +166,7 @@ pub fn key_message(key: &Key, modified: &Key, mods: keyboard::Modifiers, m: Mode
             "u" => Some(Action::Undo),
             "R" => Some(Action::RotateRight),
             "L" => Some(Action::RotateLeft),
+            "E" => Some(Action::ToggleEditsPanel),
             "A" if m.tool => Some(Action::AutoAdjust),
             "\\" if !m.grid && !m.crop => Some(Action::ShowOriginal { on: true }),
             _ => None,
@@ -221,7 +223,7 @@ pub fn key_message(key: &Key, modified: &Key, mods: keyboard::Modifiers, m: Mode
         Key::Character(c) if plain && m.crop && c.eq_ignore_ascii_case("x") => Action::SwapAspect.into(),
         Key::Character(c) if plain && c.eq_ignore_ascii_case("f") => Action::ToggleFullscreen.into(),
         Key::Character(c) if plain && c.eq_ignore_ascii_case("n") => Action::ToggleNames.into(),
-        Key::Character(c) if plain && c.eq_ignore_ascii_case("i") => Action::ToggleEditsPanel.into(),
+        Key::Character(c) if plain && c.eq_ignore_ascii_case("i") => Action::ToggleInfoPanel.into(),
         Key::Character(c) if plain && c.eq_ignore_ascii_case("z") => Action::NextLayout.into(),
         Key::Character(c) if plain && !m.grid && !m.crop && c.eq_ignore_ascii_case("o") => {
             Action::ShowOriginal { on: true }.into()

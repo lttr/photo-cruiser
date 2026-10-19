@@ -14,6 +14,7 @@ mod skill;
 use clap::{CommandFactory, Parser, Subcommand};
 use photo_cruiser_core::adjust;
 use photo_cruiser_core::export::{self, OutFormat};
+use photo_cruiser_core::info::Field;
 use photo_cruiser_core::render::{self, RenderOpts};
 use photo_cruiser_core::store::{self, PhotoEdits};
 use photo_cruiser_core::{EditStack, Error, Folder, Op, Probe, Rect, Tool};
@@ -47,7 +48,8 @@ enum Cmd {
         #[arg(long)]
         json: bool,
     },
-    /// Format, displayed size, EXIF orientation and full decode time of a photo.
+    /// Format, displayed size, EXIF orientation and full decode time of a photo, and the
+    /// fields of the app's info panel (camera, exposure, date taken, ...).
     Info {
         file: PathBuf,
         #[arg(long)]
@@ -283,6 +285,7 @@ struct InfoJson<'a> {
     #[serde(flatten)]
     probe: Probe,
     decode_ms: f64,
+    fields: Vec<Field>,
 }
 
 fn list(dir: &Path, probe: bool, json: bool) -> Result<(), Fail> {
@@ -325,14 +328,18 @@ fn info(file: &Path, json: bool) -> Result<(), Fail> {
     let t = Instant::now();
     photo_cruiser_core::decode(file)?;
     let decode_ms = (t.elapsed().as_secs_f64() * 1e5).round() / 100.0;
+    let fields = photo_cruiser_core::info::fields(file)?;
     if json {
-        print_json(&InfoJson { path: file, probe, decode_ms });
+        print_json(&InfoJson { path: file, probe, decode_ms, fields });
     } else {
         println!("path: {}", file.display());
         println!("format: {}", probe.format);
         println!("size: {}x{}", probe.width, probe.height);
         println!("orientation: {}", probe.orientation);
         println!("decode: {decode_ms} ms");
+        for f in &fields {
+            println!("{}: {}", f.label.to_lowercase(), f.value);
+        }
     }
     Ok(())
 }

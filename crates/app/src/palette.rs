@@ -62,7 +62,8 @@ pub fn commands(s: &State) -> Vec<Command> {
         cmd("Open folder…", "Ctrl+O", Message::OpenDialog),
         cmd("Quit", "", Action::Quit),
         cmd(if s.names { "Hide file names" } else { "Show file names" }, "N", Action::ToggleNames),
-        cmd(if s.edits_panel { "Hide edits" } else { "Show edits" }, "I", Action::ToggleEditsPanel),
+        cmd(if s.edits_panel { "Hide edits" } else { "Show edits" }, "Shift+E", Action::ToggleEditsPanel),
+        cmd(if s.info_panel { "Hide info" } else { "Show info" }, "I", Action::ToggleInfoPanel),
         match s.fullscreen {
             true => cmd("Leave full screen", "F", Action::ExitFullscreen),
             false => cmd("Full screen", "F", Action::ToggleFullscreen),

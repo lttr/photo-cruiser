@@ -30,6 +30,7 @@ use image::RgbaImage;
 use photo_cruiser_core::adjust::{self, Tool};
 use photo_cruiser_core::crop::{Aspect, CropTool, MouseKind};
 use photo_cruiser_core::geom::PixelRect;
+use photo_cruiser_core::info::{Field, Histogram};
 use photo_cruiser_core::loader::{Job, Kind, Loader, SizeJob, Sizes, ThumbJob, Thumbs};
 use photo_cruiser_core::store::{self, PhotoEdits, SaveReport};
 use photo_cruiser_core::{EditStack, Error, Folder, History, Op, Point, Rect, Size};
@@ -368,8 +369,16 @@ pub struct State {
     pub names: bool,
     /// How the grid arranges thumbnails. Small at first start, then remembered.
     pub layout: grid::Layout,
-    /// The edits panel shows on the right (`I`). Off by default; remembered between runs.
+    /// The edits panel shows on the right (`Shift+E`). Off by default; remembered between runs.
     pub edits_panel: bool,
+    /// The info panel shows on the right (`I`). Off by default; remembered between runs.
+    pub info_panel: bool,
+    /// The info panel's fields of the photos shown with it, by path ([`State::next_info_job`]).
+    pub info: HashMap<PathBuf, Result<Vec<Field>, String>>,
+    /// The photo whose fields are being read.
+    info_running: Option<PathBuf>,
+    /// The lightness histogram of [`State::histogram_source`], by its image id.
+    histogram: Option<(iced_runtime::core::image::Id, Histogram)>,
     pub max_side: u32,
     /// Rejected actions and folder errors, oldest first.
     pub errors: Vec<String>,
@@ -439,6 +448,10 @@ impl State {
             names: false,
             layout: grid::Layout::default(),
             edits_panel: false,
+            info_panel: false,
+            info: HashMap::new(),
+            info_running: None,
+            histogram: None,
             max_side,
             errors: Vec::new(),
             shown: None,
@@ -498,7 +511,9 @@ impl State {
         let thumbs = self.view != View::Grid || self.thumbs.is_idle(self.visible(), self.len(), side);
         let sizes = self.layout != grid::Layout::Justified || self.sizes.is_done();
         let original = self.original_image.as_ref().is_some_and(|o| o.image.is_none());
+        let info = !self.info_panel || self.current_path().is_none() || self.current_info().is_some();
         self.loader.is_idle(self.index, self.len())
+            && info
             && !original
             && self.fade_progress().is_none()
             && thumbs
@@ -833,6 +848,7 @@ impl State {
                 }
             }
             Action::ToggleEditsPanel => self.edits_panel = !self.edits_panel,
+            Action::ToggleInfoPanel => self.info_panel = !self.info_panel,
             Action::Revert => {
                 (self.mode, self.crop.selection) = (Mode::Browse, None);
                 self.change_stack(EditStack::default());
@@ -1266,6 +1282,9 @@ impl State {
             return;
         }
         let new = report.path;
+        // A new file: its size and format may have changed.
+        self.info.remove(&path);
+        self.info.remove(&new);
         let index = self.folder.as_ref().and_then(|f| f.entries.iter().position(|e| e.path == path));
         let mut p = self.edits.remove(&path).unwrap_or_default();
         if new != path {
@@ -1297,6 +1316,63 @@ impl State {
             if self.original_image.as_ref().is_some_and(|o| o.job.index == i) {
                 self.original_image = None;
             }
+        }
+    }
+
+    /// The current photo, if the info panel shows and its fields aren't read yet (one at a
+    /// time). Run [`photo_cruiser_core::info::fields`] on it, then [`State::finish_info`].
+    pub fn next_info_job(&mut self) -> Option<PathBuf> {
+        if !self.info_panel || self.info_running.is_some() {
+            return None;
+        }
+        let path = self.current_path()?;
+        if self.info.contains_key(path) {
+            return None;
+        }
+        self.info_running = Some(path.to_path_buf());
+        self.info_running.clone()
+    }
+
+    pub fn finish_info(&mut self, path: PathBuf, fields: Result<Vec<Field>, String>) {
+        self.info_running = None;
+        self.info.insert(path, fields);
+    }
+
+    /// The current photo's info fields (`None` while they're read).
+    pub fn current_info(&self) -> Option<&Result<Vec<Field>, String>> {
+        self.info.get(self.current_path()?)
+    }
+
+    /// What the histogram is of: the image as shown (the tool's preview, the original
+    /// while it is held), or in the grid the selected photo's thumbnail.
+    fn histogram_source(&self) -> Option<&Handle> {
+        match self.view {
+            View::Grid => self.thumbs.get(self.index)?.as_ref().ok().map(|p| &p.handle),
+            View::Photo => {
+                self.image_handle().filter(|_| self.shown.as_ref().is_some_and(|s| s.index == self.index))
+            }
+        }
+    }
+
+    /// The histogram of what the image area shows, if it is known ([`State::sync_histogram`]).
+    pub fn histogram(&self) -> Option<&Histogram> {
+        let (id, h) = self.histogram.as_ref()?;
+        (self.histogram_source()?.id() == *id).then_some(h)
+    }
+
+    /// Count the histogram of a new image, while the info panel shows (the runtime calls
+    /// it after every update).
+    pub fn sync_histogram(&mut self) {
+        if !self.info_panel {
+            self.histogram = None;
+            return;
+        }
+        let Some(source) = self.histogram_source() else { return };
+        if self.histogram.as_ref().is_some_and(|(id, _)| *id == source.id()) {
+            return;
+        }
+        if let Handle::Rgba { id, pixels, .. } = source {
+            self.histogram = Some((*id, Histogram::of(pixels)));
         }
     }
 
@@ -1628,6 +1704,13 @@ impl State {
             names: self.names,
             layout: self.layout,
             edits_panel: self.edits_panel,
+            info_panel: self.info_panel,
+            info: match self.current_info() {
+                Some(Ok(fields)) if self.info_panel => {
+                    fields.iter().map(|f| format!("{}: {}", f.label, f.value)).collect()
+                }
+                _ => Vec::new(),
+            },
             crop: self.crop_pixels(),
             title: self.title(),
             status: self.status(),
@@ -1695,6 +1778,10 @@ pub struct Dump {
     pub layout: grid::Layout,
     /// The edits panel shows.
     pub edits_panel: bool,
+    /// The info panel shows.
+    pub info_panel: bool,
+    /// Its fields of the current photo (`"Label: value"`), once read.
+    pub info: Vec<String>,
     /// Integer source pixels.
     pub crop: Option<PixelRect>,
     pub title: String,

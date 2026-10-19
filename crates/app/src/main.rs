@@ -18,6 +18,7 @@ mod adjust_panel;
 mod app;
 mod crop_overlay;
 mod grid;
+mod histogram;
 mod menu;
 mod message;
 mod palette;

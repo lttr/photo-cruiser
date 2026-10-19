@@ -29,6 +29,8 @@ pub enum Message {
     Decoded(Job, Loaded),
     /// A photo's original (for showing it without edits) finished decoding.
     Original(crate::state::OriginalJob, Loaded),
+    /// The info panel's fields of a photo were read.
+    Info(PathBuf, Result<Vec<photo_cruiser_core::info::Field>, String>),
     /// A grid thumbnail finished.
     Thumb(ThumbJob, Loaded),
     /// Photo sizes probed (`None`: unreadable, or the probe thread died).

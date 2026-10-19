@@ -108,9 +108,12 @@ pub enum Action {
     RemoveEdit {
         index: usize,
     },
-    /// Show/hide the edits panel on the right: the current photo's edits, in order (`I`,
-    /// menu). Off at first start, then remembered.
+    /// Show/hide the edits panel on the right: the current photo's edits, in order
+    /// (`Shift+E`, menu). Off at first start, then remembered.
     ToggleEditsPanel,
+    /// Show/hide the info panel on the right: a lightness histogram of what shows and the
+    /// photo's main EXIF fields (`I`, menu). Off at first start, then remembered.
+    ToggleInfoPanel,
     /// Back to the original file now: `reset_edits`, then `save` (menu).
     Revert,
     /// Save the current photo now (`Ctrl+S`, menu). Leaving a photo saves it anyway.
@@ -211,7 +214,7 @@ mod tests {
                 {"action":"auto_adjust"},{"action":"neutral_adjust"},
                 {"action":"close_tool"},{"action":"cancel_tool"},
                 {"action":"step_adjust","steps":-2},{"action":"step_adjust","steps":1,"fine":true},{"action":"end_adjust"},
-                {"action":"toggle_edits_panel"},{"action":"remove_edit","index":1}]"#,
+                {"action":"toggle_edits_panel"},{"action":"remove_edit","index":1},{"action":"toggle_info_panel"}]"#,
         )
         .unwrap();
         assert_eq!(steps[1], Action::Goto { index: 2 });
@@ -242,7 +245,8 @@ mod tests {
         assert_eq!(steps[57], Action::StepAdjust { steps: -2, fine: false });
         assert_eq!(steps[58], Action::StepAdjust { steps: 1, fine: true });
         assert_eq!((&steps[60], &steps[61]), (&Action::ToggleEditsPanel, &Action::RemoveEdit { index: 1 }));
-        assert_eq!(steps.len(), 62);
+        assert_eq!(steps[62], Action::ToggleInfoPanel);
+        assert_eq!(steps.len(), 63);
         let json = serde_json::to_string(&Action::SetCrop(Rect::new(1.0, 2.0, 3.0, 4.0))).unwrap();
         assert_eq!(json, r#"{"action":"set_crop","x":1.0,"y":2.0,"w":3.0,"h":4.0}"#);
         assert!(parse_script(r#"[{"action":"jump"}]"#).is_err());

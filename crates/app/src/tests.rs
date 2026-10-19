@@ -92,6 +92,11 @@ fn settle(s: &mut State) {
             let r = original_job(&job);
             s.finish_original(job, r);
         }
+        while let Some(path) = s.next_info_job() {
+            let r = photo_cruiser_core::info::fields(&path).map_err(|e| e.to_string());
+            s.finish_info(path, r);
+        }
+        s.sync_histogram();
         if s.is_idle() {
             break;
         }
@@ -1015,8 +1020,11 @@ fn layout_names_and_edits_panel_remembered_in_settings() {
     h.keys(Key::Character("z".into()), 1);
     h.keys(Key::Character("n".into()), 1);
     assert!(h.bounds("edits-panel").is_none());
-    h.keys(Key::Character("i".into()), 1);
-    assert_eq!(Settings::load(&path), Settings { layout: Layout::Big, names: true, edits_panel: true });
+    h.keys(Key::Character("E".into()), 1);
+    assert_eq!(
+        Settings::load(&path),
+        Settings { layout: Layout::Big, names: true, edits_panel: true, info_panel: false }
+    );
     // A new run starts big, with names and the edits panel.
     let h = with_settings();
     assert!(h.bounds("selected").unwrap().width > small.width);
@@ -1073,6 +1081,20 @@ fn shifted_g_is_last() {
     assert!(matches!(msg(&g, &big_g, Modifiers::SHIFT), Some(Message::Action(Action::Last))));
     assert!(matches!(msg(&g, &g, Modifiers::empty()), Some(Message::Action(Action::First))));
     assert!(msg(&g, &g, Modifiers::CTRL).is_none(), "Ctrl+G is not a shortcut");
+}
+
+#[test]
+fn i_is_info_shift_e_edits() {
+    use crate::crop_overlay::key_message;
+    use iced::keyboard::Modifiers;
+    let (e, big_e, i) = (Key::Character("e".into()), Key::Character("E".into()), Key::Character("i".into()));
+    let msg = |k, m, mods| key_message(k, m, mods, Modes::default());
+    assert!(matches!(msg(&i, &i, Modifiers::empty()), Some(Message::Action(Action::ToggleInfoPanel))));
+    assert!(matches!(msg(&e, &big_e, Modifiers::SHIFT), Some(Message::Action(Action::ToggleEditsPanel))));
+    assert!(matches!(
+        msg(&e, &e, Modifiers::empty()),
+        Some(Message::Action(Action::OpenTool { tool: photo_cruiser_core::Tool::Exposure }))
+    ));
 }
 
 #[test]
@@ -2029,7 +2051,7 @@ fn edits_panel_lists_opens_and_removes() {
     let mut h = harness(); // img1.png
     h.until("img1 shown", |h| h.bounds("photo").is_some());
     let wide = h.bounds("body").unwrap().width;
-    h.keys(Key::Character("i".into()), 1);
+    h.keys(Key::Character("E".into()), 1);
     assert!(h.bounds("body").unwrap().width < wide, "the panel takes room from the image");
     assert!(h.has_text("No edits"));
 
@@ -2053,10 +2075,67 @@ fn edits_panel_lists_opens_and_removes() {
     assert!(!h.has_text("90° right") && h.has_text("+0.50 EV"));
     assert!(h.bounds("edit-1").is_none());
 
-    // Shown in the grid too (the selected photo's edits); hidden again with `i`.
+    // Shown in the grid too (the selected photo's edits); hidden again with `Shift+E`.
     h.keys(Key::Named(Named::Escape), 1);
     h.until("grid", |h| h.bounds("grid").is_some());
     assert!(h.has_text("+0.50 EV"));
-    h.keys(Key::Character("i".into()), 1);
+    h.keys(Key::Character("E".into()), 1);
     assert!(h.bounds("edits-panel").is_none());
+}
+
+#[test]
+fn update_info_fields_and_histogram() {
+    use photo_cruiser_core::Tool;
+    let mut s = opened(&fixtures());
+    assert!(s.histogram().is_none() && s.current_info().is_none(), "nothing read while the panel is off");
+    s.apply(&Action::ToggleInfoPanel);
+    let img1 = s.current_path().unwrap().to_path_buf();
+    assert_eq!(s.next_info_job(), Some(img1.clone()));
+    assert_eq!(s.next_info_job(), None, "one at a time");
+    assert!(!s.is_idle(), "waits for the fields");
+    s.finish_info(
+        img1,
+        photo_cruiser_core::info::fields(&fixtures().join("img1.png")).map_err(|e| e.to_string()),
+    );
+    settle(&mut s);
+    assert!(s.dump(None, None).info.contains(&"Size: 320 × 240".to_string()));
+    assert!(s.histogram().is_some(), "of the grid's thumbnail");
+
+    // The photo view: of what shows, the tool's preview while one is open.
+    s.apply(&Action::ShowPhoto { index: Some(1) });
+    settle(&mut s);
+    let before = s.histogram().unwrap().clone();
+    s.apply(&Action::OpenTool { tool: Tool::Exposure });
+    settle(&mut s);
+    s.apply(&Action::SetAdjust { value: 2.0 });
+    settle(&mut s);
+    let after = s.histogram().unwrap();
+    let mean = |h: &photo_cruiser_core::info::Histogram| {
+        let n: u64 = h.0.iter().map(|v| *v as u64).sum();
+        h.0.iter().enumerate().map(|(i, v)| i as u64 * *v as u64).sum::<u64>() as f64 / n as f64
+    };
+    assert!(mean(after) > mean(&before) + 20.0, "{} → {}", mean(&before), mean(after));
+    assert!(s.dump(None, None).info.iter().any(|f| f.starts_with("File: JPEG")));
+
+    s.apply(&Action::ToggleInfoPanel);
+    settle(&mut s);
+    assert!(s.histogram().is_none() && s.dump(None, None).info.is_empty());
+}
+
+#[test]
+fn info_panel_shows_histogram_and_fields() {
+    let mut h = harness(); // img1.png
+    h.until("img1 shown", |h| h.bounds("photo").is_some());
+    assert!(h.bounds("info-panel").is_none());
+    let wide = h.bounds("body").unwrap().width;
+    h.keys(Key::Character("i".into()), 1);
+    h.until("fields read", |h| h.has_text("320 × 240"));
+    assert!(h.bounds("body").unwrap().width < wide, "the panel takes room from the image");
+    assert!(h.bounds("histogram").unwrap().height >= 90.0);
+    assert!(h.has_text("PNG · "));
+    // Both panels at once: info on the far right.
+    h.keys(Key::Character("E".into()), 1);
+    assert!(h.bounds("edits-panel").unwrap().x < h.bounds("info-panel").unwrap().x);
+    h.keys(Key::Character("i".into()), 1);
+    assert!(h.bounds("info-panel").is_none() && h.bounds("edits-panel").is_some());
 }

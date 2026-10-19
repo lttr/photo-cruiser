@@ -1,6 +1,6 @@
 //! Small parsers for what Save needs to keep a photo's quality and metadata: JPEG
-//! markers (quantisation tables, sampling, density), EXIF (a TIFF structure) and WebP
-//! chunks. They read and patch bytes; decoding pixels is [`crate::decode`]'s job.
+//! markers (quantisation tables, sampling, density), EXIF (a TIFF structure; also read
+//! for the info panel, [`Exif`]) and WebP chunks. They read and patch bytes; decoding pixels is [`crate::decode`]'s job.
 
 /// What a JPEG was encoded with, to encode it again without adding visible loss.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -258,6 +258,144 @@ pub fn exif_orientation(exif: &[u8]) -> Option<u16> {
     let t = Tiff::new(exif)?;
     let e = t.entries(t.ifd0()?)?.into_iter().find(|(tag, _)| *tag == 0x0112);
     Some(e.and_then(|(_, e)| t.value(e)).unwrap_or(1) as u16)
+}
+
+/// Which IFD of an EXIF block a tag is in.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Ifd {
+    /// The main image (camera make and model, software, ...).
+    Main,
+    /// The Exif sub-IFD (exposure, lens, date taken, ...).
+    Exif,
+    Gps,
+}
+
+/// A tag's value, by its TIFF type.
+#[derive(Clone, Debug, PartialEq)]
+pub enum Value {
+    /// ASCII, up to the first NUL, trimmed.
+    Text(String),
+    /// BYTE, SHORT, LONG (and UNDEFINED, as bytes).
+    Uint(Vec<u32>),
+    /// SLONG.
+    Int(Vec<i32>),
+    /// RATIONAL and SRATIONAL, as numerator / denominator (`NaN` for 0 / 0).
+    Ratio(Vec<f64>),
+}
+
+impl Value {
+    /// The first number, whatever the type.
+    pub fn number(&self) -> Option<f64> {
+        match self {
+            Value::Text(_) => None,
+            Value::Uint(v) => v.first().map(|n| *n as f64),
+            Value::Int(v) => v.first().map(|n| *n as f64),
+            Value::Ratio(v) => v.first().copied().filter(|n| n.is_finite()),
+        }
+    }
+
+    pub fn text(&self) -> Option<&str> {
+        match self {
+            Value::Text(t) if !t.is_empty() => Some(t),
+            _ => None,
+        }
+    }
+}
+
+/// The tags of an EXIF block's main, Exif and GPS IFDs (not IFD1, the thumbnail's).
+/// Unreadable entries are skipped.
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct Exif {
+    tags: Vec<(Ifd, u16, Value)>,
+}
+
+impl Exif {
+    /// `None` if the block isn't a TIFF structure.
+    pub fn parse(exif: &[u8]) -> Option<Exif> {
+        let t = Tiff::new(exif)?;
+        let mut tags = Vec::new();
+        let mut ifds = vec![(Ifd::Main, t.ifd0()?)];
+        while let Some((ifd, at)) = ifds.pop() {
+            for (tag, e) in t.entries(at).unwrap_or_default() {
+                match (ifd, tag) {
+                    (Ifd::Main, 0x8769) => ifds.extend(t.value(e).map(|o| (Ifd::Exif, o as usize))),
+                    (Ifd::Main, 0x8825) => ifds.extend(t.value(e).map(|o| (Ifd::Gps, o as usize))),
+                    _ => tags.extend(t.read(e).map(|v| (ifd, tag, v))),
+                }
+            }
+        }
+        Some(Exif { tags })
+    }
+
+    pub fn get(&self, ifd: Ifd, tag: u16) -> Option<&Value> {
+        self.tags.iter().find(|(i, t, _)| *i == ifd && *t == tag).map(|(_, _, v)| v)
+    }
+
+    pub fn text(&self, ifd: Ifd, tag: u16) -> Option<&str> {
+        self.get(ifd, tag)?.text()
+    }
+
+    pub fn number(&self, ifd: Ifd, tag: u16) -> Option<f64> {
+        self.get(ifd, tag)?.number()
+    }
+}
+
+impl Tiff {
+    /// An entry's value, inline or at its offset. Values over 64 KiB are skipped.
+    fn read(&self, entry: usize) -> Option<Value> {
+        let (typ, count) = (self.u16(entry + 2)?, self.u32(entry + 4)? as usize);
+        let size = match typ {
+            1 | 2 | 6 | 7 => 1,
+            3 | 8 => 2,
+            4 | 9 => 4,
+            5 | 10 => 8,
+            _ => return None,
+        };
+        let len = size * count;
+        if len > 65536 {
+            return None;
+        }
+        let at = if len <= 4 { entry + 8 } else { self.u32(entry + 8)? as usize };
+        let bytes = self.b.get(at..at + len)?;
+        let n = |i: usize| -> Option<u32> {
+            match size {
+                1 => bytes.get(i).map(|b| *b as u32),
+                2 => self.u16(at + 2 * i).map(u32::from),
+                _ => self.u32(at + size * i),
+            }
+        };
+        Some(match typ {
+            2 => {
+                let text = bytes.split(|b| *b == 0).next().unwrap_or_default();
+                Value::Text(String::from_utf8_lossy(text).trim().to_string())
+            }
+            5 => Value::Ratio(
+                (0..count)
+                    .map(|i| Some(self.u32(at + 8 * i)? as f64 / self.u32(at + 8 * i + 4)? as f64))
+                    .collect::<Option<_>>()?,
+            ),
+            10 => Value::Ratio(
+                (0..count)
+                    .map(|i| {
+                        Some(self.u32(at + 8 * i)? as i32 as f64 / self.u32(at + 8 * i + 4)? as i32 as f64)
+                    })
+                    .collect::<Option<_>>()?,
+            ),
+            6 | 8 | 9 => Value::Int(
+                (0..count)
+                    .map(|i| {
+                        let v = n(i)?;
+                        Some(match size {
+                            1 => v as u8 as i8 as i32,
+                            2 => v as u16 as i16 as i32,
+                            _ => v as i32,
+                        })
+                    })
+                    .collect::<Option<_>>()?,
+            ),
+            _ => Value::Uint((0..count).map(n).collect::<Option<_>>()?),
+        })
+    }
 }
 
 /// The chunks of a WebP file (RIFF): FourCC and payload.
