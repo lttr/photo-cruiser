@@ -106,6 +106,10 @@ impl Decoded {
 }
 
 pub fn probe(path: &Path) -> Result<Probe> {
+    retry_io(|| probe_once(path))
+}
+
+fn probe_once(path: &Path) -> Result<Probe> {
     if let Some(format) = Format::heif_from_path(path) {
         let (ctx, handle) = heif_open(path)?;
         let _keep_alive = ctx;
@@ -113,19 +117,23 @@ pub fn probe(path: &Path) -> Result<Probe> {
     }
     let (format, mut decoder) = image_decoder(path)?;
     let (w, h) = decoder.dimensions();
-    let orientation = decoder.orientation().map_err(|e| Error::decode(path, e))?.to_exif();
+    let orientation = decoder.orientation().map_err(|e| Error::image(path, e))?.to_exif();
     let (width, height) = if (5..=8).contains(&orientation) { (h, w) } else { (w, h) };
     Ok(Probe { format, width, height, orientation })
 }
 
 /// Decode at full resolution.
 pub fn decode(path: &Path) -> Result<Decoded> {
+    retry_io(|| decode_once(path))
+}
+
+fn decode_once(path: &Path) -> Result<Decoded> {
     if let Some(format) = Format::heif_from_path(path) {
         return decode_heif(path, format);
     }
     let (format, mut decoder) = image_decoder(path)?;
-    let orientation = decoder.orientation().map_err(|e| Error::decode(path, e))?;
-    let mut img = image::DynamicImage::from_decoder(decoder).map_err(|e| Error::decode(path, e))?;
+    let orientation = decoder.orientation().map_err(|e| Error::image(path, e))?;
+    let mut img = image::DynamicImage::from_decoder(decoder).map_err(|e| Error::image(path, e))?;
     img.apply_orientation(orientation);
     let image = img.into_rgba8();
     let (source_width, source_height) = image.dimensions();
@@ -153,6 +161,10 @@ pub fn embedded_preview(path: &Path) -> Result<Option<Decoded>> {
 /// [`embedded_preview`] whose aspect ratio may differ from the photo's by `tolerance`
 /// (relative).
 fn preview_within(path: &Path, tolerance: f64) -> Result<Option<Decoded>> {
+    retry_io(|| preview_within_once(path, tolerance))
+}
+
+fn preview_within_once(path: &Path, tolerance: f64) -> Result<Option<Decoded>> {
     let decoded = if let Some(format) = Format::heif_from_path(path) {
         let (_ctx, handle) = heif_open(path)?;
         let mut ids = [0; 1];
@@ -168,12 +180,12 @@ fn preview_within(path: &Path, tolerance: f64) -> Result<Option<Decoded>> {
             return Ok(None);
         }
         let (w, h) = decoder.dimensions();
-        let exif = decoder.exif_metadata().map_err(|e| Error::decode(path, e))?;
+        let exif = decoder.exif_metadata().map_err(|e| Error::image(path, e))?;
         let Some(jpeg) = exif.as_deref().and_then(crate::meta::exif_thumbnail) else { return Ok(None) };
         let Ok(mut img) = image::load_from_memory_with_format(jpeg, image::ImageFormat::Jpeg) else {
             return Ok(None);
         };
-        let orientation = decoder.orientation().map_err(|e| Error::decode(path, e))?;
+        let orientation = decoder.orientation().map_err(|e| Error::image(path, e))?;
         let (source_width, source_height) = match orientation.to_exif() {
             5..=8 => (h, w),
             _ => (w, h),
@@ -220,6 +232,10 @@ pub struct Metadata {
 /// The ICC profile and EXIF of a photo, as far as its format has them. XMP and maker
 /// notes outside EXIF are not read (a saved photo loses them).
 pub fn metadata(path: &Path) -> Result<Metadata> {
+    retry_io(|| metadata_once(path))
+}
+
+fn metadata_once(path: &Path) -> Result<Metadata> {
     if Format::heif_from_path(path).is_some() {
         use libheif_rs::ColorProfile;
         let (_ctx, handle) = heif_open(path)?;
@@ -239,16 +255,29 @@ pub fn metadata(path: &Path) -> Result<Metadata> {
         return Ok(Metadata { icc, exif });
     }
     let (_, mut decoder) = image_decoder(path)?;
-    let icc = decoder.icc_profile().map_err(|e| Error::decode(path, e))?;
-    let exif = decoder.exif_metadata().map_err(|e| Error::decode(path, e))?;
+    let icc = decoder.icc_profile().map_err(|e| Error::image(path, e))?;
+    let exif = decoder.exif_metadata().map_err(|e| Error::image(path, e))?;
     Ok(Metadata { icc, exif })
 }
 
 /// Quantisation tables, sampling and density of a JPEG (see [`crate::meta::jpeg_settings`]).
 /// `Ok(None)` for other formats.
 pub fn jpeg_settings(path: &Path) -> Result<Option<crate::meta::JpegSettings>> {
-    let bytes = std::fs::read(path).map_err(|e| Error::io(path, e))?;
+    let bytes = retry_io(|| std::fs::read(path).map_err(|e| Error::io(path, e)))?;
     Ok(crate::meta::jpeg_settings(&bytes))
+}
+
+/// Run a read, again after a short pause when it fails with a transient I/O error (see
+/// [`Error::is_transient`]): network shares (SMB over gvfs) report EIO now and then for
+/// files that read fine a moment later.
+fn retry_io<T>(mut read: impl FnMut() -> Result<T>) -> Result<T> {
+    for pause_ms in [50, 250] {
+        match read() {
+            Err(e) if e.is_transient() => std::thread::sleep(std::time::Duration::from_millis(pause_ms)),
+            r => return r,
+        }
+    }
+    read()
 }
 
 pub(crate) fn image_decoder(path: &Path) -> Result<(Format, impl ImageDecoder)> {
@@ -264,7 +293,7 @@ pub(crate) fn image_decoder(path: &Path) -> Result<(Format, impl ImageDecoder)> 
             Error::Unsupported { path: path.to_path_buf() }
         }
     })?;
-    let decoder = reader.into_decoder().map_err(|e| Error::decode(path, e))?;
+    let decoder = reader.into_decoder().map_err(|e| Error::image(path, e))?;
     Ok((format, decoder))
 }
 
@@ -300,4 +329,46 @@ fn heif_rgba(path: &Path, handle: &libheif_rs::ImageHandle) -> Result<RgbaImage>
         data.extend_from_slice(&r[..row]);
     }
     RgbaImage::from_raw(w, h, data).ok_or_else(|| Error::decode(path, "short RGBA plane"))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn eio() -> Error {
+        Error::io("x.jpg", std::io::Error::from_raw_os_error(5))
+    }
+
+    #[test]
+    fn retry_io_retries_transient_errors_only() {
+        let mut calls = 0;
+        let r = retry_io(|| {
+            calls += 1;
+            if calls < 3 { Err(eio()) } else { Ok(calls) }
+        });
+        assert_eq!(r.unwrap(), 3);
+
+        let mut calls = 0;
+        let r: Result<()> = retry_io(|| {
+            calls += 1;
+            Err(Error::io("x.jpg", std::io::ErrorKind::NotFound.into()))
+        });
+        assert!(r.is_err());
+        assert_eq!(calls, 1);
+
+        let mut calls = 0;
+        let r: Result<()> = retry_io(|| {
+            calls += 1;
+            Err(eio())
+        });
+        assert!(r.unwrap_err().is_transient());
+        assert_eq!(calls, 3);
+    }
+
+    #[test]
+    fn image_io_errors_are_io() {
+        let e = Error::image("x.jpg", image::ImageError::IoError(std::io::Error::from_raw_os_error(5)));
+        assert_eq!(e.kind(), "io");
+        assert!(e.is_transient());
+    }
 }

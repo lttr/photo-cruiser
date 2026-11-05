@@ -46,6 +46,23 @@ impl Error {
         Error::Decode { path: path.into(), message: message.to_string().trim().to_string() }
     }
 
+    /// An `image` error: its I/O failures are [`Error::Io`], the rest [`Error::Decode`].
+    pub(crate) fn image(path: impl Into<PathBuf>, e: image::ImageError) -> Self {
+        match e {
+            image::ImageError::IoError(source) => Error::io(path, source),
+            e => Error::decode(path, e),
+        }
+    }
+
+    /// An I/O failure that may succeed if tried again (EIO, timeouts, interrupted or
+    /// would-block reads), as network shares produce. Missing files and denied access are
+    /// not transient.
+    pub fn is_transient(&self) -> bool {
+        use std::io::ErrorKind::*;
+        let Error::Io { source, .. } = self else { return false };
+        source.raw_os_error() == Some(5) || matches!(source.kind(), TimedOut | Interrupted | WouldBlock)
+    }
+
     pub(crate) fn encode(path: impl Into<PathBuf>, message: impl ToString) -> Self {
         Error::Encode { path: path.into(), message: message.to_string().trim().to_string() }
     }
