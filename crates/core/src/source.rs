@@ -125,6 +125,63 @@ pub(crate) fn one_at_a_time(path: &Path) -> Option<Turn> {
     Some(Turn(()))
 }
 
+/// A local path for `path` when it is a URI: `file:///a%20b` becomes `/a b`, and
+/// `smb://host/share/dir` becomes its gvfs mount, `$XDG_RUNTIME_DIR/gvfs/
+/// smb-share:server=host,share=share/dir`. Folder pickers and file managers hand out such
+/// URIs for network shares. Anything else is returned unchanged.
+pub fn local_path(path: &Path) -> PathBuf {
+    let runtime = std::env::var_os("XDG_RUNTIME_DIR").map(PathBuf::from);
+    uri_to_path(path, runtime.as_deref()).unwrap_or_else(|| path.to_path_buf())
+}
+
+fn uri_to_path(path: &Path, runtime: Option<&Path>) -> Option<PathBuf> {
+    use std::os::unix::ffi::{OsStrExt, OsStringExt};
+    let s = path.to_str()?;
+    if let Some(rest) = s.strip_prefix("file://") {
+        // `file:///a` or `file://localhost/a`.
+        let rest = &rest[rest.find('/')?..];
+        return Some(PathBuf::from(std::ffi::OsString::from_vec(percent_decode(rest))));
+    }
+    let rest = s.strip_prefix("smb://")?;
+    let (authority, rest) = rest.split_once('/').unwrap_or((rest, ""));
+    let (share, rest) = rest.split_once('/').unwrap_or((rest, ""));
+    if share.is_empty() {
+        return None;
+    }
+    let (user, server) = match authority.rsplit_once('@') {
+        Some((user, server)) => (Some(user.split_once(':').map_or(user, |(u, _)| u)), server),
+        None => (None, authority),
+    };
+    let decode = |s: &str| String::from_utf8_lossy(&percent_decode(s)).into_owned();
+    let mut mount = format!("smb-share:server={},share={}", decode(server), decode(share));
+    if let Some(user) = user {
+        mount += &format!(",user={}", decode(user));
+    }
+    let mut out = runtime?.join("gvfs").join(mount);
+    out.push(std::ffi::OsStr::from_bytes(&percent_decode(rest)));
+    Some(out)
+}
+
+fn percent_decode(s: &str) -> Vec<u8> {
+    let b = s.as_bytes();
+    let mut out = Vec::with_capacity(b.len());
+    let mut i = 0;
+    while i < b.len() {
+        let hex = |c: u8| (c as char).to_digit(16);
+        match (b[i], b.get(i + 1).and_then(|&c| hex(c)), b.get(i + 2).and_then(|&c| hex(c))) {
+            (b'%', Some(h), Some(l)) => {
+                out.push((h * 16 + l) as u8);
+                i += 3;
+            }
+            (c, ..) => {
+                out.push(c);
+                i += 1;
+            }
+        }
+    }
+    out
+}
+
 fn is_gvfs(path: &Path) -> bool {
     let Ok(abs) = std::path::absolute(path) else { return false };
     abs.starts_with("/run/user") && abs.components().take(5).any(|c| c.as_os_str() == "gvfs")
@@ -133,6 +190,31 @@ fn is_gvfs(path: &Path) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn uris_become_local_paths() {
+        let run = Some(Path::new("/run/user/1000"));
+        let to = |s: &str| uri_to_path(Path::new(s), run);
+        assert_eq!(
+            to("smb://diskstation.local/photo/Rodina/2025-06%20Majda%20narozky/"),
+            Some(PathBuf::from(
+                "/run/user/1000/gvfs/smb-share:server=diskstation.local,share=photo/Rodina/2025-06 Majda narozky/"
+            ))
+        );
+        assert_eq!(
+            to("smb://nas/photo"),
+            Some(PathBuf::from("/run/user/1000/gvfs/smb-share:server=nas,share=photo"))
+        );
+        assert_eq!(
+            to("smb://me@nas/photo/a.jpg"),
+            Some(PathBuf::from("/run/user/1000/gvfs/smb-share:server=nas,share=photo,user=me/a.jpg"))
+        );
+        assert_eq!(to("file:///tmp/a%20b%C3%A9"), Some(PathBuf::from("/tmp/a bé")));
+        assert_eq!(to("file://localhost/tmp/x"), Some(PathBuf::from("/tmp/x")));
+        assert_eq!(to("smb://nas"), None);
+        assert_eq!(to("/home/me/100%25 photos"), None);
+        assert_eq!(local_path(Path::new("rel/dir")), PathBuf::from("rel/dir"));
+    }
 
     #[test]
     fn gvfs_paths_are_serialised() {

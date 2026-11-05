@@ -1592,6 +1592,7 @@ impl State {
     /// Open a folder (in the grid), or a file's folder positioned on that file (in the photo
     /// view). Resets everything except the error log and full screen.
     fn open(&mut self, path: &Path) {
+        let path = source::local_path(path);
         let path = path.canonicalize().unwrap_or_else(|_| path.to_path_buf());
         let (dir, file) = match path.is_file() {
             true => (path.parent().map_or_else(|| path.clone(), Path::to_path_buf), Some(path.clone())),
