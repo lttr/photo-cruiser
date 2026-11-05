@@ -33,6 +33,7 @@ use photo_cruiser_core::geom::PixelRect;
 use photo_cruiser_core::info::{Field, Histogram};
 use photo_cruiser_core::levels;
 use photo_cruiser_core::loader::{Job, Kind, Loader, SizeJob, Sizes, ThumbJob, Thumbs};
+use photo_cruiser_core::source::{self, Priority};
 use photo_cruiser_core::store::{self, PhotoEdits, SaveReport};
 use photo_cruiser_core::zoom::{self, Zoom};
 use photo_cruiser_core::{EditStack, Error, Folder, History, Op, Point, Rect, Size};
@@ -149,6 +150,11 @@ pub struct LoadJob {
 /// the UI; a preview job for a photo without an embedded preview, or with edits (the
 /// preview would show it unedited), is an `Err` too (never shown).
 pub fn decode_job(load: &LoadJob, max_side: u32) -> Loaded {
+    // The photo on screen (or next to it): its file is read before any other on gvfs.
+    source::with_priority(Priority::High, || decode_job_now(load, max_side))
+}
+
+fn decode_job_now(load: &LoadJob, max_side: u32) -> Loaded {
     let msg = |e: Error| e.to_string().trim_end().to_string();
     let d = match load.job.kind {
         Kind::Full => photo_cruiser_core::decode::decode_max_side(&load.path, Some(max_side)).map_err(msg)?,
@@ -241,6 +247,11 @@ pub fn thumb_job(path: &Path, side: u32) -> Loaded {
 
 /// Probe the displayed sizes of `paths` (blocking); `None` for unreadable ones.
 pub fn size_job(paths: &[PathBuf]) -> Vec<Option<(u32, u32)>> {
+    // Only for the grid's layout: after everything else on gvfs.
+    source::with_priority(Priority::Low, || size_job_now(paths))
+}
+
+fn size_job_now(paths: &[PathBuf]) -> Vec<Option<(u32, u32)>> {
     paths.iter().map(|p| photo_cruiser_core::probe(p).ok().map(|p| (p.width, p.height))).collect()
 }
 
