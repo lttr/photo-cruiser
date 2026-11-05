@@ -941,6 +941,26 @@ fn names_hidden_by_default_and_toggled_with_n() {
 }
 
 #[test]
+fn justified_thumbnails_wait_for_sizes_on_screen() {
+    let mut s = State::new(TEST_MAX_SIDE, Duration::ZERO);
+    s.layout = Layout::Justified;
+    s.apply(&Action::Open { path: fixtures() });
+    // Thumbnails landing one by one would reflow the rows under them each time.
+    assert!(s.next_thumb_job().is_none(), "no thumbnail before the sizes on screen");
+    let (job, paths) = s.next_size_job().unwrap();
+    assert!(job.items.contains(&0));
+    s.finish_sizes(&job, &size_job(&paths));
+    while let Some((job, paths)) = s.next_size_job() {
+        s.finish_sizes(&job, &size_job(&paths));
+    }
+    let rows = s.grid();
+    let (job, path) = s.next_thumb_job().expect("thumbnails once the sizes are known");
+    s.finish_thumb(job, thumb_job(&path, job.side));
+    settle(&mut s);
+    assert_eq!(s.grid(), rows, "thumbnails don't move anything");
+}
+
+#[test]
 fn layouts_cycled_with_z() {
     let mut s = opened(&fixtures());
     let small = s.thumbs.get(1).unwrap().as_ref().unwrap().handle.clone();

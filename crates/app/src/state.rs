@@ -1710,7 +1710,13 @@ impl State {
         if self.view != View::Grid {
             return None;
         }
-        let job = self.thumbs.next_job(self.visible(), self.len(), self.layout.thumb_side())?;
+        let visible = self.visible();
+        // Justified rows reflow as sizes come in: thumbnails wait for those on screen, so
+        // they appear in place instead of jumping around as each one lands.
+        if self.layout == grid::Layout::Justified && !self.sizes.probed(visible.clone()) {
+            return None;
+        }
+        let job = self.thumbs.next_job(visible, self.len(), self.layout.thumb_side())?;
         let path = self.folder.as_ref()?.entries.get(job.index)?.path.clone();
         Some((job, path))
     }
@@ -1732,7 +1738,7 @@ impl State {
         if self.layout != grid::Layout::Justified {
             return None;
         }
-        let job = self.sizes.next_job()?;
+        let job = self.sizes.next_job(self.visible())?;
         let entries = &self.folder.as_ref()?.entries[job.items.clone()];
         let paths = entries.iter().map(|e| e.path.clone()).collect();
         Some((job, paths))

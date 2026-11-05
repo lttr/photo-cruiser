@@ -54,6 +54,68 @@ pub fn ijg_tables(quality: u8) -> [[u16; 64]; 2] {
     [scaled(&ANNEX_K_LUMA), scaled(&ANNEX_K_CHROMA)]
 }
 
+/// What a JPEG's markers up to its frame header tell: the stored size (before EXIF
+/// orientation) and the EXIF block (without the `Exif\0\0` header).
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct JpegHead<'a> {
+    pub width: u32,
+    pub height: u32,
+    pub exif: Option<&'a [u8]>,
+}
+
+/// The result of parsing the start of a file with [`jpeg_head`].
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum Head<'a> {
+    Done(JpegHead<'a>),
+    /// The first `n` bytes are needed (more than given).
+    More(usize),
+    /// Not a JPEG, or broken before its frame header.
+    NotJpeg,
+}
+
+/// Parse a JPEG's markers up to the frame header (SOF), from the first bytes of the file.
+/// A probe or embedded preview needs only these: a few kB to 64 kB, not the whole file.
+pub fn jpeg_head(b: &[u8]) -> Head<'_> {
+    match b.get(..2) {
+        None => return Head::More(2),
+        Some(m) if m != [0xFF, 0xD8] => return Head::NotJpeg,
+        _ => {}
+    }
+    let mut exif = None;
+    let mut i = 2;
+    loop {
+        let Some(&[ff, marker]) = b.get(i..i + 2) else { return Head::More(i + 4) };
+        if ff != 0xFF {
+            return Head::NotJpeg;
+        }
+        if marker == 0xFF {
+            i += 1; // fill byte
+            continue;
+        }
+        if marker == 0x01 || (0xD0..=0xD7).contains(&marker) {
+            i += 2;
+            continue;
+        }
+        if marker == 0xD9 || marker == 0xDA {
+            return Head::NotJpeg; // end or scan before any frame header
+        }
+        let Some(&[hi, lo]) = b.get(i + 2..i + 4) else { return Head::More(i + 4) };
+        let end = i + 2 + u16::from_be_bytes([hi, lo]) as usize;
+        let Some(seg) = b.get(i + 4..end) else { return Head::More(end) };
+        match marker {
+            // Frame headers; C4 (DHT), C8 (JPG) and CC (DAC) share the range.
+            0xC0..=0xCF if !matches!(marker, 0xC4 | 0xC8 | 0xCC) => {
+                let Some(&[_, h1, h0, w1, w0]) = seg.get(..5) else { return Head::NotJpeg };
+                let (height, width) = (u16::from_be_bytes([h1, h0]), u16::from_be_bytes([w1, w0]));
+                return Head::Done(JpegHead { width: width as u32, height: height as u32, exif });
+            }
+            0xE1 if exif.is_none() && seg.starts_with(b"Exif\0\0") => exif = Some(&seg[6..]),
+            _ => {}
+        }
+        i = end;
+    }
+}
+
 /// Read quantisation tables, sampling factors and density from a JPEG's markers (up to
 /// the first scan). `None` if it isn't a JPEG. 16-bit table entries are clamped to 255.
 pub fn jpeg_settings(b: &[u8]) -> Option<JpegSettings> {
@@ -527,6 +589,30 @@ mod tests {
         let dims: Vec<_> = t.entries(38).unwrap().iter().map(|(_, e)| t.value(*e).unwrap()).collect();
         assert_eq!(dims, [70000, 50], "a width over 65535 becomes a LONG");
         assert_eq!(patch_exif(b"nonsense", 1, 1), None);
+    }
+
+    #[test]
+    fn jpeg_head_reads_markers_up_to_the_frame() {
+        let e = exif();
+        let mut app1 = b"Exif\0\0".to_vec();
+        app1.extend(&e);
+        let mut j = vec![0xFF, 0xD8, 0xFF, 0xE1];
+        j.extend((app1.len() as u16 + 2).to_be_bytes());
+        j.extend(&app1);
+        // SOF0: precision 8, height 240, width 320, 3 components.
+        j.extend([0xFF, 0xC0, 0, 17, 8, 0, 240, 1, 64, 3, 1, 0x22, 0, 2, 0x11, 1, 3, 0x11, 1]);
+        j.extend([0xFF, 0xDA, 0, 2, 1, 2, 3]);
+        let done = Head::Done(JpegHead { width: 320, height: 240, exif: Some(&e) });
+        assert_eq!(jpeg_head(&j), done);
+        // Cut short: asks for exactly the bytes it needs next.
+        let mut n = 0;
+        while let Head::More(need) = jpeg_head(&j[..n]) {
+            assert!(need > n && need <= j.len(), "{need} after {n}");
+            n = need;
+        }
+        assert_eq!(jpeg_head(&j[..n]), done);
+        assert_eq!(jpeg_head(b"\x89PNG\r\n"), Head::NotJpeg);
+        assert_eq!(jpeg_head(&[0xFF, 0xD8, 0xFF, 0xDA, 0, 2]), Head::NotJpeg);
     }
 
     #[test]

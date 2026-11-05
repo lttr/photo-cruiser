@@ -255,8 +255,9 @@ fn wanted(visible: Range<usize>, len: usize) -> impl Iterator<Item = usize> {
 
 /// Size probes running at once (each a chunk of [`SIZE_CHUNK`] photos).
 pub const SIZE_SLOTS: usize = 2;
-/// Photos per size probe job.
-pub const SIZE_CHUNK: usize = 32;
+/// Photos per size probe job. Small, so the photos on screen are known soon on a network
+/// share (a probe there takes 20-30 ms).
+pub const SIZE_CHUNK: usize = 8;
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct SizeJob {
@@ -264,16 +265,21 @@ pub struct SizeJob {
     pub items: Range<usize>,
 }
 
-/// Displayed sizes (width, height) of the photos of one folder, probed from the start in
-/// chunks. A size can also be filled in early (from a decoded thumbnail). Unreadable
-/// photos stay `None`.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum Chunk {
+    Waiting,
+    Running,
+    Done,
+}
+
+/// Displayed sizes (width, height) of the photos of one folder, probed in chunks: those
+/// asked for first, then from the start. A size can also be filled in early (from a
+/// decoded thumbnail). Unreadable photos stay `None`.
 #[derive(Debug, Default)]
 pub struct Sizes {
     generation: u64,
     sizes: Vec<Option<(u32, u32)>>,
-    /// Start of the first chunk not yet handed out.
-    next: usize,
-    in_flight: usize,
+    chunks: Vec<Chunk>,
 }
 
 impl Sizes {
@@ -281,7 +287,7 @@ impl Sizes {
     pub fn reset(&mut self, len: usize) {
         self.generation += 1;
         self.sizes = vec![None; len];
-        (self.next, self.in_flight) = (0, 0);
+        self.chunks = vec![Chunk::Waiting; len.div_ceil(SIZE_CHUNK)];
     }
 
     pub fn get(&self, index: usize) -> Option<(u32, u32)> {
@@ -301,13 +307,22 @@ impl Sizes {
         }
     }
 
-    /// The next chunk to probe, if a slot is free and photos are left. Call until `None`.
-    pub fn next_job(&mut self) -> Option<SizeJob> {
-        if self.in_flight >= SIZE_SLOTS || self.next >= self.sizes.len() {
+    /// The chunks holding the photos in `items`.
+    fn chunks_of(&self, items: &Range<usize>) -> Range<usize> {
+        let end = items.end.min(self.sizes.len());
+        (items.start / SIZE_CHUNK).min(end.div_ceil(SIZE_CHUNK))..end.div_ceil(SIZE_CHUNK)
+    }
+
+    /// The next chunk to probe, if a slot is free and photos are left: one with photos in
+    /// `first` (those on screen) if any, else the first left. Call until `None`.
+    pub fn next_job(&mut self, first: Range<usize>) -> Option<SizeJob> {
+        if self.chunks.iter().filter(|c| **c == Chunk::Running).count() >= SIZE_SLOTS {
             return None;
         }
-        let items = self.next..(self.next + SIZE_CHUNK).min(self.sizes.len());
-        (self.next, self.in_flight) = (items.end, self.in_flight + 1);
+        let waiting = |c: &usize| self.chunks[*c] == Chunk::Waiting;
+        let c = self.chunks_of(&first).find(waiting).or_else(|| (0..self.chunks.len()).find(waiting))?;
+        self.chunks[c] = Chunk::Running;
+        let items = c * SIZE_CHUNK..((c + 1) * SIZE_CHUNK).min(self.sizes.len());
         Some(SizeJob { generation: self.generation, items })
     }
 
@@ -317,7 +332,7 @@ impl Sizes {
         if job.generation != self.generation {
             return false;
         }
-        self.in_flight -= 1;
+        self.chunks[job.items.start / SIZE_CHUNK] = Chunk::Done;
         for (i, r) in job.items.clone().zip(results) {
             if let Some(size) = r {
                 self.sizes[i] = Some(*size);
@@ -326,9 +341,14 @@ impl Sizes {
         true
     }
 
+    /// Every photo in `items` probed.
+    pub fn probed(&self, items: Range<usize>) -> bool {
+        self.chunks_of(&items).all(|c| self.chunks[c] == Chunk::Done)
+    }
+
     /// Every chunk probed.
     pub fn is_done(&self) -> bool {
-        self.next >= self.sizes.len() && self.in_flight == 0
+        self.chunks.iter().all(|c| *c == Chunk::Done)
     }
 }
 
@@ -473,20 +493,36 @@ mod tests {
         let mut s = Sizes::default();
         s.reset(SIZE_CHUNK + 5);
         s.set(1, (3, 2));
-        let a = s.next_job().unwrap();
-        let b = s.next_job().unwrap();
+        let a = s.next_job(0..0).unwrap();
+        let b = s.next_job(0..0).unwrap();
         assert_eq!((a.items.clone(), b.items.clone()), (0..SIZE_CHUNK, SIZE_CHUNK..SIZE_CHUNK + 5));
-        assert_eq!(s.next_job(), None);
-        assert!(!s.is_done());
+        assert_eq!(s.next_job(0..0), None);
+        assert!(!s.is_done() && !s.probed(0..1));
         let mut results = vec![Some((4, 3)); SIZE_CHUNK];
         results[1] = None;
         assert!(s.finish(&a, &results));
         assert_eq!((s.get(0), s.get(1), s.get(SIZE_CHUNK)), (Some((4, 3)), Some((3, 2)), None));
+        assert!(s.probed(0..SIZE_CHUNK) && !s.probed(0..SIZE_CHUNK + 1));
         s.reset(2);
         assert!(!s.finish(&b, &[Some((1, 1)); 5]), "stale");
         assert_eq!(s.get(0), None);
-        let c = s.next_job().unwrap();
+        let c = s.next_job(0..0).unwrap();
         assert!(s.finish(&c, &[None, Some((1, 1))]));
-        assert!(s.is_done() && s.next_job().is_none());
+        assert!(s.is_done() && s.next_job(0..0).is_none());
+    }
+
+    #[test]
+    fn sizes_on_screen_first() {
+        let mut s = Sizes::default();
+        s.reset(5 * SIZE_CHUNK);
+        let on_screen = 3 * SIZE_CHUNK - 2..3 * SIZE_CHUNK + 1;
+        let a = s.next_job(on_screen.clone()).unwrap();
+        let b = s.next_job(on_screen.clone()).unwrap();
+        assert_eq!((a.items.start, b.items.start), (2 * SIZE_CHUNK, 3 * SIZE_CHUNK));
+        s.finish(&a, &[]);
+        s.finish(&b, &[]);
+        assert!(s.probed(on_screen.clone()));
+        assert_eq!(s.next_job(on_screen).unwrap().items, 0..SIZE_CHUNK, "then from the start");
+        assert!(s.probed(0..0) && s.probed(9 * SIZE_CHUNK..10 * SIZE_CHUNK), "nothing to probe");
     }
 }

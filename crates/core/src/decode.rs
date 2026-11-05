@@ -120,6 +120,13 @@ fn probe_once(path: &Path) -> Result<Probe> {
         let _keep_alive = ctx;
         return Ok(Probe { format, width: handle.width(), height: handle.height(), orientation: 1 });
     }
+    if let Some(head) = read_jpeg_head(path)? {
+        let h = head.parsed();
+        let orientation = jpeg_orientation(&h).to_exif();
+        let (width, height) =
+            if (5..=8).contains(&orientation) { (h.height, h.width) } else { (h.width, h.height) };
+        return Ok(Probe { format: Format::Jpeg, width, height, orientation });
+    }
     let (format, mut decoder) = image_decoder(path)?;
     let (w, h) = decoder.dimensions();
     let orientation = decoder.orientation().map_err(|e| Error::image(path, e))?.to_exif();
@@ -184,6 +191,19 @@ fn preview_within_once(path: &Path, tolerance: f64) -> Result<Option<Decoded>> {
         let thumb = handle.thumbnail(ids[0]).map_err(|e| Error::decode(path, e))?;
         let image = heif_rgba(path, &thumb)?;
         Decoded { image, format, source_width: handle.width(), source_height: handle.height() }
+    } else if let Some(head) = read_jpeg_head(path)? {
+        let h = head.parsed();
+        let Some(jpeg) = h.exif.and_then(crate::meta::exif_thumbnail) else { return Ok(None) };
+        let Ok(mut img) = image::load_from_memory_with_format(jpeg, image::ImageFormat::Jpeg) else {
+            return Ok(None);
+        };
+        let orientation = jpeg_orientation(&h);
+        let (source_width, source_height) = match orientation.to_exif() {
+            5..=8 => (h.height, h.width),
+            _ => (h.width, h.height),
+        };
+        img.apply_orientation(orientation);
+        Decoded { image: img.into_rgba8(), format: Format::Jpeg, source_width, source_height }
     } else {
         let (format, mut decoder) = image_decoder(path)?;
         if format != Format::Jpeg {
@@ -291,6 +311,48 @@ fn retry_io<T>(mut read: impl FnMut() -> Result<T>) -> Result<T> {
         }
     }
     read()
+}
+
+/// The start of a JPEG, up to and including its frame header: what a probe or the
+/// embedded preview needs, without reading the whole file (the `image` crate's JPEG
+/// decoder reads it all, which takes as long as a full decode on a network share).
+/// `None` if it isn't a JPEG or is broken before the frame header (the caller falls back
+/// to the decoder, which reports why). Hold [`one_at_a_time`] while calling.
+fn read_jpeg_head(path: &Path) -> Result<Option<JpegHeadBytes>> {
+    use std::io::Read;
+    let mut f = std::fs::File::open(path).map_err(|e| Error::io(path, e))?;
+    let mut b = Vec::new();
+    let mut want = 64 * 1024;
+    loop {
+        let got =
+            (&mut f).take((want - b.len()) as u64).read_to_end(&mut b).map_err(|e| Error::io(path, e))?;
+        match crate::meta::jpeg_head(&b) {
+            crate::meta::Head::Done(_) => return Ok(Some(JpegHeadBytes(b))),
+            crate::meta::Head::NotJpeg => return Ok(None),
+            crate::meta::Head::More(_) if got == 0 => return Ok(None),
+            // Markers before the frame (ICC profiles, MPF) can run past 64 kB.
+            crate::meta::Head::More(n) => want = n.max(b.len() + 64 * 1024),
+        }
+    }
+}
+
+/// Bytes [`crate::meta::jpeg_head`] parses to `Done`.
+struct JpegHeadBytes(Vec<u8>);
+
+impl JpegHeadBytes {
+    fn parsed(&self) -> crate::meta::JpegHead<'_> {
+        match crate::meta::jpeg_head(&self.0) {
+            crate::meta::Head::Done(h) => h,
+            _ => unreachable!("checked by read_jpeg_head"),
+        }
+    }
+}
+
+/// A JPEG's EXIF orientation (none if absent or out of range).
+fn jpeg_orientation(h: &crate::meta::JpegHead) -> image::metadata::Orientation {
+    let o = h.exif.and_then(crate::meta::exif_orientation).unwrap_or(1);
+    image::metadata::Orientation::from_exif(o.min(255) as u8)
+        .unwrap_or(image::metadata::Orientation::NoTransforms)
 }
 
 /// A decoder reading `path` itself. On gvfs, hold [`one_at_a_time`] while it's in use.
