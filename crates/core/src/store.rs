@@ -311,6 +311,7 @@ struct Target {
 /// 16-bit PNGs (the pipeline is 8-bit).
 fn target_for(source: &Path) -> Result<Target> {
     let format = decode::probe(source)?.format;
+    let _one = crate::source::one_at_a_time(source);
     let (lossless, animated) = match format {
         Format::Png => {
             use image::ImageDecoder;
@@ -448,7 +449,7 @@ fn find(photo: &Path) -> Result<Option<Found>> {
 }
 
 fn read_sidecar(path: &Path) -> Result<PhotoEdits> {
-    let text = std::fs::read_to_string(path).map_err(|e| Error::io(path, e))?;
+    let text = read_text(path)?;
     let edits: PhotoEdits =
         serde_json::from_str(&text).map_err(|e| Error::Edits(format!("{}: {e}", path.display())))?;
     if edits.stack.version != EDIT_VERSION {
@@ -512,8 +513,16 @@ fn write_atomic(path: &Path, text: &str) -> std::io::Result<()> {
         std::fs::create_dir_all(parent)?;
     }
     let tmp = PathBuf::from(format!("{}.tmp", path.display()));
+    let one = crate::source::one_at_a_time(&tmp);
     std::fs::write(&tmp, text)?;
+    drop(one);
     std::fs::rename(&tmp, path)
+}
+
+/// A small text file, read while no other gvfs file is open.
+pub(crate) fn read_text(path: &Path) -> Result<String> {
+    let _one = crate::source::one_at_a_time(path);
+    std::fs::read_to_string(path).map_err(|e| Error::io(path, e))
 }
 
 fn remove(path: &Path) -> Result<()> {

@@ -2,9 +2,11 @@
 //! system libheif for AVIF/HEIC/HEIF (libheif applies irot/imir itself).
 
 use crate::catalog::extension;
+use crate::source::one_at_a_time;
 use crate::{Error, Result};
 use image::{ImageDecoder, ImageReader, RgbaImage};
 use serde::Serialize;
+use std::io::{BufRead, Cursor, Seek};
 use std::path::Path;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
@@ -106,7 +108,10 @@ impl Decoded {
 }
 
 pub fn probe(path: &Path) -> Result<Probe> {
-    retry_io(|| probe_once(path))
+    retry_io(|| {
+        let _one = one_at_a_time(path);
+        probe_once(path)
+    })
 }
 
 fn probe_once(path: &Path) -> Result<Probe> {
@@ -128,10 +133,12 @@ pub fn decode(path: &Path) -> Result<Decoded> {
 }
 
 fn decode_once(path: &Path) -> Result<Decoded> {
+    // Read first, decode from memory: the file is open only briefly (see `one_at_a_time`).
+    let bytes = crate::source::read(path)?;
     if let Some(format) = Format::heif_from_path(path) {
-        return decode_heif(path, format);
+        return decode_heif(path, format, &bytes);
     }
-    let (format, mut decoder) = image_decoder(path)?;
+    let (format, mut decoder) = decoder_from(path, ImageReader::new(Cursor::new(bytes)))?;
     let orientation = decoder.orientation().map_err(|e| Error::image(path, e))?;
     let mut img = image::DynamicImage::from_decoder(decoder).map_err(|e| Error::image(path, e))?;
     img.apply_orientation(orientation);
@@ -161,7 +168,10 @@ pub fn embedded_preview(path: &Path) -> Result<Option<Decoded>> {
 /// [`embedded_preview`] whose aspect ratio may differ from the photo's by `tolerance`
 /// (relative).
 fn preview_within(path: &Path, tolerance: f64) -> Result<Option<Decoded>> {
-    retry_io(|| preview_within_once(path, tolerance))
+    retry_io(|| {
+        let _one = one_at_a_time(path);
+        preview_within_once(path, tolerance)
+    })
 }
 
 fn preview_within_once(path: &Path, tolerance: f64) -> Result<Option<Decoded>> {
@@ -232,7 +242,10 @@ pub struct Metadata {
 /// The ICC profile and EXIF of a photo, as far as its format has them. XMP and maker
 /// notes outside EXIF are not read (a saved photo loses them).
 pub fn metadata(path: &Path) -> Result<Metadata> {
-    retry_io(|| metadata_once(path))
+    retry_io(|| {
+        let _one = one_at_a_time(path);
+        metadata_once(path)
+    })
 }
 
 fn metadata_once(path: &Path) -> Result<Metadata> {
@@ -263,7 +276,7 @@ fn metadata_once(path: &Path) -> Result<Metadata> {
 /// Quantisation tables, sampling and density of a JPEG (see [`crate::meta::jpeg_settings`]).
 /// `Ok(None)` for other formats.
 pub fn jpeg_settings(path: &Path) -> Result<Option<crate::meta::JpegSettings>> {
-    let bytes = retry_io(|| std::fs::read(path).map_err(|e| Error::io(path, e)))?;
+    let bytes = retry_io(|| crate::source::read(path))?;
     Ok(crate::meta::jpeg_settings(&bytes))
 }
 
@@ -280,11 +293,16 @@ fn retry_io<T>(mut read: impl FnMut() -> Result<T>) -> Result<T> {
     read()
 }
 
+/// A decoder reading `path` itself. On gvfs, hold [`one_at_a_time`] while it's in use.
 pub(crate) fn image_decoder(path: &Path) -> Result<(Format, impl ImageDecoder)> {
-    let reader = ImageReader::open(path)
-        .map_err(|e| Error::io(path, e))?
-        .with_guessed_format()
-        .map_err(|e| Error::io(path, e))?;
+    decoder_from(path, ImageReader::open(path).map_err(|e| Error::io(path, e))?)
+}
+
+fn decoder_from<R: BufRead + Seek + 'static>(
+    path: &Path,
+    reader: ImageReader<R>,
+) -> Result<(Format, impl ImageDecoder + use<R>)> {
+    let reader = reader.with_guessed_format().map_err(|e| Error::io(path, e))?;
     let format = reader.format().and_then(Format::from_image).ok_or_else(|| {
         // A known photo extension with unrecognisable content is a broken file.
         if crate::catalog::is_photo_name(&path.to_string_lossy()) {
@@ -309,8 +327,9 @@ fn heif_open(path: &Path) -> Result<(libheif_rs::HeifContext<'static>, libheif_r
     Ok((ctx, handle))
 }
 
-fn decode_heif(path: &Path, format: Format) -> Result<Decoded> {
-    let (_ctx, handle) = heif_open(path)?;
+fn decode_heif(path: &Path, format: Format, bytes: &[u8]) -> Result<Decoded> {
+    let ctx = libheif_rs::HeifContext::read_from_bytes(bytes).map_err(|e| Error::decode(path, e))?;
+    let handle = ctx.primary_image_handle().map_err(|e| Error::decode(path, e))?;
     let image = heif_rgba(path, &handle)?;
     let (w, h) = image.dimensions();
     Ok(Decoded { image, format, source_width: w, source_height: h })

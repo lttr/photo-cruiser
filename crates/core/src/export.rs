@@ -58,6 +58,7 @@ pub fn save(img: &RgbaImage, path: &Path, format: OutFormat) -> Result<()> {
 /// caller). JPEG has no alpha: transparent pixels are flattened onto white.
 pub fn write(img: &RgbaImage, path: &Path, encoding: &Encoding, meta: &Metadata) -> Result<()> {
     let bytes = encode(img, encoding, meta).map_err(|e| Error::encode(path, e))?;
+    let _one = crate::source::one_at_a_time(path);
     let mut file = std::fs::File::create(path).map_err(|e| Error::io(path, e))?;
     file.write_all(&bytes).and_then(|_| file.sync_all()).map_err(|e| Error::io(path, e))
 }

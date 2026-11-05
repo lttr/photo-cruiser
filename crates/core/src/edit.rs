@@ -78,7 +78,7 @@ impl EditStack {
 
     /// Read an edits JSON file: `Error::Io` if unreadable, `Error::Edits` if invalid.
     pub fn load(path: &std::path::Path) -> Result<Self> {
-        let text = std::fs::read_to_string(path).map_err(|e| Error::io(path, e))?;
+        let text = crate::store::read_text(path)?;
         EditStack::from_json(&text).map_err(|e| Error::Edits(format!("{}: {e}", path.display())))
     }
 
