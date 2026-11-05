@@ -124,7 +124,7 @@ fn update_browse_and_goto_bounds() {
     s.apply(&Action::Goto { index: 8 });
     settle(&mut s);
     assert_eq!(s.current_name(), Some("img12-broken.jpg"));
-    assert!(s.current().unwrap().as_ref().is_err_and(|e| e.contains("decode")), "{:?}", s.current());
+    assert!(s.current().unwrap().as_ref().is_err_and(|e| e.contains("damaged")), "{:?}", s.current());
     s.apply(&Action::Next); // clamps
     assert_eq!(s.index, 8);
     assert!(s.errors.is_empty());
@@ -613,7 +613,7 @@ fn browse_all_fixtures() {
         let want = format!("{name} · {} / 9", i + 1);
         if name.contains("broken") {
             // Shows its error (in place of the image), not "Loading…".
-            h.until(&want, |h| h.status() == want && h.has_text("decode failed"));
+            h.until(&want, |h| h.status() == want && h.has_text("damaged or incomplete"));
             assert!(h.bounds("message").is_some());
             assert!(h.bounds("photo").is_none());
         } else {
@@ -636,7 +636,7 @@ fn clamping_at_both_ends() {
     // 30 × → in one burst (like a held key): clamps at 9, stale decodes are dropped.
     h.keys(Key::Named(Named::ArrowRight), 30);
     assert_eq!(h.status(), "img12-broken.jpg · 9 / 9");
-    h.until("broken shown", |h| h.has_text("decode failed"));
+    h.until("broken shown", |h| h.has_text("damaged or incomplete"));
     h.keys(Key::Named(Named::ArrowLeft), 1);
     h.until("img11", |h| h.status() == "img11.bmp · 8 / 9" && h.bounds("photo").is_some());
 }

@@ -48,7 +48,13 @@ pub fn view(app: &App) -> Element<'_, Message> {
         }
         (Some(f), _) if f.is_empty() => text(format!("No images in {}", tilde(&f.path))).size(20).into(),
         (Some(_), _) if s.view == View::Grid => grid(s),
-        (Some(_), Some(Err(e))) => text(e.clone()).size(20).into(),
+        (Some(_), Some(Err(e))) => column![
+            text(format!("Can't show {}", s.current_name().unwrap_or("this photo"))).size(20),
+            text(e.clone()).size(15).color(Color::from_rgb(0.6, 0.6, 0.6)),
+        ]
+        .spacing(8)
+        .align_x(Center)
+        .into(),
         (Some(_), _) => match &s.shown {
             Some(shown) => {
                 let drawn = s.shown_handle().unwrap_or(&shown.handle);

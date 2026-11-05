@@ -67,6 +67,50 @@ impl Error {
         Error::Encode { path: path.into(), message: message.to_string().trim().to_string() }
     }
 
+    /// Why it failed, for people: one sentence without the path (the UI shows the file
+    /// name elsewhere) and without decoder internals (those stay in [`Display`]).
+    ///
+    /// [`Display`]: std::fmt::Display
+    pub fn reason(&self) -> String {
+        use std::io::ErrorKind::*;
+        match self {
+            Error::Io { source, .. } => match source.kind() {
+                NotFound => "The file is gone: it was moved or deleted.".into(),
+                PermissionDenied => "You don't have permission to read this file.".into(),
+                _ if self.is_transient() => "The file couldn't be read. Try again in a moment.".into(),
+                _ => format!("The file couldn't be read ({source})."),
+            },
+            Error::Unsupported { .. } => "Photo Cruiser can't open this file format.".into(),
+            Error::Decode { .. } => "The file is damaged or incomplete.".into(),
+            e => {
+                let s = e.to_string();
+                let s = match e.path() {
+                    Some(p) => s.strip_prefix(&format!("{}: ", p.display())).unwrap_or(&s).to_string(),
+                    None => s,
+                };
+                let mut c = s.chars();
+                c.next().map(|f| f.to_uppercase().chain(c).collect::<String>() + ".").unwrap_or_default()
+            }
+        }
+    }
+
+    /// The file the error is about, if any.
+    pub fn path(&self) -> Option<&std::path::Path> {
+        match self {
+            Error::Io { path, .. }
+            | Error::Unsupported { path }
+            | Error::UnsupportedOutput { path }
+            | Error::Decode { path, .. }
+            | Error::Encode { path, .. }
+            | Error::ReadOnly { path }
+            | Error::NameTaken { path }
+            | Error::Animated { path }
+            | Error::HighBitDepth { path }
+            | Error::StaleEdits { path } => Some(path),
+            Error::Edits(_) | Error::EmptyCrop(_) => None,
+        }
+    }
+
     /// Stable machine-readable kind, used in JSON output.
     pub fn kind(&self) -> &'static str {
         match self {
@@ -83,5 +127,20 @@ impl Error {
             Error::HighBitDepth { .. } => "high_bit_depth",
             Error::StaleEdits { .. } => "stale_edits",
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn reason_has_no_path_or_decoder_detail() {
+        let e = Error::decode("/x/a.jpg", "Format error decoding Jpeg: Not enough bytes");
+        assert_eq!(e.reason(), "The file is damaged or incomplete.");
+        let e = Error::io("/x/a.jpg", std::io::ErrorKind::NotFound.into());
+        assert_eq!(e.reason(), "The file is gone: it was moved or deleted.");
+        assert_eq!(Error::Animated { path: "/x/a.gif".into() }.reason(), "Animated images can't be edited.");
+        assert_eq!(Error::Edits("bad".into()).reason(), "Invalid edits: bad.");
     }
 }

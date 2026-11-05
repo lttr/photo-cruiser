@@ -87,6 +87,13 @@ impl Picture {
 
 pub type Loaded = Result<Picture, String>;
 
+/// A decode failure for the UI: the reason in plain words. The full error, with the path
+/// and the decoder's message, goes to stderr.
+fn failed(e: Error) -> String {
+    eprintln!("photo-cruiser: {}", e.to_string().trim_end());
+    e.reason()
+}
+
 /// `img` halved again and again, as handles (see [`photo_cruiser_core::levels`]).
 fn smaller(img: &RgbaImage) -> Arc<[Handle]> {
     levels::halvings(img)
@@ -119,8 +126,7 @@ pub struct OriginalJob {
 
 /// Run an [`OriginalJob`] (blocking).
 pub fn original_job(job: &OriginalJob) -> Loaded {
-    let d = photo_cruiser_core::decode::decode_max_side(&job.path, Some(job.side))
-        .map_err(|e| e.to_string().trim_end().to_string())?;
+    let d = photo_cruiser_core::decode::decode_max_side(&job.path, Some(job.side)).map_err(failed)?;
     let (w, h) = d.image.dimensions();
     Ok(Picture {
         source: d.source_size(),
@@ -155,7 +161,7 @@ pub fn decode_job(load: &LoadJob, max_side: u32) -> Loaded {
 }
 
 fn decode_job_now(load: &LoadJob, max_side: u32) -> Loaded {
-    let msg = |e: Error| e.to_string().trim_end().to_string();
+    let msg = failed;
     let d = match load.job.kind {
         Kind::Full => photo_cruiser_core::decode::decode_max_side(&load.path, Some(max_side)).map_err(msg)?,
         Kind::Preview if !load.stack.is_empty() => return Err("edited: no preview".into()),
@@ -235,7 +241,7 @@ pub fn io_job(io: Io) -> IoDone {
 
 /// Decode a grid thumbnail of `path` (blocking).
 pub fn thumb_job(path: &Path, side: u32) -> Loaded {
-    let d = photo_cruiser_core::thumbnail(path, side).map_err(|e| e.to_string().trim_end().to_string())?;
+    let d = photo_cruiser_core::thumbnail(path, side).map_err(failed)?;
     let (w, h) = d.image.dimensions();
     Ok(Picture {
         source: d.source_size(),
@@ -1511,9 +1517,6 @@ impl State {
 
     pub fn finish_original(&mut self, job: OriginalJob, result: Loaded) {
         if let Some(o) = self.original_image.as_mut().filter(|o| o.job == job) {
-            if let Err(e) = &result {
-                eprintln!("photo-cruiser: original of {}: {e}", job.path.display());
-            }
             o.image = Some(result);
         }
     }
