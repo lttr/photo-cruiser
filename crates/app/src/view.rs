@@ -346,7 +346,22 @@ fn grid<'a>(s: &'a State) -> Element<'a, Message> {
         };
         let content: Element<_> = match s.starred(i) {
             true => {
-                let badge = container(star::star(18)).padding(5).width(Fill).height(Fill);
+                // On the picture's top right corner (a square cell shows it whole, with bars).
+                let (dx, dy) = match s.thumbs.get(i) {
+                    Some(Ok(p)) if below => {
+                        let (w, h) = (p.source.0.max(1) as f32, p.source.1.max(1) as f32);
+                        let k = (image_w / w).min(image_h / h);
+                        ((image_w - w * k) / 2.0, (image_h - h * k) / 2.0)
+                    }
+                    _ => (0.0, 0.0),
+                };
+                let side = if s.layout == crate::grid::Layout::Small { 18 } else { 22 };
+                let badge = container(star::star(side))
+                    .padding(iced::Padding { top: dy + 5.0, right: dx + 5.0, bottom: 0.0, left: 0.0 })
+                    .width(image_w)
+                    .height(image_h)
+                    .align_right(image_w)
+                    .align_top(image_h);
                 stack![content, badge].into()
             }
             false => content,

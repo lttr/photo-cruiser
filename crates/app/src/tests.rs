@@ -1168,19 +1168,17 @@ fn update_star_writes_the_file_and_moves_on() {
     s.apply(&Action::ShowPhoto { index: Some(1) }); // img2.jpg
     settle(&mut s);
     s.apply(&Action::ToggleStar);
-    assert_eq!((s.index, s.current_name()), (2, Some("img3-exif6.jpg")), "on to the next photo");
+    assert_eq!(s.index, 1, "stays on the photo");
     settle(&mut s);
     let jpg = dir.path().join("img2.jpg");
     assert_eq!(rating::read(&jpg).unwrap(), 1);
-    s.apply(&Action::Prev);
-    settle(&mut s);
     assert_eq!(s.status(), "img2.jpg · 2 / 9 · starred");
     assert_eq!(s.dump(None, None).star, Some(true));
-    // Again: the star goes, and on again to the next.
+    // Again: the star goes.
     s.apply(&Action::ToggleStar);
     settle(&mut s);
     assert_eq!(rating::read(&jpg).unwrap(), 0);
-    assert_eq!(s.index, 2);
+    assert_eq!(s.index, 1);
     // HEIC: a sidecar. The last photo stays current.
     s.apply(&Action::Goto { index: 4 });
     s.apply(&Action::ToggleStar);
@@ -1222,7 +1220,6 @@ fn update_starred_only() {
     // Unstarred, it stays listed until the filter is turned on again.
     s.apply(&Action::ToggleStar);
     settle(&mut s);
-    s.apply(&Action::Prev);
     assert_eq!(s.status(), "img5.HEIC · 2 / 3 starred · star removed");
     s.apply(&Action::ToggleStarredOnly);
     settle(&mut s);
@@ -1247,7 +1244,6 @@ fn update_star_follows_a_converted_photo() {
     s.apply(&Action::SetCrop(Rect::new(0.0, 0.0, 100.0, 100.0)));
     s.apply(&Action::Save);
     s.apply(&Action::ToggleStar);
-    s.apply(&Action::Prev);
     settle(&mut s);
     assert_eq!((s.current_name(), s.star()), (Some("img5.jpg"), Some(true)));
     assert_eq!(photo_cruiser_core::rating::read(&dir.path().join("img5.jpg")).unwrap(), 1);
@@ -1259,13 +1255,10 @@ fn star_in_the_grid_and_photo_view() {
     let mut h = grid_harness();
     h.until("grid", |h| h.status() == "img1.png · 1 / 9");
     h.keys(Key::Character("1".into()), 1);
-    h.until("next photo", |h| h.status().starts_with("img2.jpg · 2 / 9"));
-    h.keys(Key::Named(Named::ArrowLeft), 1);
     h.until("starred", |h| h.status().starts_with("img1.png · 1 / 9 · starred"));
     h.keys(Key::Named(Named::Enter), 1);
     h.until("photo with its star", |h| h.bounds("photo").is_some() && h.bounds("star").is_some());
     h.keys(Key::Character("1".into()), 1);
-    h.keys(Key::Named(Named::ArrowLeft), 1);
     h.until("unstarred", |h| h.status().starts_with("img1.png · 1 / 9") && h.bounds("star").is_none());
 }
 

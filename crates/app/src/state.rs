@@ -1011,10 +1011,6 @@ impl State {
                 };
                 self.ratings.insert(path.clone(), if rating::is_starred(r) { 0 } else { 1 });
                 self.enqueue(Queued::Star(path));
-                // Culling: on to the next photo.
-                if self.index + 1 < self.len() {
-                    self.select(self.index + 1);
-                }
             }
             Action::ToggleStarredOnly => {
                 self.starred_only = !self.starred_only;

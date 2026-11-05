@@ -128,8 +128,7 @@ pub enum Action {
     RemoveEdit {
         index: usize,
     },
-    /// Star the current photo, or take its star away, then go on to the next photo (`1`,
-    /// menu). Written at once into the photo's XMP (`xmp:Rating` 1 or 0; a `.xmp` sidecar for
+    /// Star the current photo, or take its star away (`1`, menu). It stays current. Written at once into the photo's XMP (`xmp:Rating` 1 or 0; a `.xmp` sidecar for
     /// formats other than JPEG and WebP). Pressing it again on the photo undoes it.
     ToggleStar,
     /// Show only the starred photos / all photos again (`Ctrl+1`, menu). Waits until every

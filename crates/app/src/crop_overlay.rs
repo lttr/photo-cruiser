@@ -157,7 +157,7 @@ pub const SHORTCUTS: &[(&str, &str)] = &[
     ("Alt+↓  Alt+↑", "Tool: slider down / up in fine steps (also Alt+J, Alt+K)"),
     ("Home  End   g  G", "First / last photo"),
     ("Enter", "Grid: open the photo; crop: apply; tool: done"),
-    ("1", "Star on / off (a photo to keep), then the next photo"),
+    ("1", "Star on / off: a photo to keep"),
     ("Ctrl+1", "Only the starred photos / all photos"),
     ("Ctrl+K", "Find an action by name"),
     ("Ctrl+O", "Open folder"),
