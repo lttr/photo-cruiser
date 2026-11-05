@@ -300,7 +300,14 @@ fn grid<'a>(s: &'a State) -> Element<'a, Message> {
         let fit = if below { ContentFit::Contain } else { ContentFit::Cover };
         let thumb: Element<_> = match s.thumbs.get(i) {
             Some(Ok(p)) => image(p.handle.clone()).content_fit(fit).width(Fill).height(Fill).into(),
-            Some(Err(_)) => text("Cannot decode").size(12).style(theme::dim).into(),
+            // The name too when names are hidden: it is the only clue which file this is.
+            Some(Err(e)) => {
+                let mut c = column![].spacing(4).align_x(Center).padding(8);
+                if !s.names {
+                    c = c.push(text(folder.entries[i].name.as_str()).size(13).align_x(Horizontal::Center));
+                }
+                c.push(text(e.as_str()).size(11).style(theme::dim).align_x(Horizontal::Center)).into()
+            }
             None => space().into(),
         };
         let selected = i == s.index;
