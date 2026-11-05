@@ -31,6 +31,7 @@ use photo_cruiser_core::adjust::{self, Tool};
 use photo_cruiser_core::crop::{Aspect, CropTool, MouseKind};
 use photo_cruiser_core::geom::PixelRect;
 use photo_cruiser_core::info::{Field, Histogram};
+use photo_cruiser_core::levels;
 use photo_cruiser_core::loader::{Job, Kind, Loader, SizeJob, Sizes, ThumbJob, Thumbs};
 use photo_cruiser_core::store::{self, PhotoEdits, SaveReport};
 use photo_cruiser_core::zoom::{self, Zoom};
@@ -60,6 +61,8 @@ pub struct Picture {
     pub source: (u32, u32),
     /// The image before its adjustments, if it has any (else the handle's pixels are).
     pub base: Option<Arc<RgbaImage>>,
+    /// The handle's pixels halved again and again, largest first ([`levels`]).
+    pub smaller: Arc<[Handle]>,
 }
 
 impl Picture {
@@ -83,6 +86,27 @@ impl Picture {
 
 pub type Loaded = Result<Picture, String>;
 
+/// `img` halved again and again, as handles (see [`photo_cruiser_core::levels`]).
+fn smaller(img: &RgbaImage) -> Arc<[Handle]> {
+    levels::halvings(img)
+        .into_iter()
+        .map(|l| {
+            let (w, h) = l.dimensions();
+            Handle::from_rgba(w, h, l.into_raw())
+        })
+        .collect()
+}
+
+/// The handle to draw an image `w` physical pixels wide: the smallest of `full` and its
+/// `smaller` copies that is at least that wide (so the GPU shrinks it at most 2:1).
+pub fn pick<'a>(full: &'a Handle, smaller: &'a [Handle], w: f32) -> &'a Handle {
+    let width = |h: &Handle| match h {
+        Handle::Rgba { width, .. } => *width as f32,
+        _ => 0.0,
+    };
+    smaller.iter().rev().find(|h| width(h) >= w).unwrap_or(full)
+}
+
 /// Decode a photo's original file (its backup, once saved) for showing it without edits,
 /// at most `side` px.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -97,7 +121,12 @@ pub fn original_job(job: &OriginalJob) -> Loaded {
     let d = photo_cruiser_core::decode::decode_max_side(&job.path, Some(job.side))
         .map_err(|e| e.to_string().trim_end().to_string())?;
     let (w, h) = d.image.dimensions();
-    Ok(Picture { source: d.source_size(), handle: Handle::from_rgba(w, h, d.image.into_raw()), base: None })
+    Ok(Picture {
+        source: d.source_size(),
+        handle: Handle::from_rgba(w, h, d.image.into_raw()),
+        base: None,
+        smaller: Arc::new([]),
+    })
 }
 
 /// The current photo's original, without any edits (what holding `O` shows).
@@ -149,7 +178,8 @@ pub fn decode_job(load: &LoadJob, max_side: u32) -> Loaded {
         }
     };
     let (w, h) = img.dimensions();
-    Ok(Picture { source, handle: Handle::from_rgba(w, h, img.into_raw()), base })
+    let smaller = smaller(&img);
+    Ok(Picture { source, handle: Handle::from_rgba(w, h, img.into_raw()), base, smaller })
 }
 
 /// The edits of one photo this session: the sidecar's content and the undo history.
@@ -201,7 +231,12 @@ pub fn io_job(io: Io) -> IoDone {
 pub fn thumb_job(path: &Path, side: u32) -> Loaded {
     let d = photo_cruiser_core::thumbnail(path, side).map_err(|e| e.to_string().trim_end().to_string())?;
     let (w, h) = d.image.dimensions();
-    Ok(Picture { source: d.source_size(), handle: Handle::from_rgba(w, h, d.image.into_raw()), base: None })
+    Ok(Picture {
+        source: d.source_size(),
+        handle: Handle::from_rgba(w, h, d.image.into_raw()),
+        base: None,
+        smaller: Arc::new([]),
+    })
 }
 
 /// Probe the displayed sizes of `paths` (blocking); `None` for unreadable ones.
@@ -219,11 +254,13 @@ const DEFAULT_BODY: iced::Size = iced::Size::new(1100.0, 815.0);
 pub struct Shown {
     pub index: usize,
     pub handle: Handle,
+    /// [`Picture::smaller`].
+    pub smaller: Arc<[Handle]>,
     /// Full decode, not an embedded preview.
     pub sharp: bool,
 }
 
-/// A cross-fade from `from` to [`State::shown`].
+/// A cross-fade from `from` (as it was drawn) to [`State::shown`].
 #[derive(Clone, Debug)]
 pub struct Fade {
     pub from: Handle,
@@ -348,6 +385,8 @@ pub struct State {
     pub sizes: Sizes,
     /// Size of the image / grid area, as last reported by the overlay.
     pub body: Option<iced::Size>,
+    /// The window's scale factor: physical pixels per view unit.
+    pub scale: f32,
     /// Vertical scroll position of the grid.
     pub grid_offset: f32,
     /// A scroll position the runtime should move the grid to (taken by the app).
@@ -439,6 +478,7 @@ impl State {
             thumbs: Thumbs::default(),
             sizes: Sizes::default(),
             body: None,
+            scale: 1.0,
             grid_offset: 0.0,
             scroll: None,
             crop: CropTool::default(),
@@ -577,15 +617,15 @@ impl State {
     /// keep what is shown), fading from the old one unless the user is flipping quickly.
     fn refresh(&mut self) {
         let target = match (self.current(), self.loader.preview(self.index)) {
-            (Some(Ok(p)), _) => (p.handle.clone(), true),
+            (Some(Ok(p)), _) => (p.handle.clone(), p.smaller.clone(), true),
             (Some(Err(_)), _) => {
                 (self.shown, self.fade) = (None, None);
                 return;
             }
-            (None, Some(Ok(p))) => (p.handle.clone(), false),
+            (None, Some(Ok(p))) => (p.handle.clone(), p.smaller.clone(), false),
             (None, _) => return,
         };
-        let (handle, sharp) = target;
+        let (handle, smaller, sharp) = target;
         if self.shown.as_ref().is_some_and(|s| s.index == self.index && s.handle.id() == handle.id()) {
             return;
         }
@@ -606,10 +646,9 @@ impl State {
         // Under a tool's preview (open, or waiting for this reload) the image is the same
         // state: fading from the photo as it was before would flash that state.
         let covered = self.preview.as_ref().is_some_and(|p| p.index == self.index);
-        let from =
-            self.shown.take().map(|s| s.handle).filter(|_| !rapid && !covered && !self.transition.is_zero());
+        let from = self.shown_handle().cloned().filter(|_| !rapid && !covered && !self.transition.is_zero());
         self.fade = from.map(|from| Fade { from, start: Instant::now() });
-        self.shown = Some(Shown { index: self.index, handle, sharp });
+        self.shown = Some(Shown { index: self.index, handle, smaller, sharp });
     }
 
     fn error(&mut self, msg: String) {
@@ -681,8 +720,30 @@ impl State {
     pub fn main_handle(&self) -> Option<&Handle> {
         match &self.preview {
             Some(p) if p.index == self.index => Some(&p.handle),
-            _ => self.shown.as_ref().map(|s| &s.handle),
+            _ => self.shown_handle(),
         }
+    }
+
+    /// What draws [`State::shown`]: its copy for the size it shows at.
+    pub fn shown_handle(&self) -> Option<&Handle> {
+        let s = self.shown.as_ref()?;
+        let Handle::Rgba { width, height, .. } = &s.handle else { return Some(&s.handle) };
+        let body = self.body_size();
+        let bounds = Rect::new(0.0, 0.0, body.width, body.height);
+        let r = self.zoom.rect(bounds, Size::new(*width as f32, *height as f32));
+        Some(pick(&s.handle, &s.smaller, r.w * self.scale))
+    }
+
+    /// The image area has a new size (the copy drawn may change).
+    pub fn set_body(&mut self, size: iced::Size) {
+        self.body = Some(size);
+        self.sync_under();
+    }
+
+    /// The window's scale factor changed (the copy drawn may change).
+    pub fn set_scale(&mut self, scale: f32) {
+        self.scale = scale;
+        self.sync_under();
     }
 
     /// The image under the main one while that is being uploaded (see [`Underlay`]).

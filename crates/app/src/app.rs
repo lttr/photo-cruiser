@@ -130,7 +130,8 @@ impl App {
         }
         let start = if app.script.is_some() { script::start() } else { Task::none() };
         let load = app.load_next();
-        (app, Task::batch([load, start]))
+        let scale = window::latest().and_then(window::scale_factor).map(Message::ScaleFactor);
+        (app, Task::batch([load, start, scale]))
     }
 
     pub fn title(&self) -> String {
@@ -199,7 +200,7 @@ impl App {
                 Task::none()
             }
             Message::Body(size) => {
-                self.state.body = Some(size);
+                self.state.set_body(size);
                 Task::none()
             }
             Message::GridScrolled(y) => {
@@ -222,8 +223,16 @@ impl App {
                 Task::none()
             }
             // The window manager may change the mode itself; every resize re-reads it.
+            // (A new scale factor comes with a resize too.)
             Message::Resized(id) => {
-                return window::mode(id).map(|m| Message::WindowMode(m == window::Mode::Fullscreen));
+                return Task::batch([
+                    window::mode(id).map(|m| Message::WindowMode(m == window::Mode::Fullscreen)),
+                    window::scale_factor(id).map(Message::ScaleFactor),
+                ]);
+            }
+            Message::ScaleFactor(scale) => {
+                self.state.set_scale(scale);
+                Task::none()
             }
             Message::WindowMode(on) => {
                 self.state.fullscreen = on;

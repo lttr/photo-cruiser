@@ -2269,3 +2269,36 @@ fn zoom_wheel_drag_and_double_click() {
     assert_eq!(h.status(), "img1.png · 1 / 9");
     assert!((mean(&h.snapshot("whole"), q) - mean(&before, q)).abs() < 3.0);
 }
+
+#[test]
+fn update_draws_the_copy_for_the_size_on_screen() {
+    let dir = tempfile::tempdir().unwrap();
+    image::RgbaImage::from_fn(2000, 1500, |x, y| image::Rgba([(x ^ y) as u8, 0, 0, 255]))
+        .save(dir.path().join("big.png"))
+        .unwrap();
+    let mut s = opened(dir.path());
+    s.apply(&Action::ShowPhoto { index: None });
+    settle(&mut s);
+    let width = |h: Option<&iced::widget::image::Handle>| match h {
+        Some(iced::widget::image::Handle::Rgba { width, .. }) => *width,
+        _ => 0,
+    };
+    // Fits at 1000×750: the first halving, no shrinking on the GPU at all.
+    s.set_body(Size::new(1000.0, 750.0));
+    assert_eq!(width(s.main_handle()), 1000);
+    s.set_body(Size::new(400.0, 300.0));
+    assert_eq!(width(s.main_handle()), 500);
+    // HiDPI: twice the pixels.
+    s.set_scale(2.0);
+    assert_eq!(width(s.main_handle()), 1000);
+    s.set_scale(1.0);
+    s.set_body(Size::new(1000.0, 750.0));
+    // The previous copy stays underneath until the next one is on the GPU.
+    let fit = s.main_handle().map(|h| h.id());
+    assert!(s.uploaded(fit.unwrap()));
+    s.apply(&Action::ZoomActual);
+    assert_eq!(width(s.main_handle()), 2000);
+    assert_eq!(s.underlay().map(|h| h.id()), fit);
+    assert!(s.uploaded(s.main_handle().unwrap().id()));
+    assert!(s.underlay().is_none());
+}

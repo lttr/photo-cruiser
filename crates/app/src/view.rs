@@ -51,6 +51,7 @@ pub fn view(app: &App) -> Element<'_, Message> {
         (Some(_), Some(Err(e))) => text(e.clone()).size(20).into(),
         (Some(_), _) => match &s.shown {
             Some(shown) => {
+                let drawn = s.shown_handle().unwrap_or(&shown.handle);
                 let img = |h: &image::Handle, opacity: f32| -> Element<'_, Message> {
                     if !s.zoom.is_fit() {
                         return zoom_image(h.clone(), s.zoom, opacity).into();
@@ -70,8 +71,8 @@ pub fn view(app: &App) -> Element<'_, Message> {
                 layers = match (&s.preview, s.fade_progress()) {
                     // The open tool's live preview.
                     (Some(p), _) if p.index == s.index => layers.push(img(&p.handle, 1.0)),
-                    (_, Some((from, t))) => layers.push(img(from, 1.0 - t)).push(img(&shown.handle, t)),
-                    _ => layers.push(img(&shown.handle, 1.0)),
+                    (_, Some((from, t))) => layers.push(img(from, 1.0 - t)).push(img(drawn, t)),
+                    _ => layers.push(img(drawn, 1.0)),
                 };
                 // Held: the original over it all (the edited image stays drawn, so it is
                 // still on the GPU when let go).

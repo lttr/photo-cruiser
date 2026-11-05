@@ -21,6 +21,8 @@ pub enum Message {
     Resized(iced::window::Id),
     /// The window's real mode after a resize: full screen or not.
     WindowMode(bool),
+    /// The window's scale factor (at start and after a resize).
+    ScaleFactor(f32),
     /// A sidecar write or save finished.
     Io(IoDone),
     /// The window's close button: quit (after saving).
