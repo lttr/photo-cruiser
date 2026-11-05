@@ -24,6 +24,7 @@ mod message;
 mod palette;
 mod script;
 mod settings;
+mod star;
 mod state;
 #[cfg(test)]
 mod tests;

@@ -10,6 +10,8 @@ pub enum Item {
     OpenFolder,
     /// Grid ↔ photo.
     Switch,
+    Star,
+    StarredOnly,
     Crop,
     Save,
     ResetEdits,
@@ -24,13 +26,15 @@ pub enum Item {
 }
 
 /// Top to bottom.
-pub const ITEMS: [Item; 13] = [
+pub const ITEMS: [Item; 15] = [
     Item::OpenFolder,
     Item::Switch,
     Item::Crop,
     Item::Save,
     Item::ResetEdits,
     Item::Revert,
+    Item::Star,
+    Item::StarredOnly,
     Item::Fullscreen,
     Item::Names,
     Item::InfoPanel,
@@ -46,6 +50,10 @@ impl Item {
             Item::OpenFolder => "Open folder…",
             Item::Switch if s.view == View::Grid => "Open photo",
             Item::Switch => "All photos",
+            Item::Star if s.star() == Some(true) => "Remove star",
+            Item::Star => "Star",
+            Item::StarredOnly if s.starred_only => "Show all photos",
+            Item::StarredOnly => "Show starred only",
             Item::Crop if s.mode == Mode::Crop => "Stop cropping",
             Item::Crop => "Crop",
             Item::Save => "Save",
@@ -69,6 +77,8 @@ impl Item {
             Item::OpenFolder => "Ctrl+O",
             Item::Switch if s.view == View::Grid => "Enter",
             Item::Switch => "Esc",
+            Item::Star => "1",
+            Item::StarredOnly => "Ctrl+1",
             Item::Crop => "C",
             Item::Save => "Ctrl+S",
             Item::ResetEdits | Item::Revert => "",
@@ -87,6 +97,8 @@ impl Item {
             Item::OpenFolder => Message::OpenDialog,
             Item::Switch if s.view == View::Grid => Action::ShowPhoto { index: None }.into(),
             Item::Switch => Action::ShowGrid.into(),
+            Item::Star => Action::ToggleStar.into(),
+            Item::StarredOnly => Action::ToggleStarredOnly.into(),
             Item::Crop => Action::ToggleCrop.into(),
             Item::Save => Action::Save.into(),
             Item::ResetEdits => Action::ResetEdits.into(),

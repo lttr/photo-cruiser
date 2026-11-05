@@ -15,6 +15,7 @@ use clap::{CommandFactory, Parser, Subcommand};
 use photo_cruiser_core::adjust;
 use photo_cruiser_core::export::{self, OutFormat};
 use photo_cruiser_core::info::Field;
+use photo_cruiser_core::rating;
 use photo_cruiser_core::render::{self, RenderOpts};
 use photo_cruiser_core::store::{self, PhotoEdits};
 use photo_cruiser_core::{EditStack, Error, Folder, Op, Probe, Rect, Tool};
@@ -45,6 +46,9 @@ enum Cmd {
         /// Also read format, size and orientation of each entry (errors are per entry).
         #[arg(long)]
         probe: bool,
+        /// Only the starred photos (XMP rating 1 or more); indices stay those of the whole folder.
+        #[arg(long)]
+        starred: bool,
         #[arg(long)]
         json: bool,
     },
@@ -123,6 +127,17 @@ enum Cmd {
         #[arg(long)]
         json: bool,
     },
+    /// Star photos (XMP `xmp:Rating` 1), or unstar them with `--off` (rating 0). JPEG and
+    /// WebP get it in the file (only the XMP packet changes), other formats in a
+    /// `<photo>.xmp` sidecar.
+    Star {
+        #[arg(required = true)]
+        files: Vec<PathBuf>,
+        #[arg(long)]
+        off: bool,
+        #[arg(long)]
+        json: bool,
+    },
     /// Launch the GUI (`photo-cruiser` next to this binary); further args are passed through.
     App {
         dir: PathBuf,
@@ -195,6 +210,7 @@ fn main() -> ExitCode {
     let json = match &cli.cmd {
         Cmd::List { json, .. }
         | Cmd::Info { json, .. }
+        | Cmd::Star { json, .. }
         | Cmd::Render { json, .. }
         | Cmd::Export { json, .. }
         | Cmd::Edits { json, .. }
@@ -217,7 +233,8 @@ fn main() -> ExitCode {
 
 fn run(cmd: Cmd) -> Result<ExitCode, Fail> {
     match cmd {
-        Cmd::List { dir, probe, json } => list(&dir, probe, json)?,
+        Cmd::List { dir, probe, starred, json } => list(&dir, probe, starred, json)?,
+        Cmd::Star { files, off, json } => star(&files, !off, json)?,
         Cmd::Info { file, json } => info(&file, json)?,
         Cmd::Render { file, edits, no_edits, crop, adjust, max_side, output, json } => {
             let mut stack = stack_for(&file, edits.as_deref(), no_edits)?;
@@ -284,16 +301,20 @@ struct InfoJson<'a> {
     path: &'a Path,
     #[serde(flatten)]
     probe: Probe,
+    /// XMP rating: 0 none, 1-5 stars, -1 rejected.
+    rating: i8,
+    star: bool,
     decode_ms: f64,
     fields: Vec<Field>,
 }
 
-fn list(dir: &Path, probe: bool, json: bool) -> Result<(), Fail> {
+fn list(dir: &Path, probe: bool, starred: bool, json: bool) -> Result<(), Fail> {
     let folder = Folder::open(dir)?;
     let entries: Vec<ListEntry> = folder
         .entries
         .iter()
         .enumerate()
+        .filter(|(_, e)| !starred || rating::read(&e.path).is_ok_and(rating::is_starred))
         .map(|(index, e)| ListEntry {
             index,
             name: &e.name,
@@ -329,13 +350,16 @@ fn info(file: &Path, json: bool) -> Result<(), Fail> {
     photo_cruiser_core::decode(file)?;
     let decode_ms = (t.elapsed().as_secs_f64() * 1e5).round() / 100.0;
     let fields = photo_cruiser_core::info::fields(file)?;
+    let rating = rating::read(file)?;
+    let star = rating::is_starred(rating);
     if json {
-        print_json(&InfoJson { path: file, probe, decode_ms, fields });
+        print_json(&InfoJson { path: file, probe, rating, star, decode_ms, fields });
     } else {
         println!("path: {}", file.display());
         println!("format: {}", probe.format);
         println!("size: {}x{}", probe.width, probe.height);
         println!("orientation: {}", probe.orientation);
+        println!("star: {star} (rating {rating})");
         println!("decode: {decode_ms} ms");
         for f in &fields {
             println!("{}: {}", f.label.to_lowercase(), f.value);
@@ -439,6 +463,31 @@ fn show_edits(file: &Path, json: bool) -> Result<(), Fail> {
     println!("saved: {}", out.saved.map_or("never".into(), ops));
     println!("dirty: {}", out.dirty);
     println!("backup: {}", out.backup.map_or("none".into(), |b| b.display().to_string()));
+    Ok(())
+}
+
+#[derive(Serialize)]
+struct StarJson<'a> {
+    path: &'a Path,
+    star: bool,
+    /// Written (false: it had that star already).
+    changed: bool,
+}
+
+/// Star or unstar each file; stops at the first failure.
+fn star(files: &[PathBuf], on: bool, json: bool) -> Result<(), Fail> {
+    let mut out = Vec::new();
+    for path in files {
+        let changed = rating::star(path, on)?;
+        if !json {
+            let what = if on { "starred" } else { "unstarred" };
+            println!("{} {}", path.display(), if changed { what } else { "unchanged" });
+        }
+        out.push(StarJson { path, star: on, changed });
+    }
+    if json {
+        print_json(&json!({ "photos": out }));
+    }
     Ok(())
 }
 

@@ -104,7 +104,7 @@ pub enum Action {
     ZoomOut,
     /// The whole photo again (`Esc` while zoomed).
     ZoomFit,
-    /// Whole photo ↔ actual pixels, one photo pixel per screen pixel (`1`; double-click:
+    /// Whole photo ↔ actual pixels, one photo pixel per screen pixel (`Shift+1`; double-click:
     /// at the pointer).
     ZoomActual,
     /// Zoom to `scale` × the whole photo, with the photo point (`x`, `y`, fractions of its
@@ -128,6 +128,13 @@ pub enum Action {
     RemoveEdit {
         index: usize,
     },
+    /// Star the current photo, or take its star away, then go on to the next photo (`1`,
+    /// menu). Written at once into the photo's XMP (`xmp:Rating` 1 or 0; a `.xmp` sidecar for
+    /// formats other than JPEG and WebP). Pressing it again on the photo undoes it.
+    ToggleStar,
+    /// Show only the starred photos / all photos again (`Ctrl+1`, menu). Waits until every
+    /// photo's star is read. Off whenever a folder is opened.
+    ToggleStarredOnly,
     /// Show/hide the edits panel on the right: the current photo's edits, in order
     /// (`Shift+E`, menu). Closed at every start.
     ToggleEditsPanel,
@@ -244,7 +251,8 @@ mod tests {
                 {"action":"step_adjust","steps":-2},{"action":"step_adjust","steps":1,"fine":true},{"action":"end_adjust"},
                 {"action":"toggle_edits_panel"},{"action":"remove_edit","index":1},{"action":"toggle_info_panel"},{"action":"copy_info","index":3},
                 {"action":"zoom_in"},{"action":"zoom_out"},{"action":"zoom_fit"},{"action":"zoom_actual"},
-                {"action":"set_zoom","scale":2,"x":0.25,"y":0.75},{"action":"set_zoom","scale":3}]"#,
+                {"action":"set_zoom","scale":2,"x":0.25,"y":0.75},{"action":"set_zoom","scale":3},
+                {"action":"toggle_star"},{"action":"toggle_starred_only"}]"#,
         )
         .unwrap();
         assert_eq!(steps[1], Action::Goto { index: 2 });
@@ -280,7 +288,8 @@ mod tests {
         assert_eq!((&steps[64], &steps[67]), (&Action::ZoomIn, &Action::ZoomActual));
         assert_eq!(steps[68], Action::SetZoom { scale: 2.0, x: 0.25, y: 0.75 });
         assert_eq!(steps[69], Action::SetZoom { scale: 3.0, x: 0.5, y: 0.5 });
-        assert_eq!(steps.len(), 70);
+        assert_eq!((&steps[70], &steps[71]), (&Action::ToggleStar, &Action::ToggleStarredOnly));
+        assert_eq!(steps.len(), 72);
         let json = serde_json::to_string(&Action::SetCrop(Rect::new(1.0, 2.0, 3.0, 4.0))).unwrap();
         assert_eq!(json, r#"{"action":"set_crop","x":1.0,"y":2.0,"w":3.0,"h":4.0}"#);
         assert!(parse_script(r#"[{"action":"jump"}]"#).is_err());

@@ -197,6 +197,15 @@ impl<T> Thumbs<T> {
         self.stale.clear();
     }
 
+    /// The list of photos changed (a filter): keep the thumbnails of the photos still in it,
+    /// at their new indices (`to` maps an old index to the new one). Jobs in flight are dropped.
+    pub fn remap(&mut self, to: impl Fn(usize) -> Option<usize>) {
+        self.generation += 1;
+        self.done = self.done.drain().filter_map(|(i, t)| Some((to(i)?, t))).collect();
+        self.in_flight.clear();
+        self.stale.clear();
+    }
+
     /// Forget the thumbnail of `index` (the photo changed): it is decoded again.
     pub fn invalidate(&mut self, index: usize) {
         self.done.remove(&index);
@@ -292,6 +301,24 @@ impl Sizes {
 
     pub fn get(&self, index: usize) -> Option<(u32, u32)> {
         self.sizes.get(index).copied().flatten()
+    }
+
+    /// The list of photos changed (a filter), to `len` photos: keep the sizes of those still
+    /// in it, at their new indices (`to` maps an old index to the new one). Chunks with a
+    /// size missing are probed again; jobs in flight are dropped.
+    pub fn remap(&mut self, len: usize, to: impl Fn(usize) -> Option<usize>) {
+        let mut sizes = vec![None; len];
+        for (i, s) in self.sizes.iter().enumerate() {
+            if let Some(j) = to(i).filter(|j| *j < len) {
+                sizes[j] = *s;
+            }
+        }
+        self.generation += 1;
+        self.chunks = sizes
+            .chunks(SIZE_CHUNK)
+            .map(|c| if c.iter().all(Option::is_some) { Chunk::Done } else { Chunk::Waiting })
+            .collect();
+        self.sizes = sizes;
     }
 
     /// Forget a size (the photo changed); a thumbnail or the next probe fills it in.
@@ -509,6 +536,29 @@ mod tests {
         let c = s.next_job(0..0).unwrap();
         assert!(s.finish(&c, &[None, Some((1, 1))]));
         assert!(s.is_done() && s.next_job(0..0).is_none());
+    }
+
+    #[test]
+    fn remapped_to_a_filtered_list() {
+        let mut t: Thumbs<&str> = Thumbs::default();
+        let a = t.next_job(0..3, 3, 100).unwrap();
+        let b = t.next_job(0..3, 3, 100).unwrap();
+        t.finish(a, "a");
+        t.finish(b, "b");
+        let c = t.next_job(0..3, 3, 100).unwrap();
+        // Keep photos 1 and 2 only.
+        t.remap(|i| i.checked_sub(1));
+        assert!(!t.finish(c, "c"), "in flight before the remap: dropped");
+        assert_eq!((t.get(0), t.get(1)), (Some(&"b"), None));
+
+        let mut s = Sizes::default();
+        s.reset(SIZE_CHUNK + 2);
+        let job = s.next_job(0..1).unwrap();
+        s.finish(&job, &[Some((3, 2)); SIZE_CHUNK]);
+        s.remap(3, |i| [Some(0), None, Some(1)].get(i).copied().flatten().or((i == SIZE_CHUNK).then_some(2)));
+        assert_eq!((s.get(0), s.get(1), s.get(2)), (Some((3, 2)), Some((3, 2)), None));
+        assert!(!s.is_done(), "the photo without a size is probed");
+        assert_eq!(s.next_job(0..3).unwrap().items, 0..3);
     }
 
     #[test]

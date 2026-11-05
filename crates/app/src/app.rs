@@ -6,8 +6,8 @@ use crate::message::Message;
 use crate::script::{self, Runner, ScriptConfig};
 use crate::settings::Settings;
 use crate::state::{
-    DEFAULT_MAX_SIDE, DEFAULT_TRANSITION, Effect, Loaded, State, decode_job, io_job, original_job, size_job,
-    thumb_job,
+    DEFAULT_MAX_SIDE, DEFAULT_TRANSITION, Effect, Loaded, State, decode_job, io_job, original_job,
+    rating_job, size_job, thumb_job,
 };
 use crate::{menu, palette, theme, view};
 use iced::widget::operation::AbsoluteOffset;
@@ -199,6 +199,10 @@ impl App {
                 self.state.finish_sizes(&job, &sizes);
                 Task::none()
             }
+            Message::Ratings(job, ratings) => {
+                self.state.finish_ratings(&job, &ratings);
+                Task::none()
+            }
             Message::Body(size) => {
                 self.state.set_body(size);
                 Task::none()
@@ -354,6 +358,13 @@ impl App {
                 Message::Info(path.clone(), r.unwrap_or_else(|| Err("info thread panicked".into())))
             })
         }));
+        tasks.extend(self.state.next_rating_job().map(|job| {
+            let paths = job.paths.clone();
+            let n = paths.len();
+            Task::perform(on_thread(move || rating_job(&paths)), move |r| {
+                Message::Ratings(job.clone(), r.unwrap_or_else(|| vec![0; n]))
+            })
+        }));
         tasks.extend(std::iter::from_fn(|| self.state.next_size_job()).map(|(job, paths)| {
             let n = paths.len();
             Task::perform(on_thread(move || size_job(&paths)), move |r| {
@@ -375,6 +386,9 @@ impl App {
                     crate::state::IoDone::Stored(p, Err("worker panicked".into()))
                 }
                 crate::state::Io::Save(p, _) => crate::state::IoDone::Saved(p, Err("worker panicked".into())),
+                crate::state::Io::Star(p, _) => {
+                    crate::state::IoDone::Starred(p, Err("worker panicked".into()))
+                }
             }))
         })
     }

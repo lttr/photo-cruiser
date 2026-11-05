@@ -13,7 +13,7 @@
 //! slider, its Auto and No change buttons), `original-button` (press and hold: the original),
 //! `edits-panel` (the current photo's edits, right of the image area), `edit-<i>` and
 //! `remove-edit-<i>` (its rows and their remove buttons), `info-panel` and `histogram` (the
-//! current photo's histogram and EXIF fields).
+//! current photo's histogram and EXIF fields), `star` (the photo view's star, top right).
 
 use crate::action::Action;
 use crate::adjust_panel::{Hold, Slider};
@@ -24,6 +24,7 @@ use crate::histogram::Chart;
 use crate::menu;
 use crate::message::Message;
 use crate::palette;
+use crate::star;
 use crate::state::{Display, Mode, State, ToolPanel, View, tilde};
 use crate::theme;
 use crate::zoom_image::zoom_image;
@@ -45,6 +46,9 @@ pub fn view(app: &App) -> Element<'_, Message> {
         (None, _) => text("Open a folder with photos (Ctrl+O)").size(20).into(),
         (Some(_), _) if s.folder_error.is_some() => {
             text(s.folder_error.clone().unwrap_or_default()).size(20).into()
+        }
+        (Some(_), _) if s.filtered && s.len() == 0 => {
+            text("No starred photos yet. Ctrl+1 shows all photos.").size(20).into()
         }
         (Some(f), _) if f.is_empty() => text(format!("No images in {}", tilde(&f.path))).size(20).into(),
         (Some(_), _) if s.view == View::Grid => grid(s),
@@ -123,6 +127,15 @@ pub fn view(app: &App) -> Element<'_, Message> {
     .height(Fill);
     let bg = if s.fullscreen { Color::BLACK } else { BG };
     let content = container(content).center(Fill).id(id);
+    // The photo's star, top right (in full screen too).
+    let content: Element<_> = match !grid && s.star() == Some(true) && s.current().is_some_and(|r| r.is_ok())
+    {
+        true => {
+            let badge = container(star::star(24)).padding(14).width(Fill).align_right(Fill);
+            stack![content, container(badge).id("star")].into()
+        }
+        false => content.into(),
+    };
     // In the grid the overlay goes underneath: it only needs the keys, the cells the mouse.
     let layers = if grid { stack![overlay, content] } else { stack![content, overlay] };
     let body = container(layers)
@@ -330,6 +343,13 @@ fn grid<'a>(s: &'a State) -> Element<'a, Message> {
                 layers = layers.push(container(space()).width(Fill).height(Fill).style(theme::frame));
             }
             layers.into()
+        };
+        let content: Element<_> = match s.starred(i) {
+            true => {
+                let badge = container(star::star(18)).padding(5).width(Fill).height(Fill);
+                stack![content, badge].into()
+            }
+            false => content,
         };
         let failed = s.save_failed.contains_key(&folder.entries[i].path);
         let content: Element<_> = match failed {

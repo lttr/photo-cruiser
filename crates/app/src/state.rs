@@ -33,10 +33,11 @@ use photo_cruiser_core::geom::PixelRect;
 use photo_cruiser_core::info::{Field, Histogram};
 use photo_cruiser_core::levels;
 use photo_cruiser_core::loader::{Job, Kind, Loader, SizeJob, Sizes, ThumbJob, Thumbs};
+use photo_cruiser_core::rating;
 use photo_cruiser_core::source::{self, Priority};
 use photo_cruiser_core::store::{self, PhotoEdits, SaveReport};
 use photo_cruiser_core::zoom::{self, Zoom};
-use photo_cruiser_core::{EditStack, Error, Folder, History, Op, Point, Rect, Size};
+use photo_cruiser_core::{EditStack, Entry, Error, Folder, History, Op, Point, Rect, Size};
 use serde::Serialize;
 use std::collections::{HashMap, VecDeque};
 use std::ops::Range;
@@ -209,6 +210,8 @@ pub enum Queued {
     Store(PathBuf),
     /// Save the photo (render its edits into the file).
     Save(PathBuf),
+    /// Write the photo's star ([`State::ratings`]) into its file or XMP sidecar.
+    Star(PathBuf),
 }
 
 /// A started [`Queued`] job.
@@ -216,12 +219,14 @@ pub enum Queued {
 pub enum Io {
     Store(PathBuf, EditStack),
     Save(PathBuf, EditStack),
+    Star(PathBuf, i8),
 }
 
 #[derive(Clone, Debug)]
 pub enum IoDone {
     Stored(PathBuf, Result<(), String>),
     Saved(PathBuf, Result<SaveReport, String>),
+    Starred(PathBuf, Result<(), String>),
 }
 
 /// Run an [`Io`] job (blocking).
@@ -236,7 +241,27 @@ pub fn io_job(io: Io) -> IoDone {
             let r = store::save(&path, &stack).map_err(msg);
             IoDone::Saved(path, r)
         }
+        Io::Star(path, r) => {
+            let done = rating::set(&path, r).map(|_| ()).map_err(msg);
+            IoDone::Starred(path, done)
+        }
     }
+}
+
+/// Photos per rating job: small, so a network share answers soon.
+const RATING_CHUNK: usize = 16;
+
+/// Read the ratings of some photos ([`State::next_rating_job`]).
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct RatingJob {
+    pub generation: u64,
+    pub paths: Vec<PathBuf>,
+}
+
+/// Read the ratings of a [`RatingJob`]'s photos (blocking); 0 for unreadable ones.
+pub fn rating_job(paths: &[PathBuf]) -> Vec<i8> {
+    // Like the sizes: after what shows, on gvfs.
+    source::with_priority(Priority::Low, || paths.iter().map(|p| rating::read(p).unwrap_or(0)).collect())
 }
 
 /// Decode a grid thumbnail of `path` (blocking).
@@ -391,7 +416,20 @@ pub enum Effect {
 
 #[derive(Debug)]
 pub struct State {
+    /// The folder, with the photos the filter lets through ([`State::starred_only`]).
     pub folder: Option<Folder>,
+    /// Every photo of the folder.
+    pub all: Vec<Entry>,
+    /// Show only the starred photos (`Ctrl+1`). Applied once every rating is read.
+    pub starred_only: bool,
+    /// `folder` holds only the starred photos: the filter is applied.
+    pub filtered: bool,
+    /// The photos' ratings ([`photo_cruiser_core::rating`]) as far as they are read or set, by path.
+    pub ratings: HashMap<PathBuf, i8>,
+    /// Ratings of an older folder are dropped.
+    ratings_generation: u64,
+    /// A [`RatingJob`] is running.
+    ratings_running: bool,
     /// The folder could not be read.
     pub folder_error: Option<String>,
     pub index: usize,
@@ -488,6 +526,12 @@ impl State {
     pub fn new(max_side: u32, transition: Duration) -> Self {
         State {
             folder: None,
+            all: Vec::new(),
+            starred_only: false,
+            filtered: false,
+            ratings: HashMap::new(),
+            ratings_generation: 0,
+            ratings_running: false,
             folder_error: None,
             index: 0,
             loader: Loader::default(),
@@ -577,6 +621,7 @@ impl State {
         let info = !self.info_panel || self.current_path().is_none() || self.current_info().is_some();
         self.loader.is_idle(self.index, self.len())
             && info
+            && self.ratings_read()
             && !original
             && self.fade_progress().is_none()
             && thumbs
@@ -671,6 +716,11 @@ impl State {
     fn error(&mut self, msg: String) {
         eprintln!("photo-cruiser: {msg}");
         self.errors.push(msg);
+    }
+
+    fn error_effect(&mut self, msg: &str) -> Effect {
+        self.error(msg.into());
+        Effect::None
     }
 
     pub fn apply(&mut self, action: &Action) -> Effect {
@@ -950,6 +1000,25 @@ impl State {
                 } else {
                     self.error(format!("remove_edit {index}: out of range ({n} edits)"));
                 }
+            }
+            Action::ToggleStar => {
+                let Some(path) = self.current_path().map(Path::to_path_buf) else {
+                    return self.error_effect("toggle_star: no photo");
+                };
+                let r = match self.ratings.get(&path) {
+                    Some(r) => *r,
+                    None => rating::read(&path).unwrap_or(0),
+                };
+                self.ratings.insert(path.clone(), if rating::is_starred(r) { 0 } else { 1 });
+                self.enqueue(Queued::Star(path));
+                // Culling: on to the next photo.
+                if self.index + 1 < self.len() {
+                    self.select(self.index + 1);
+                }
+            }
+            Action::ToggleStarredOnly => {
+                self.starred_only = !self.starred_only;
+                self.sync_filter();
             }
             Action::ToggleEditsPanel => self.edits_panel = !self.edits_panel,
             Action::ToggleInfoPanel => self.info_panel = !self.info_panel,
@@ -1351,7 +1420,7 @@ impl State {
             .chain(&self.queue)
             .filter_map(|q| match q {
                 Queued::Save(p) => Some(p.as_path()),
-                Queued::Store(_) => None,
+                Queued::Store(_) | Queued::Star(_) => None,
             })
             .collect()
     }
@@ -1366,6 +1435,7 @@ impl State {
         let io = match &job {
             Queued::Store(p) => Io::Store(p.clone(), self.stack_of(p)),
             Queued::Save(p) => Io::Save(p.clone(), self.stack_of(p)),
+            Queued::Star(p) => Io::Star(p.clone(), self.ratings.get(p).copied().unwrap_or(0)),
         };
         self.running = Some(job);
         Some(io)
@@ -1383,6 +1453,12 @@ impl State {
                 self.save_failed.insert(path, e);
             }
             IoDone::Saved(path, Ok(report)) => self.saved(path, report),
+            IoDone::Starred(_, Ok(())) => {}
+            IoDone::Starred(path, Err(e)) => {
+                // Read again what the file has.
+                self.ratings.remove(&path);
+                self.error(format!("cannot star: {e}"));
+            }
         }
         if self.io_idle() {
             self.notice = None;
@@ -1405,13 +1481,21 @@ impl State {
         let index = self.folder.as_ref().and_then(|f| f.entries.iter().position(|e| e.path == path));
         let mut p = self.edits.remove(&path).unwrap_or_default();
         if new != path {
-            if let Some(i) = index
-                && let Some(f) = &mut self.folder
-            {
-                f.entries[i].name = new.file_name().unwrap_or_default().to_string_lossy().into_owned();
-                f.entries[i].path = new.clone();
+            let name = new.file_name().unwrap_or_default().to_string_lossy().into_owned();
+            let entries =
+                self.folder.iter_mut().flat_map(|f| f.entries.iter_mut()).chain(self.all.iter_mut());
+            for e in entries.filter(|e| e.path == path) {
+                (e.name, e.path) = (name.clone(), new.clone());
             }
             self.queue.retain(|q| !matches!(q, Queued::Store(p) | Queued::Save(p) if *p == path));
+            for q in &mut self.queue {
+                if *q == Queued::Star(path.clone()) {
+                    *q = Queued::Star(new.clone());
+                }
+            }
+            if let Some(r) = self.ratings.remove(&path) {
+                self.ratings.insert(new.clone(), r);
+            }
         }
         match store::load(&new) {
             Ok(on_disk) => {
@@ -1605,6 +1689,11 @@ impl State {
         self.thumbs.reset();
         self.sizes.reset(0);
         self.displayed.clear();
+        self.ratings.clear();
+        self.ratings_generation += 1;
+        self.ratings_running = false;
+        self.all.clear();
+        (self.starred_only, self.filtered) = (false, false);
         self.view = if file.is_some() { View::Photo } else { View::Grid };
         self.grid_offset = 0.0;
         self.scroll = Some(0.0);
@@ -1619,6 +1708,7 @@ impl State {
                     self.index = folder.entries.iter().position(|e| e.path == file).unwrap_or(0);
                 }
                 self.sizes.reset(folder.len());
+                self.all = folder.entries.clone();
                 self.folder = Some(folder);
                 if let Some(path) = self.current_path().map(Path::to_path_buf) {
                     self.load_edits(&path);
@@ -1752,6 +1842,123 @@ impl State {
         }
     }
 
+    /// Every photo's rating is known.
+    pub fn ratings_read(&self) -> bool {
+        self.all.iter().all(|e| self.ratings.contains_key(&e.path))
+    }
+
+    /// The current photo is starred (`None` while its rating is read).
+    pub fn star(&self) -> Option<bool> {
+        self.current_path().and_then(|p| self.ratings.get(p)).map(|r| rating::is_starred(*r))
+    }
+
+    /// Photo `index` (of [`State::folder`]) is starred, as far as known.
+    pub fn starred(&self, index: usize) -> bool {
+        let path = self.folder.as_ref().and_then(|f| f.entries.get(index)).map(|e| &e.path);
+        path.and_then(|p| self.ratings.get(p)).is_some_and(|r| rating::is_starred(*r))
+    }
+
+    /// The next photos whose ratings to read (those on screen first, then in order), one
+    /// job at a time. Run [`rating_job`], then [`State::finish_ratings`].
+    pub fn next_rating_job(&mut self) -> Option<RatingJob> {
+        if self.ratings_running {
+            return None;
+        }
+        let shown = self.folder.as_ref().map(|f| {
+            let v = self.visible();
+            let v = v.start.min(f.len())..v.end.min(f.len());
+            let at = self.index.min(f.len().saturating_sub(1))..(self.index + 1).min(f.len());
+            f.entries[at].iter().chain(&f.entries[v]).collect::<Vec<_>>()
+        });
+        let unknown = |e: &&Entry| !self.ratings.contains_key(&e.path);
+        let mut paths: Vec<PathBuf> = Vec::new();
+        for e in shown.unwrap_or_default().into_iter().chain(&self.all).filter(unknown) {
+            if !paths.contains(&e.path) {
+                paths.push(e.path.clone());
+            }
+            if paths.len() == RATING_CHUNK {
+                break;
+            }
+        }
+        if paths.is_empty() {
+            return None;
+        }
+        self.ratings_running = true;
+        Some(RatingJob { generation: self.ratings_generation, paths })
+    }
+
+    /// Ratings read. A rating set meanwhile (the star toggled) stays. Once all are known, a
+    /// waiting filter applies.
+    pub fn finish_ratings(&mut self, job: &RatingJob, results: &[i8]) {
+        if job.generation != self.ratings_generation {
+            return;
+        }
+        self.ratings_running = false;
+        for (p, r) in job.paths.iter().zip(results) {
+            self.ratings.entry(p.clone()).or_insert(*r);
+        }
+        self.sync_filter();
+    }
+
+    /// Make the folder's list match [`State::starred_only`] (once every rating is known).
+    /// The current photo stays current if it is still listed, else the next one listed is.
+    /// Thumbnails and sizes are kept; a photo unstarred while the filter is on stays
+    /// listed until it is turned on again.
+    fn sync_filter(&mut self) {
+        if self.filtered == self.starred_only || (self.starred_only && !self.ratings_read()) {
+            return;
+        }
+        let Some(old) = self.folder.as_ref().map(|f| f.entries.clone()) else { return };
+        self.leave();
+        self.close_tool();
+        self.filtered = self.starred_only;
+        let entries: Vec<Entry> = match self.starred_only {
+            true => self
+                .all
+                .iter()
+                .filter(|e| self.ratings.get(&e.path).is_some_and(|r| rating::is_starred(*r)))
+                .cloned()
+                .collect(),
+            false => self.all.clone(),
+        };
+        let new_at: HashMap<&Path, usize> =
+            entries.iter().enumerate().map(|(i, e)| (e.path.as_path(), i)).collect();
+        let to = |i: usize| old.get(i).and_then(|e| new_at.get(e.path.as_path()).copied());
+        // The current photo, else the first listed after it, else the last.
+        let current = old.get(self.index).map(|e| e.path.as_path());
+        let from = current.and_then(|c| self.all.iter().position(|e| e.path == c)).unwrap_or(0);
+        let index = self.all[from.min(self.all.len())..]
+            .iter()
+            .find_map(|e| new_at.get(e.path.as_path()).copied())
+            .unwrap_or(entries.len().saturating_sub(1));
+        self.thumbs.remap(to);
+        self.sizes.remap(entries.len(), to);
+        if let Some(sh) = &mut self.shown {
+            match to(sh.index) {
+                Some(i) => sh.index = i,
+                None => (self.shown, self.fade) = (None, None),
+            }
+        }
+        self.loader.reset();
+        self.displayed.clear();
+        (self.original_image, self.preview, self.top, self.under) = (None, None, None, None);
+        if let Some(f) = &mut self.folder {
+            f.entries = entries;
+        }
+        self.index = index;
+        self.crop.clear();
+        if let Some(path) = self.current_path().map(Path::to_path_buf) {
+            self.load_edits(&path);
+            if self.mode == Mode::Crop {
+                self.crop.selection = self.crop_selection();
+            }
+        }
+        self.refresh();
+        self.grid_offset = 0.0;
+        self.scroll = Some(0.0);
+        self.reveal();
+    }
+
     pub fn finish(&mut self, job: Job, result: Loaded) {
         let fresh = self.loader.finish(job, result);
         if self.trace {
@@ -1787,7 +1994,12 @@ impl State {
     /// `[name · ]i / N[ · crop W×H @ X,Y]` (the name only while names are shown); empty
     /// without a current file.
     pub fn status(&self) -> String {
-        let Some(name) = self.current_name() else { return String::new() };
+        let Some(name) = self.current_name() else {
+            return match self.starred_only && !self.filtered {
+                true => "Reading stars…".into(),
+                false => String::new(),
+            };
+        };
         let mut s = match self.names {
             true => format!("{name} · {}", self.position()),
             false => self.position(),
@@ -1795,6 +2007,11 @@ impl State {
         if self.quitting {
             let n = self.saving().len();
             return format!("Saving {n} photo{}…", if n == 1 { "" } else { "s" });
+        }
+        match (self.star(), self.filtered) {
+            (Some(true), false) => s += " · starred",
+            (Some(false), true) => s += " · star removed",
+            _ => {}
         }
         if self.original_handle().is_some() {
             s += " · original, without edits";
@@ -1807,6 +2024,9 @@ impl State {
         } else if self.mode == Mode::Crop {
             s += " · crop: drag on the image (Esc to leave)";
         }
+        if self.starred_only && !self.filtered {
+            s += " — reading stars…";
+        }
         if let Some(e) = self.current_path().and_then(|p| self.save_failed.get(p)) {
             s += &format!(" — not saved: {e}");
         } else if let Some(notice) = &self.notice {
@@ -1817,10 +2037,11 @@ impl State {
         s
     }
 
-    /// `i / N`, 1-based (`0 / 0` when empty).
+    /// `i / N`, 1-based (`0 / 0` when empty); `i / N starred` while only starred photos show.
     pub fn position(&self) -> String {
         let i = if self.len() == 0 { 0 } else { self.index + 1 };
-        format!("{i} / {}", self.len())
+        let starred = if self.filtered { " starred" } else { "" };
+        format!("{i} / {}{starred}", self.len())
     }
 
     /// Machine-readable snapshot (script mode `--dump-state`).
@@ -1876,6 +2097,9 @@ impl State {
             underlay: self.underlay().is_some(),
             original: self.original_handle().is_some(),
             zoom: self.zoom,
+            star: self.star(),
+            starred_only: self.starred_only,
+            filtered: self.filtered,
             dirty: self.dirty(),
             saved: self
                 .current_path()
@@ -1952,6 +2176,11 @@ pub struct Dump {
     pub original: bool,
     /// How far the photo is zoomed in (scale 1: the whole photo).
     pub zoom: Zoom,
+    /// It is starred (`null` while its rating is read).
+    pub star: Option<bool>,
+    /// Only starred photos are asked for (`starred_only`) / listed (`filtered`).
+    pub starred_only: bool,
+    pub filtered: bool,
     /// Its edits differ from what its file was saved with.
     pub dirty: bool,
     /// The stack its file was saved with (`null`: never saved).

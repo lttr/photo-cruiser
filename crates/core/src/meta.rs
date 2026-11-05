@@ -55,13 +55,18 @@ pub fn ijg_tables(quality: u8) -> [[u16; 64]; 2] {
 }
 
 /// What a JPEG's markers up to its frame header tell: the stored size (before EXIF
-/// orientation) and the EXIF block (without the `Exif\0\0` header).
+/// orientation), the EXIF block (without the `Exif\0\0` header) and the XMP packet
+/// (without its namespace header).
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct JpegHead<'a> {
     pub width: u32,
     pub height: u32,
     pub exif: Option<&'a [u8]>,
+    pub xmp: Option<&'a [u8]>,
 }
+
+/// The header of a JPEG APP1 segment holding the (main) XMP packet.
+pub const XMP_SIG: &[u8] = b"http://ns.adobe.com/xap/1.0/\0";
 
 /// The result of parsing the start of a file with [`jpeg_head`].
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -81,7 +86,7 @@ pub fn jpeg_head(b: &[u8]) -> Head<'_> {
         Some(m) if m != [0xFF, 0xD8] => return Head::NotJpeg,
         _ => {}
     }
-    let mut exif = None;
+    let (mut exif, mut xmp) = (None, None);
     let mut i = 2;
     loop {
         let Some(&[ff, marker]) = b.get(i..i + 2) else { return Head::More(i + 4) };
@@ -107,13 +112,64 @@ pub fn jpeg_head(b: &[u8]) -> Head<'_> {
             0xC0..=0xCF if !matches!(marker, 0xC4 | 0xC8 | 0xCC) => {
                 let Some(&[_, h1, h0, w1, w0]) = seg.get(..5) else { return Head::NotJpeg };
                 let (height, width) = (u16::from_be_bytes([h1, h0]), u16::from_be_bytes([w1, w0]));
-                return Head::Done(JpegHead { width: width as u32, height: height as u32, exif });
+                return Head::Done(JpegHead { width: width as u32, height: height as u32, exif, xmp });
             }
             0xE1 if exif.is_none() && seg.starts_with(b"Exif\0\0") => exif = Some(&seg[6..]),
+            0xE1 if xmp.is_none() && seg.starts_with(XMP_SIG) => xmp = Some(&seg[XMP_SIG.len()..]),
             _ => {}
         }
         i = end;
     }
+}
+
+/// The JPEG with `packet` as its XMP: the APP1 segment holding the old packet is
+/// replaced, or a new one goes after the leading JFIF and EXIF segments. Every other
+/// byte is copied as it is. `None` if it isn't a JPEG, is broken before its frame header,
+/// or the packet doesn't fit in a segment.
+pub fn jpeg_with_xmp(b: &[u8], packet: &[u8]) -> Option<Vec<u8>> {
+    if b.get(..2)? != [0xFF, 0xD8] || packet.len() + XMP_SIG.len() + 2 > 0xFFFF {
+        return None;
+    }
+    // Where the new segment goes, and the old one's bytes.
+    let (mut at, mut old) = (2, None);
+    let mut leading = true;
+    let mut i = 2;
+    loop {
+        let &[ff, marker] = b.get(i..i + 2)? else { return None };
+        if ff != 0xFF {
+            return None;
+        }
+        if marker == 0xFF {
+            i += 1;
+            continue;
+        }
+        // Up to the frame header, like [`jpeg_head`], which reads the packet.
+        let frame = (0xC0..=0xCF).contains(&marker) && !matches!(marker, 0xC4 | 0xC8 | 0xCC);
+        if frame || marker == 0xD9 || marker == 0xDA || marker == 0x01 || (0xD0..=0xD7).contains(&marker) {
+            break;
+        }
+        let end = i + 2 + u16::from_be_bytes(b.get(i + 2..i + 4)?.try_into().ok()?) as usize;
+        let seg = b.get(i + 4..end)?;
+        let is_xmp = marker == 0xE1 && seg.starts_with(XMP_SIG);
+        if is_xmp && old.is_none() {
+            old = Some(i..end);
+        }
+        leading &= marker == 0xE0 || (marker == 0xE1 && seg.starts_with(b"Exif\0\0"));
+        if leading {
+            at = end;
+        }
+        i = end;
+    }
+    let mut segment = vec![0xFF, 0xE1];
+    segment.extend(((packet.len() + XMP_SIG.len() + 2) as u16).to_be_bytes());
+    segment.extend(XMP_SIG);
+    segment.extend(packet);
+    let replace = old.unwrap_or(at..at);
+    let mut out = Vec::with_capacity(b.len() + segment.len());
+    out.extend(&b[..replace.start]);
+    out.extend(segment);
+    out.extend(&b[replace.end..]);
+    Some(out)
 }
 
 /// Read quantisation tables, sampling factors and density from a JPEG's markers (up to
@@ -542,6 +598,68 @@ pub fn webp_metadata(b: &[u8]) -> (Option<Vec<u8>>, Option<Vec<u8>>) {
     (find(b"ICCP"), find(b"EXIF"))
 }
 
+/// The XMP packet of a WebP.
+pub fn webp_xmp(b: &[u8]) -> Option<&[u8]> {
+    webp_chunks(b)?.into_iter().find(|(id, _)| id == b"XMP ").map(|(_, d)| d)
+}
+
+/// The WebP with `packet` as its XMP (`XMP ` chunk, the `VP8X` flag). A simple file
+/// (no `VP8X`) gets the extended header, with the size and alpha read from its
+/// bitstream. The image chunks are copied as they are. `None` if it isn't a WebP.
+pub fn webp_with_xmp(b: &[u8], packet: &[u8]) -> Option<Vec<u8>> {
+    let mut chunks: Vec<([u8; 4], Vec<u8>)> =
+        webp_chunks(b)?.into_iter().map(|(id, d)| (id, d.to_vec())).collect();
+    if !chunks.iter().any(|(id, _)| id == b"VP8X") {
+        let (width, height, alpha) = chunks.iter().find_map(|(id, d)| webp_bitstream_size(id, d))?;
+        let mut vp8x = vec![if alpha { 0x10 } else { 0 }, 0, 0, 0];
+        vp8x.extend_from_slice(&(width - 1).to_le_bytes()[..3]);
+        vp8x.extend_from_slice(&(height - 1).to_le_bytes()[..3]);
+        chunks.insert(0, (*b"VP8X", vp8x));
+    }
+    let vp8x = &mut chunks.iter_mut().find(|(id, _)| id == b"VP8X")?.1;
+    *vp8x.first_mut()? |= 0x04;
+    match chunks.iter().position(|(id, _)| id == b"XMP ") {
+        Some(i) => chunks[i].1 = packet.to_vec(),
+        None => {
+            // After the image and its EXIF, before unknown chunks.
+            let known = |id: &[u8; 4]| {
+                matches!(id, b"VP8X" | b"ICCP" | b"ANIM" | b"ANMF" | b"ALPH" | b"VP8 " | b"VP8L" | b"EXIF")
+            };
+            let at = chunks.iter().rposition(|(id, _)| known(id)).map_or(chunks.len(), |i| i + 1);
+            chunks.insert(at, (*b"XMP ", packet.to_vec()));
+        }
+    }
+    let mut body = b"WEBP".to_vec();
+    for (id, data) in &chunks {
+        body.extend_from_slice(id);
+        body.extend_from_slice(&(data.len() as u32).to_le_bytes());
+        body.extend_from_slice(data);
+        if data.len() % 2 == 1 {
+            body.push(0);
+        }
+    }
+    let mut out = b"RIFF".to_vec();
+    out.extend_from_slice(&(body.len() as u32).to_le_bytes());
+    out.extend_from_slice(&body);
+    Some(out)
+}
+
+/// Width, height and alpha of a simple WebP's `VP8 ` or `VP8L` bitstream.
+fn webp_bitstream_size(id: &[u8; 4], d: &[u8]) -> Option<(u32, u32, bool)> {
+    match id {
+        b"VP8 " if d.get(3..6)? == [0x9D, 0x01, 0x2A] => {
+            let w = u16::from_le_bytes(d.get(6..8)?.try_into().ok()?) & 0x3FFF;
+            let h = u16::from_le_bytes(d.get(8..10)?.try_into().ok()?) & 0x3FFF;
+            Some((w as u32, h as u32, false))
+        }
+        b"VP8L" if *d.first()? == 0x2F => {
+            let bits = u32::from_le_bytes(d.get(1..5)?.try_into().ok()?);
+            Some(((bits & 0x3FFF) + 1, ((bits >> 14) & 0x3FFF) + 1, (bits >> 28) & 1 == 1))
+        }
+        _ => None,
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -602,7 +720,7 @@ mod tests {
         // SOF0: precision 8, height 240, width 320, 3 components.
         j.extend([0xFF, 0xC0, 0, 17, 8, 0, 240, 1, 64, 3, 1, 0x22, 0, 2, 0x11, 1, 3, 0x11, 1]);
         j.extend([0xFF, 0xDA, 0, 2, 1, 2, 3]);
-        let done = Head::Done(JpegHead { width: 320, height: 240, exif: Some(&e) });
+        let done = Head::Done(JpegHead { width: 320, height: 240, exif: Some(&e), xmp: None });
         assert_eq!(jpeg_head(&j), done);
         // Cut short: asks for exactly the bytes it needs next.
         let mut n = 0;

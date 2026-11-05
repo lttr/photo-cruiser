@@ -16,6 +16,7 @@ use crate::decode::{self, Format, Metadata};
 use crate::edit::{EDIT_VERSION, EditStack, Op};
 use crate::export::{self, Encoding};
 use crate::meta::{self, JpegSettings};
+use crate::rating;
 use crate::render::{self, RenderOpts};
 use crate::{Error, Rect, Result};
 use serde::{Deserialize, Serialize};
@@ -193,6 +194,8 @@ fn owned_backup(dir: &Path, f: &Found) -> Option<PathBuf> {
 pub fn save(photo: &Path, stack: &EditStack) -> Result<SaveReport> {
     let t0 = Instant::now();
     let (dir, name) = split(photo)?;
+    // The star belongs to the photo, not to one of its files: the new file gets it.
+    let star = || rating::read(photo).unwrap_or(0);
     let found = current(photo)?.0;
     let owned = found.as_ref().is_some_and(|f| owned_backup(&dir, f).is_some());
     let key = match &found {
@@ -219,8 +222,10 @@ pub fn save(photo: &Path, stack: &EditStack) -> Result<SaveReport> {
     }
     if stack.is_empty() {
         // Revert: the original goes back, no decode, no encode.
+        let star = star();
         let target = dir.join(&key);
         rename(&backup, &target)?;
+        rating::carry(&target, star);
         if key != name && trash::delete(photo).is_err() {
             std::fs::remove_file(photo).map_err(|e| Error::io(photo, e))?;
         }
@@ -231,6 +236,7 @@ pub fn save(photo: &Path, stack: &EditStack) -> Result<SaveReport> {
 
     let source = if owned { backup.clone() } else { photo.to_path_buf() };
     let target = target_for(&source)?;
+    let star = star();
     let out_name = match target.converted {
         true => format!("{}.jpg", Path::new(&key).file_stem().unwrap_or_default().to_string_lossy()),
         false => key.clone(),
@@ -283,6 +289,7 @@ pub fn save(photo: &Path, stack: &EditStack) -> Result<SaveReport> {
         return Err(e);
     }
     let _ = std::fs::File::options().write(true).open(&out).and_then(|f| f.set_modified(mtime));
+    rating::carry(&out, star);
     let edits = PhotoEdits {
         stack: stack.clone(),
         saved: Some(Saved { ops: stack.ops.clone() }),
@@ -498,6 +505,47 @@ fn fallback_path(dir: &Path, key: &str) -> Result<PathBuf> {
     let hash = Sha256::digest(abs.as_os_str().as_encoded_bytes());
     let hex: String = hash.iter().map(|b| format!("{b:02x}")).collect();
     Ok(data.join("photo-cruiser/edits").join(format!("{hex}.json")))
+}
+
+/// Run `change`, a change of the photo file that leaves its pixels alone (its star): the
+/// sidecar's record of the file is updated, so its edits don't count as stale.
+pub(crate) fn keep_stamp(photo: &Path, change: impl FnOnce() -> Result<()>) -> Result<()> {
+    let found = current(photo).ok().and_then(|(f, _)| f);
+    change()?;
+    if let Some(mut f) = found.filter(|f| f.edits.file.is_some()) {
+        f.edits.file = Some(stamp(photo)?);
+        let (dir, _) = split(photo)?;
+        write_sidecar(&dir, &f.key, Some(f.path), &f.edits)?;
+    }
+    Ok(())
+}
+
+/// Replace the photo file with `bytes`, keeping its permissions and modification time.
+/// A temporary file next to it is renamed over it, so it is never half written.
+pub(crate) fn replace_file(photo: &Path, bytes: &[u8]) -> Result<()> {
+    let (dir, name) = split(photo)?;
+    let old = std::fs::metadata(photo).map_err(|e| Error::io(photo, e))?;
+    let tmp = dir.join(format!(".{name}.pc-tmp"));
+    let written = (|| {
+        let _one = crate::source::one_at_a_time(&tmp);
+        std::fs::write(&tmp, bytes)?;
+        let _ = std::fs::set_permissions(&tmp, old.permissions());
+        if let Ok(mtime) = old.modified() {
+            std::fs::File::options().write(true).open(&tmp)?.set_modified(mtime)?;
+        }
+        std::fs::rename(&tmp, photo)
+    })();
+    written.map_err(|e| {
+        let _ = std::fs::remove_file(&tmp);
+        io_error(&tmp, &dir, e)
+    })
+}
+
+/// Write a small text file next to a photo (atomically). A folder that can't be written is
+/// [`Error::ReadOnly`].
+pub(crate) fn write_text(path: &Path, text: &str) -> Result<()> {
+    let dir = path.parent().unwrap_or(Path::new("."));
+    write_atomic(path, text).map_err(|e| io_error(path, dir, e))
 }
 
 /// A free `<path>~N` name, N from 1.

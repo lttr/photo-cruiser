@@ -69,8 +69,14 @@ pub fn commands(s: &State) -> Vec<Command> {
             false => cmd("Full screen", "F", Action::ToggleFullscreen),
         },
     ];
+    if !s.all.is_empty() {
+        let label = if s.starred_only { "Show all photos" } else { "Show starred only" };
+        c.push(cmd(label, "Ctrl+1", Action::ToggleStarredOnly));
+    }
     let n = s.len();
     if n > 0 {
+        let label = if s.star() == Some(true) { "Remove star" } else { "Star" };
+        c.push(cmd(label, "1", Action::ToggleStar));
         let (first, last) = (s.index == 0, s.index + 1 == n);
         if !first {
             c.push(cmd("First photo", "Home", Action::First));
@@ -98,7 +104,7 @@ pub fn commands(s: &State) -> Vec<Command> {
                         c.push(cmd("Zoom out", "-", Action::ZoomOut));
                         c.push(cmd("Zoom to fit", "Esc", Action::ZoomFit));
                     } else {
-                        c.push(cmd("Zoom to actual pixels", "1", Action::ZoomActual));
+                        c.push(cmd("Zoom to actual pixels", "Shift+1", Action::ZoomActual));
                     }
                 }
             }

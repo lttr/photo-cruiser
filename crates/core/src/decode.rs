@@ -318,7 +318,7 @@ fn retry_io<T>(mut read: impl FnMut() -> Result<T>) -> Result<T> {
 /// decoder reads it all, which takes as long as a full decode on a network share).
 /// `None` if it isn't a JPEG or is broken before the frame header (the caller falls back
 /// to the decoder, which reports why). Hold [`one_at_a_time`] while calling.
-fn read_jpeg_head(path: &Path) -> Result<Option<JpegHeadBytes>> {
+pub(crate) fn read_jpeg_head(path: &Path) -> Result<Option<JpegHeadBytes>> {
     use std::io::Read;
     let mut f = std::fs::File::open(path).map_err(|e| Error::io(path, e))?;
     let mut b = Vec::new();
@@ -337,10 +337,10 @@ fn read_jpeg_head(path: &Path) -> Result<Option<JpegHeadBytes>> {
 }
 
 /// Bytes [`crate::meta::jpeg_head`] parses to `Done`.
-struct JpegHeadBytes(Vec<u8>);
+pub(crate) struct JpegHeadBytes(Vec<u8>);
 
 impl JpegHeadBytes {
-    fn parsed(&self) -> crate::meta::JpegHead<'_> {
+    pub(crate) fn parsed(&self) -> crate::meta::JpegHead<'_> {
         match crate::meta::jpeg_head(&self.0) {
             crate::meta::Head::Done(h) => h,
             _ => unreachable!("checked by read_jpeg_head"),

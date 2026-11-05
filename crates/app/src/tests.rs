@@ -19,7 +19,7 @@ use crate::grid::Layout;
 use crate::message::Message;
 use crate::settings::Settings;
 use crate::state::{
-    Display, Effect, Mode, State, View, decode_job, io_job, original_job, size_job, thumb_job,
+    Display, Effect, Mode, State, View, decode_job, io_job, original_job, rating_job, size_job, thumb_job,
 };
 use iced::futures::channel::mpsc;
 use iced::keyboard::{Key, key::Named};
@@ -91,6 +91,10 @@ fn settle(s: &mut State) {
         while let Some(job) = s.next_original_job() {
             let r = original_job(&job);
             s.finish_original(job, r);
+        }
+        while let Some(job) = s.next_rating_job() {
+            let r = rating_job(&job.paths);
+            s.finish_ratings(&job, &r);
         }
         while let Some(path) = s.next_info_job() {
             let r = photo_cruiser_core::info::fields(&path).map_err(|e| e.to_string());
@@ -1119,6 +1123,150 @@ fn q_does_not_quit() {
     use crate::crop_overlay::key_message;
     let q = Key::Character("q".into());
     assert!(key_message(&q, &q, iced::keyboard::Modifiers::empty(), Modes::default()).is_none());
+}
+
+// ---------------------------------------------------------------------------------------
+// The star
+
+#[test]
+fn star_keys() {
+    use crate::crop_overlay::key_message;
+    use crate::crop_overlay::physical_message;
+    use iced::keyboard::Modifiers;
+    use iced::keyboard::key::{Code, Physical};
+    let act = |m: Option<Message>| match m {
+        Some(Message::Action(a)) => Some(a),
+        _ => None,
+    };
+    // By position: the `1` key types `+` on a Czech layout.
+    let one = Physical::Code(Code::Digit1);
+    let (photo, grid) = (Modes::default(), Modes { grid: true, ..Modes::default() });
+    let at = |mods, m| act(physical_message(&one, mods, m).expect("the 1 key is matched by position"));
+    assert_eq!(at(Modifiers::empty(), photo), Some(Action::ToggleStar));
+    assert_eq!(at(Modifiers::CTRL, grid), Some(Action::ToggleStarredOnly));
+    assert_eq!(at(Modifiers::SHIFT, photo), Some(Action::ZoomActual));
+    assert_eq!(at(Modifiers::SHIFT, grid), None);
+    assert_eq!(at(Modifiers::empty(), Modes { palette: true, ..photo }), None, "typed into the palette");
+    assert!(physical_message(&Physical::Code(Code::Digit2), Modifiers::empty(), photo).is_none());
+    // Without a known position: by what was typed.
+    let (c1, bang, p) = (Key::Character("1".into()), Key::Character("!".into()), Key::Character("p".into()));
+    let typed = |k, m, mods| act(key_message(k, m, mods, photo));
+    assert_eq!(typed(&c1, &c1, Modifiers::empty()), Some(Action::ToggleStar));
+    assert_eq!(typed(&c1, &c1, Modifiers::CTRL), Some(Action::ToggleStarredOnly));
+    assert_eq!(typed(&c1, &bang, Modifiers::SHIFT), Some(Action::ZoomActual));
+    assert_eq!(typed(&p, &p, Modifiers::SHIFT), None);
+}
+
+#[test]
+fn update_star_writes_the_file_and_moves_on() {
+    use photo_cruiser_core::rating;
+    let dir = tempfile::tempdir().unwrap();
+    copy_dir(&fixtures(), dir.path());
+    let mut s = opened(dir.path());
+    assert!(s.ratings_read(), "every photo's star is read at open");
+    assert_eq!(s.star(), Some(false));
+    s.apply(&Action::ShowPhoto { index: Some(1) }); // img2.jpg
+    settle(&mut s);
+    s.apply(&Action::ToggleStar);
+    assert_eq!((s.index, s.current_name()), (2, Some("img3-exif6.jpg")), "on to the next photo");
+    settle(&mut s);
+    let jpg = dir.path().join("img2.jpg");
+    assert_eq!(rating::read(&jpg).unwrap(), 1);
+    s.apply(&Action::Prev);
+    settle(&mut s);
+    assert_eq!(s.status(), "img2.jpg · 2 / 9 · starred");
+    assert_eq!(s.dump(None, None).star, Some(true));
+    // Again: the star goes, and on again to the next.
+    s.apply(&Action::ToggleStar);
+    settle(&mut s);
+    assert_eq!(rating::read(&jpg).unwrap(), 0);
+    assert_eq!(s.index, 2);
+    // HEIC: a sidecar. The last photo stays current.
+    s.apply(&Action::Goto { index: 4 });
+    s.apply(&Action::ToggleStar);
+    s.apply(&Action::Last);
+    s.apply(&Action::ToggleStar);
+    settle(&mut s);
+    assert_eq!(s.index, 8);
+    assert!(dir.path().join("img5.HEIC.xmp").is_file());
+    assert_eq!(rating::read(&dir.path().join("img5.HEIC")).unwrap(), 1);
+    assert!(s.errors.iter().all(|e| !e.contains("star")), "{:?}", s.errors);
+    // Read back by a new session.
+    let s = opened(dir.path());
+    let starred: Vec<_> = (0..s.len()).filter(|i| s.starred(*i)).collect();
+    assert_eq!(starred, [4, 8]);
+}
+
+#[test]
+fn update_starred_only() {
+    let dir = tempfile::tempdir().unwrap();
+    copy_dir(&fixtures(), dir.path());
+    for name in ["img2.jpg", "img5.HEIC", "img9.webp"] {
+        photo_cruiser_core::rating::star(&dir.path().join(name), true).unwrap();
+    }
+    let mut s = State::new(TEST_MAX_SIDE, Duration::ZERO);
+    s.names = true;
+    s.apply(&Action::Open { path: dir.path().join("img3-exif6.jpg") });
+    // Turned on before the stars are read: it waits for them.
+    s.apply(&Action::ToggleStarredOnly);
+    assert_eq!((s.starred_only, s.filtered, s.len()), (true, false, 9));
+    assert!(s.status().ends_with(" — reading stars…"), "{}", s.status());
+    settle(&mut s);
+    assert!(s.filtered);
+    let names: Vec<_> = s.folder.as_ref().unwrap().entries.iter().map(|e| e.name.as_str()).collect();
+    assert_eq!(names, ["img2.jpg", "img5.HEIC", "img9.webp"]);
+    // img3 isn't starred: the next starred one is current.
+    assert_eq!(s.current_name(), Some("img5.HEIC"));
+    assert_eq!(s.status(), "img5.HEIC · 2 / 3 starred");
+    assert!(s.picture().is_some(), "the photo shows");
+    // Unstarred, it stays listed until the filter is turned on again.
+    s.apply(&Action::ToggleStar);
+    settle(&mut s);
+    s.apply(&Action::Prev);
+    assert_eq!(s.status(), "img5.HEIC · 2 / 3 starred · star removed");
+    s.apply(&Action::ToggleStarredOnly);
+    settle(&mut s);
+    assert_eq!((s.len(), s.current_name()), (9, Some("img5.HEIC")), "all again, same photo");
+    s.apply(&Action::ToggleStarredOnly);
+    settle(&mut s);
+    assert_eq!((s.len(), s.current_name()), (2, Some("img9.webp")));
+    // Opening a folder shows all of it.
+    s.apply(&Action::Open { path: dir.path().into() });
+    settle(&mut s);
+    assert_eq!((s.len(), s.starred_only), (9, false));
+    assert!(s.errors.is_empty(), "{:?}", s.errors);
+}
+
+#[test]
+fn update_star_follows_a_converted_photo() {
+    let dir = tempfile::tempdir().unwrap();
+    copy_dir(&fixtures(), dir.path());
+    let mut s = opened(dir.path());
+    s.apply(&Action::ShowPhoto { index: Some(4) }); // img5.HEIC
+    settle(&mut s);
+    s.apply(&Action::SetCrop(Rect::new(0.0, 0.0, 100.0, 100.0)));
+    s.apply(&Action::Save);
+    s.apply(&Action::ToggleStar);
+    s.apply(&Action::Prev);
+    settle(&mut s);
+    assert_eq!((s.current_name(), s.star()), (Some("img5.jpg"), Some(true)));
+    assert_eq!(photo_cruiser_core::rating::read(&dir.path().join("img5.jpg")).unwrap(), 1);
+    assert!(s.errors.is_empty(), "{:?}", s.errors);
+}
+
+#[test]
+fn star_in_the_grid_and_photo_view() {
+    let mut h = grid_harness();
+    h.until("grid", |h| h.status() == "img1.png · 1 / 9");
+    h.keys(Key::Character("1".into()), 1);
+    h.until("next photo", |h| h.status().starts_with("img2.jpg · 2 / 9"));
+    h.keys(Key::Named(Named::ArrowLeft), 1);
+    h.until("starred", |h| h.status().starts_with("img1.png · 1 / 9 · starred"));
+    h.keys(Key::Named(Named::Enter), 1);
+    h.until("photo with its star", |h| h.bounds("photo").is_some() && h.bounds("star").is_some());
+    h.keys(Key::Character("1".into()), 1);
+    h.keys(Key::Named(Named::ArrowLeft), 1);
+    h.until("unstarred", |h| h.status().starts_with("img1.png · 1 / 9") && h.bounds("star").is_none());
 }
 
 // ---------------------------------------------------------------------------------------
@@ -2232,9 +2380,10 @@ fn zoom_keys() {
     assert_eq!(on(c("+"), photo), Some(Action::ZoomIn));
     assert_eq!(on(c("="), photo), Some(Action::ZoomIn));
     assert_eq!(on(c("-"), photo), Some(Action::ZoomOut));
-    assert_eq!(on(c("1"), photo), Some(Action::ZoomActual));
+    assert_eq!(on(c("!"), photo), Some(Action::ZoomActual), "typed `!`: Shift+1 on US");
+    assert_eq!(on(c("1"), photo), Some(Action::ToggleStar));
     for m in [Modes { grid: true, ..photo }, Modes { crop: true, ..photo }] {
-        assert!(on(c("+"), m).is_none() && on(c("-"), m).is_none() && on(c("1"), m).is_none());
+        assert!(on(c("+"), m).is_none() && on(c("-"), m).is_none() && on(c("!"), m).is_none());
     }
     let esc = Key::Named(Named::Escape);
     let zoomed = Modes { zoomed: true, ..photo };

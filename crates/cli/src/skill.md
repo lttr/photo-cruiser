@@ -15,7 +15,7 @@ keeps its untouched original in a backup, so any save can be reverted.
 - Pass `--json` to every command except `app` and parse stdout. Field names are stable. Errors go to
   stderr; with `--json`, stdout also gets `{"error": {"kind": ..., "message": ...}}`.
 - Exit codes: 0 ok, 1 usage, 2 I/O, 3 decode or invalid input. The error kinds are listed below.
-- Change photos only through `pcr save` and `pcr revert`. Never write, move or delete anything in
+- Change photos only through `pcr save`, `pcr revert` and `pcr star`. Never write, move or delete anything in
   `.photo-cruiser/` yourself, and never overwrite a photo with another tool: the backups and sidecars
   have to stay consistent.
 - Preview before saving many photos: `pcr render ... --max-side 800 -o /tmp/...` writes a small PNG or
@@ -37,6 +37,10 @@ keeps its untouched original in a backup, so any save can be reverted.
   the rendered result under the photo's name. Later saves render from that original again, so quality
   never degrades and edits never stack up: each save replaces the previous result.
 - `pcr revert` moves the original back, byte for byte, and deletes the sidecar.
+- The star (a photo worth keeping) is XMP `xmp:Rating` 1, unstarred 0. JPEG and WebP carry it in the
+  file (only the XMP packet changes, mtime kept); other formats in a `<photo>.xmp` sidecar next to it.
+  Save and revert carry it over to the new file. `pcr list DIR --starred` lists the starred photos,
+  `pcr info` shows `star` and `rating`.
 - Saving keeps the format for JPEG (original quantisation tables, raised to at least quality 95), PNG
   and WebP. AVIF, HEIC, BMP and GIF photos become JPEG: `IMG.HEIC` turns into `IMG.jpg`, the `path` in
   the save report is the new name, and the sidecar and backup keep the original name. Save refuses

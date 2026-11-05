@@ -21,8 +21,8 @@ pub enum Error {
     /// A crop with no pixels left after clamping to the image.
     #[error("crop {},{},{},{} is empty after clamping to the image", .0.x, .0.y, .0.w, .0.h)]
     EmptyCrop(Rect),
-    /// The photo's folder can't be written (Save needs it).
-    #[error("{path}: the folder is read-only, the photo can't be saved")]
+    /// The photo's folder can't be written (Save and the star need it).
+    #[error("{path}: the folder is read-only, nothing can be written there")]
     ReadOnly { path: PathBuf },
     /// Save would convert to a file name another photo already has.
     #[error("{path}: already exists, the photo can't be saved under that name")]

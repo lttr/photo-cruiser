@@ -37,6 +37,8 @@ pub enum Message {
     Thumb(ThumbJob, Loaded),
     /// Photo sizes probed (`None`: unreadable, or the probe thread died).
     Sizes(SizeJob, Vec<Option<(u32, u32)>>),
+    /// Ratings read ([`crate::state::rating_job`]).
+    Ratings(crate::state::RatingJob, Vec<i8>),
     /// The image / grid area has a new size (reported by the overlay when it draws).
     Body(iced::Size),
     /// The grid was scrolled to this vertical offset.

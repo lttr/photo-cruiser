@@ -18,6 +18,7 @@ pub mod justified;
 pub mod levels;
 pub mod loader;
 pub mod meta;
+pub mod rating;
 pub mod render;
 pub mod source;
 pub mod store;

@@ -8,7 +8,8 @@
 use crate::action::Action;
 use crate::menu;
 use crate::message::Message;
-use iced::keyboard::{self, Key, key::Named};
+use iced::keyboard::key::{Code, Named, Physical};
+use iced::keyboard::{self, Key};
 use iced::mouse::{self, Button, Cursor, Interaction};
 use iced::widget::canvas::{self, Event, Frame, Geometry, Stroke};
 use iced::{Color, Rectangle, Renderer, Theme};
@@ -156,6 +157,8 @@ pub const SHORTCUTS: &[(&str, &str)] = &[
     ("Alt+↓  Alt+↑", "Tool: slider down / up in fine steps (also Alt+J, Alt+K)"),
     ("Home  End   g  G", "First / last photo"),
     ("Enter", "Grid: open the photo; crop: apply; tool: done"),
+    ("1", "Star on / off (a photo to keep), then the next photo"),
+    ("Ctrl+1", "Only the starred photos / all photos"),
     ("Ctrl+K", "Find an action by name"),
     ("Ctrl+O", "Open folder"),
     ("C", "Crop on / off"),
@@ -172,7 +175,7 @@ pub const SHORTCUTS: &[(&str, &str)] = &[
     ("X", "Crop: portrait / landscape"),
     ("O  \\  (hold)", "Show the original photo, without edits"),
     ("+  -   wheel", "Zoom in / out (drag to move around)"),
-    ("1   double-click", "Zoom: whole photo / actual pixels"),
+    ("Shift+1   double-click", "Zoom: whole photo / actual pixels"),
     ("F  F11", "Full screen on / off"),
     ("N", "File names on / off"),
     ("I", "Info panel on / off: histogram and camera settings"),
@@ -189,6 +192,29 @@ pub const SHORTCUTS: &[(&str, &str)] = &[
 /// `key` ignores Shift, `modified` doesn't (Shift+/ is `/` and `?`): symbols like `?` are
 /// matched on `modified`. `Esc` closes the menu or panel, then leaves crop mode, then full
 /// screen, then goes back from the photo to the grid.
+/// Keys matched by where they are, not by what they type: the `1` key is the one left of
+/// `2` on every layout (on a Czech one it types `+`). `None`: not such a key, see
+/// [`key_message`].
+pub fn physical_message(physical: &Physical, mods: keyboard::Modifiers, m: Modes) -> Option<Option<Message>> {
+    match physical {
+        Physical::Code(Code::Digit1) => Some(if m.palette || m.input { None } else { one_key(mods, m) }),
+        _ => None,
+    }
+}
+
+/// The `1` key: star (`1`), only the starred photos (`Ctrl+1`), actual pixels (`Shift+1`).
+fn one_key(mods: keyboard::Modifiers, m: Modes) -> Option<Message> {
+    if mods.alt() || mods.logo() {
+        return None;
+    }
+    match (mods.control(), mods.shift()) {
+        (true, false) => Some(Action::ToggleStarredOnly.into()),
+        (false, true) if !m.grid && !m.crop => Some(Action::ZoomActual.into()),
+        (false, false) => Some(Action::ToggleStar.into()),
+        _ => None,
+    }
+}
+
 pub fn key_message(key: &Key, modified: &Key, mods: keyboard::Modifiers, m: Modes) -> Option<Message> {
     let plain = !mods.control() && !mods.alt() && !mods.logo();
     let (down, up) = if m.grid { (Action::Down, Action::Up) } else { (Action::Next, Action::Prev) };
@@ -229,6 +255,14 @@ pub fn key_message(key: &Key, modified: &Key, mods: keyboard::Modifiers, m: Mode
             return Some(Action::StepAdjust { steps, fine: mods.alt() }.into());
         }
     }
+    // The `1` key, when where it is isn't known (tests): `1`, or `!` (Shift+1 on US).
+    if let Key::Character(c) = modified {
+        match c.as_str() {
+            "1" => return one_key(mods, m),
+            "!" => return one_key(mods | keyboard::Modifiers::SHIFT, m),
+            _ => {}
+        }
+    }
     // Symbols and vim keys (g vs G) by what was typed.
     if let (true, Key::Character(c)) = (plain, modified) {
         let action = match c.as_str() {
@@ -247,7 +281,6 @@ pub fn key_message(key: &Key, modified: &Key, mods: keyboard::Modifiers, m: Mode
             "\\" if !m.grid && !m.crop => Some(Action::ShowOriginal { on: true }),
             "+" | "=" if !m.grid && !m.crop => Some(Action::ZoomIn),
             "-" if !m.grid && !m.crop => Some(Action::ZoomOut),
-            "1" if !m.grid && !m.crop => Some(Action::ZoomActual),
             _ => None,
         };
         if let Some(action) = action {
@@ -339,8 +372,16 @@ impl canvas::Program<Message> for Overlay {
             Event::Keyboard(keyboard::Event::KeyPressed { repeat: true, .. }) if self.modes.original => {
                 return None;
             }
-            Event::Keyboard(keyboard::Event::KeyPressed { key, modified_key, modifiers, .. }) => {
-                return key_message(key, modified_key, *modifiers, self.modes).map(canvas::Action::publish);
+            Event::Keyboard(keyboard::Event::KeyPressed {
+                key,
+                modified_key,
+                physical_key,
+                modifiers,
+                ..
+            }) => {
+                let msg = physical_message(physical_key, *modifiers, self.modes)
+                    .unwrap_or_else(|| key_message(key, modified_key, *modifiers, self.modes));
+                return msg.map(canvas::Action::publish);
             }
             Event::Keyboard(keyboard::Event::KeyReleased { key, modified_key, .. }) => {
                 return key_release_message(key, modified_key, self.modes).map(canvas::Action::publish);
