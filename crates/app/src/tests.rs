@@ -2140,3 +2140,132 @@ fn info_panel_shows_histogram_and_fields() {
     h.keys(Key::Character("i".into()), 1);
     assert!(h.bounds("info-panel").is_none() && h.bounds("edits-panel").is_some());
 }
+
+// ---------------------------------------------------------------------------------------
+// Zoom
+
+#[test]
+fn update_zoom_steps_clamps_and_resets() {
+    use photo_cruiser_core::zoom::STEP;
+    let mut s = opened(&fixtures()); // img1.png, 320×240
+    s.body = Some(Size::new(1000.0, 700.0));
+    let set = |s: &mut State, scale: f32| s.apply(&Action::SetZoom { scale, x: 0.5, y: 0.5 });
+    s.apply(&Action::ZoomIn);
+    assert!(s.zoom.is_fit(), "not in the grid");
+    s.apply(&Action::ShowPhoto { index: None });
+    settle(&mut s);
+    s.apply(&Action::ZoomIn);
+    assert!((s.zoom.scale - STEP).abs() < 1e-4, "{:?}", s.zoom);
+    // Fit is 700 / 240 = 2.92 view px per photo px.
+    assert_eq!(s.status(), "img1.png · 1 / 9 · zoom 412%");
+    s.apply(&Action::ZoomOut);
+    assert!(s.zoom.is_fit());
+    assert_eq!(s.status(), "img1.png · 1 / 9");
+    // At most 8 view px per photo px, or 4× fit; the centre kept off the edges.
+    s.apply(&Action::SetZoom { scale: 100.0, x: 0.0, y: 0.0 });
+    let z = s.zoom;
+    assert_eq!(z.scale, 4.0, "{z:?}");
+    assert!(z.x > 0.0 && z.y > 0.0 && (z.y - 1.0 / (2.0 * z.scale)).abs() < 1e-3, "{z:?}");
+    s.apply(&Action::ZoomActual);
+    assert!(s.zoom.is_fit(), "zoomed: back to fit");
+    s.apply(&Action::ZoomActual);
+    assert!(s.zoom.is_fit(), "smaller than the view: fit already shows it bigger than 1:1");
+
+    // A tool and its edits keep the zoom; turning, another photo, crop and the grid don't.
+    set(&mut s, 2.0);
+    s.apply(&Action::OpenTool { tool: photo_cruiser_core::Tool::Exposure });
+    settle(&mut s);
+    s.apply(&Action::SetAdjust { value: 1.0 });
+    s.apply(&Action::CloseTool);
+    assert_eq!(s.zoom.scale, 2.0);
+    s.apply(&Action::RotateRight);
+    assert!(s.zoom.is_fit(), "turned");
+    set(&mut s, 2.0);
+    s.apply(&Action::Next);
+    assert!(s.zoom.is_fit(), "next photo");
+    settle(&mut s);
+    set(&mut s, 2.0);
+    s.apply(&Action::ToggleCrop);
+    assert!(s.zoom.is_fit(), "crop");
+    s.apply(&Action::ZoomIn);
+    assert!(s.zoom.is_fit(), "no zoom while cropping");
+    s.apply(&Action::ExitCrop);
+    set(&mut s, 2.0);
+    s.apply(&Action::ZoomFit);
+    assert!(s.zoom.is_fit());
+    set(&mut s, 2.0);
+    s.apply(&Action::ShowGrid);
+    assert!(s.zoom.is_fit(), "grid");
+    assert!(s.errors.is_empty(), "{:?}", s.errors);
+}
+
+#[test]
+fn zoom_keys() {
+    use crate::crop_overlay::key_message;
+    use iced::keyboard::Modifiers;
+    let photo = Modes::default();
+    let on = |k: Key, m| match key_message(&k, &k, Modifiers::empty(), m) {
+        Some(Message::Action(a)) => Some(a),
+        _ => None,
+    };
+    let c = |s: &str| Key::Character(s.into());
+    assert_eq!(on(c("+"), photo), Some(Action::ZoomIn));
+    assert_eq!(on(c("="), photo), Some(Action::ZoomIn));
+    assert_eq!(on(c("-"), photo), Some(Action::ZoomOut));
+    assert_eq!(on(c("1"), photo), Some(Action::ZoomActual));
+    for m in [Modes { grid: true, ..photo }, Modes { crop: true, ..photo }] {
+        assert!(on(c("+"), m).is_none() && on(c("-"), m).is_none() && on(c("1"), m).is_none());
+    }
+    let esc = Key::Named(Named::Escape);
+    let zoomed = Modes { zoomed: true, ..photo };
+    assert_eq!(on(esc.clone(), zoomed), Some(Action::ZoomFit));
+    assert_eq!(on(esc.clone(), Modes { fullscreen: true, ..zoomed }), Some(Action::ZoomFit));
+    assert_eq!(on(esc.clone(), Modes { tool: true, ..zoomed }), Some(Action::CancelTool));
+    assert_eq!(on(esc, photo), Some(Action::ShowGrid));
+}
+
+/// The wheel zooms at the pointer, a drag moves the photo, a double-click shows it whole.
+#[test]
+fn zoom_wheel_drag_and_double_click() {
+    use iced::mouse::{Event as MouseEvent, ScrollDelta};
+    let mut h = harness(); // img1.png, a gradient
+    h.until("img1 shown", |h| h.bounds("photo").is_some());
+    let fit = h.fit((320, 240));
+    let at = |fx: f32, fy: f32| Point::new(fit.x + fx * fit.w, fit.y + fy * fit.h);
+    let before = h.snapshot("fit");
+    let wheel = |h: &mut Harness<_>, p: Point, y: f32| {
+        let messages: Vec<Message> = {
+            let mut sim = h.sim();
+            sim.point_at(p);
+            sim.simulate([iced::Event::Mouse(MouseEvent::WheelScrolled {
+                delta: ScrollDelta::Lines { x: 0.0, y },
+            })]);
+            sim.into_messages().collect()
+        };
+        assert_eq!(messages.len(), 1, "{messages:?}");
+        h.emu.update(&h.prog, messages[0].clone());
+    };
+    // Two notches at (0.3, 0.6): ×2, and that point stays where it was.
+    let p = at(0.3, 0.6);
+    wheel(&mut h, p, 2.0);
+    assert!(h.status().contains("· zoom "), "{}", h.status());
+    let zoomed = h.snapshot("zoomed");
+    assert!((mean(&zoomed, p) - mean(&before, p)).abs() < 3.0, "the point under the pointer stays");
+    let q = at(0.9, 0.6);
+    assert!((mean(&zoomed, q) - mean(&before, q)).abs() > 10.0, "elsewhere it shows another part");
+
+    // Drag 200 px to the left: what was there is now under the pointer's end.
+    let b = h.bounds("body").unwrap();
+    let (from, to) =
+        (Point::new(b.center_x() + 100.0, b.center_y()), Point::new(b.center_x() - 100.0, b.center_y()));
+    h.drag(from, to);
+    let dragged = h.snapshot("dragged");
+    assert!((mean(&dragged, to) - mean(&zoomed, from)).abs() < 3.0, "the photo moved with the pointer");
+
+    // Double-click: the whole photo again.
+    let target = Some(Target::Point(b.center()));
+    h.run(Interaction::Mouse(Mouse::Click { button: Button::Left, target: target.clone() }));
+    h.run(Interaction::Mouse(Mouse::Click { button: Button::Left, target }));
+    assert_eq!(h.status(), "img1.png · 1 / 9");
+    assert!((mean(&h.snapshot("whole"), q) - mean(&before, q)).abs() < 3.0);
+}

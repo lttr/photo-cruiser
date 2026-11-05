@@ -20,7 +20,7 @@ webp = { version = "0.3.1", default-features = false }
 sha2 = "0.10"
 trash = "5.2"
 clap = { version = "4.5", features = ["derive"] }
-iced = { version = "0.14", default-features = false, features = ["wgpu", "tiny-skia", "crisp", "web-colors", "thread-pool", "x11", "wayland", "canvas", "image-without-codecs"] }
+iced = { version = "0.14", default-features = false, features = ["wgpu", "tiny-skia", "crisp", "web-colors", "thread-pool", "x11", "wayland", "canvas", "image-without-codecs", "advanced"] }
 iced_test = "0.14"
 # Only for `image::allocate` (iced re-exports it only with its `image` feature, which pulls all codecs).
 iced_runtime = "0.14"

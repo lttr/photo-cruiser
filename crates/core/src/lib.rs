@@ -20,6 +20,7 @@ pub mod meta;
 pub mod render;
 pub mod source;
 pub mod store;
+pub mod zoom;
 
 pub use adjust::Tool;
 pub use catalog::{Entry, Folder};
@@ -27,3 +28,4 @@ pub use decode::{Decoded, Format, Probe, decode, embedded_preview, probe, thumbn
 pub use edit::{EditStack, History, Op};
 pub use error::{Error, Result};
 pub use geom::{Point, Rect, Size};
+pub use zoom::Zoom;

@@ -33,6 +33,7 @@ use photo_cruiser_core::geom::PixelRect;
 use photo_cruiser_core::info::{Field, Histogram};
 use photo_cruiser_core::loader::{Job, Kind, Loader, SizeJob, Sizes, ThumbJob, Thumbs};
 use photo_cruiser_core::store::{self, PhotoEdits, SaveReport};
+use photo_cruiser_core::zoom::{self, Zoom};
 use photo_cruiser_core::{EditStack, Error, Folder, History, Op, Point, Rect, Size};
 use serde::Serialize;
 use std::collections::{HashMap, VecDeque};
@@ -414,6 +415,8 @@ pub struct State {
     pub preview: Option<Preview>,
     /// The original is held to be seen (`O`, `\`, the footer's Original button).
     pub original: bool,
+    /// How far the photo view is zoomed in ([`Zoom::FIT`]: the whole photo).
+    pub zoom: Zoom,
     /// The current photo's original file, decoded (or decoding) for that. Fetched ahead
     /// for an edited photo, so holding the key shows it at once.
     original_image: Option<Original>,
@@ -473,6 +476,7 @@ impl State {
             tool: None,
             preview: None,
             original: false,
+            zoom: Zoom::FIT,
             original_image: None,
             clock: None,
             top: None,
@@ -645,7 +649,12 @@ impl State {
         if !matches!(action, Action::ShowOriginal { .. }) {
             self.original = false;
         }
+        let before = self.zoom_key();
         let effect = self.act(action);
+        // Another photo, crop mode or a new shape: the whole photo again.
+        if self.zoom_key() != before {
+            self.zoom = Zoom::FIT;
+        }
         self.sync_display();
         self.sync_tool();
         self.sync_under();
@@ -821,6 +830,21 @@ impl State {
                 Some(p) => self.set_adjust(p.tool.neutral()),
                 None => self.error("neutral_adjust: no tool is open".into()),
             },
+            Action::ZoomIn | Action::ZoomOut | Action::ZoomFit | Action::ZoomActual => {
+                let Some((bounds, source)) = self.zoom_geometry() else { return Effect::None };
+                let c = bounds.center();
+                self.zoom = match action {
+                    Action::ZoomIn => self.zoom.by(bounds, source, zoom::STEP, c),
+                    Action::ZoomOut => self.zoom.by(bounds, source, 1.0 / zoom::STEP, c),
+                    Action::ZoomActual => self.zoom.toggle_actual(bounds, source, c),
+                    _ => Zoom::FIT,
+                };
+            }
+            Action::SetZoom { scale, x, y } => {
+                if let Some((bounds, source)) = self.zoom_geometry() {
+                    self.zoom = Zoom { scale: *scale, x: *x, y: *y }.clamped(bounds, source);
+                }
+            }
             Action::CloseTool => self.close_tool(),
             Action::ShowOriginal { on } => {
                 self.original =
@@ -1468,6 +1492,10 @@ impl State {
         if index != self.index {
             self.leave();
             self.notice = None;
+            // Coming back to a photo that failed tries it again (a network share may be back).
+            if self.loader.get(index).is_some_and(|r| r.is_err()) {
+                self.loader.invalidate(index);
+            }
         }
         let now = Instant::now();
         self.selected_at = [Some(now), self.selected_at[0]];
@@ -1538,6 +1566,26 @@ impl State {
                 self.error(msg);
             }
         }
+    }
+
+    /// What zoom depends on: the photo, the view, crop mode and the photo's shape.
+    fn zoom_key(&self) -> (usize, View, Mode, EditStack) {
+        (self.index, self.view, self.mode, self.display_stack(self.index).geometry())
+    }
+
+    /// The image area (from 0, 0) and the current photo's source size, if zoom applies: one
+    /// photo shows, not in crop mode.
+    fn zoom_geometry(&self) -> Option<(Rect, Size)> {
+        let ok = self.view == View::Photo && self.mode == Mode::Browse;
+        let source = self.picture().map(Picture::source_size).filter(|_| ok)?;
+        let body = self.body_size();
+        Some((Rect::new(0.0, 0.0, body.width, body.height), source))
+    }
+
+    /// While zoomed in: how big the photo shows, in percent of its actual pixels.
+    pub fn zoom_percent(&self) -> Option<f32> {
+        let (bounds, source) = self.zoom_geometry().filter(|_| !self.zoom.is_fit())?;
+        Some(self.zoom.map(bounds, source).scale * 100.0)
     }
 
     /// Source size of the current photo (zero without one).
@@ -1669,6 +1717,9 @@ impl State {
         if self.original_handle().is_some() {
             s += " · original, without edits";
         }
+        if let Some(pct) = self.zoom_percent() {
+            s += &format!(" · zoom {pct:.0}%");
+        }
         if let Some(px) = self.crop_pixels() {
             s += &format!(" · crop {px}");
         } else if self.mode == Mode::Crop {
@@ -1742,6 +1793,7 @@ impl State {
             preview: self.preview.as_ref().is_some_and(|p| p.index == self.index),
             underlay: self.underlay().is_some(),
             original: self.original_handle().is_some(),
+            zoom: self.zoom,
             dirty: self.dirty(),
             saved: self
                 .current_path()
@@ -1816,6 +1868,8 @@ pub struct Dump {
     pub underlay: bool,
     /// The original shows, without edits (held: `show_original`).
     pub original: bool,
+    /// How far the photo is zoomed in (scale 1: the whole photo).
+    pub zoom: Zoom,
     /// Its edits differ from what its file was saved with.
     pub dirty: bool,
     /// The stack its file was saved with (`null`: never saved).

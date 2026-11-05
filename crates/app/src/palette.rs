@@ -90,7 +90,18 @@ pub fn commands(s: &State) -> Vec<Command> {
                     }
                 }
             }
-            View::Photo => c.push(cmd("All photos", "Esc", Action::ShowGrid)),
+            View::Photo => {
+                c.push(cmd("All photos", "Esc", Action::ShowGrid));
+                if s.mode == Mode::Browse && s.picture().is_some() {
+                    c.push(cmd("Zoom in", "+", Action::ZoomIn));
+                    if !s.zoom.is_fit() {
+                        c.push(cmd("Zoom out", "-", Action::ZoomOut));
+                        c.push(cmd("Zoom to fit", "Esc", Action::ZoomFit));
+                    } else {
+                        c.push(cmd("Zoom to actual pixels", "1", Action::ZoomActual));
+                    }
+                }
+            }
         }
         edits(s, &mut c);
     }

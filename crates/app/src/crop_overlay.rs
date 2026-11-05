@@ -2,7 +2,8 @@
 //! app's input layer: keys and mouse events become [`Message`]s here (a widget, not an
 //! `event::listen` subscription, so `iced_test` can drive it). The crop state machine
 //! itself is `photo_cruiser_core::crop::CropTool`, in source pixels. It also reports the
-//! area's size, which the grid layout needs ([`Message::Body`]).
+//! area's size, which the grid layout needs ([`Message::Body`]). Outside crop mode the mouse
+//! zooms the photo: the wheel, a double-click (actual pixels) and dragging it around.
 
 use crate::action::Action;
 use crate::menu;
@@ -13,7 +14,9 @@ use iced::widget::canvas::{self, Event, Frame, Geometry, Stroke};
 use iced::{Color, Rectangle, Renderer, Theme};
 use photo_cruiser_core::crop::{Hit, MouseKind, hit};
 use photo_cruiser_core::geom::ViewMap;
+use photo_cruiser_core::zoom::{self, Zoom};
 use photo_cruiser_core::{Point, Rect, Size, Tool};
+use std::time::{Duration, Instant};
 
 /// Grab distance around the selection edges, in logical window pixels.
 pub const EDGE: f32 = 8.0;
@@ -39,6 +42,8 @@ pub struct Modes {
     pub original: bool,
     /// The grid shows (not a single photo).
     pub grid: bool,
+    /// The photo is zoomed in (`Esc` shows it whole first).
+    pub zoomed: bool,
 }
 
 /// What the overlay needs to know; rebuilt on every `view`.
@@ -48,6 +53,7 @@ pub struct Overlay {
     pub selection: Option<Rect>,
     /// Source size of the shown image, if any.
     pub image: Option<Size>,
+    pub zoom: Zoom,
     /// The area's size as the state knows it; a different one is reported.
     pub body: Option<iced::Size>,
 }
@@ -59,6 +65,60 @@ fn rect(r: Rectangle) -> Rect {
 impl Overlay {
     fn active(&self) -> bool {
         self.modes.crop && !self.modes.grid
+    }
+
+    /// The mouse zooms: one photo shows, not being cropped.
+    fn zoomable(&self) -> bool {
+        !self.modes.crop && !self.modes.grid && self.image.is_some()
+    }
+
+    /// The mouse over the photo outside crop mode: wheel, double-click, drag.
+    fn zoom_mouse(
+        &self,
+        state: &mut OverlayState,
+        event: &Event,
+        bounds: Rectangle,
+        cursor: Cursor,
+    ) -> Option<canvas::Action<Message>> {
+        let (view, img) = (Rect::with_size(Size::new(bounds.width, bounds.height)), self.image?);
+        let local = |p: iced::Point| Point::new(p.x - bounds.x, p.y - bounds.y);
+        let zoom = match event {
+            Event::Mouse(mouse::Event::WheelScrolled { delta }) => {
+                let at = local(cursor.position_over(bounds)?);
+                let steps = match delta {
+                    mouse::ScrollDelta::Lines { y, .. } => *y,
+                    mouse::ScrollDelta::Pixels { y, .. } => *y / WHEEL_PIXELS,
+                };
+                // Several wheel events before the view caught up: go on from the last one.
+                let from = state.wheel.filter(|(seen, _)| *seen == self.zoom).map_or(self.zoom, |(_, z)| z);
+                let z = from.by(view, img, zoom::STEP.powf(steps), at);
+                state.wheel = Some((self.zoom, z));
+                z
+            }
+            Event::Mouse(mouse::Event::ButtonPressed(Button::Left)) => {
+                let pos = cursor.position_over(bounds)?;
+                let double = state.click.is_some_and(|(t, p)| t.elapsed() < DOUBLE && p.distance(pos) < EDGE);
+                // A third press starts over.
+                state.click = if double { None } else { Some((Instant::now(), pos)) };
+                if !double {
+                    state.drag = (!self.zoom.is_fit()).then_some((pos, self.zoom));
+                    return state.drag.map(|_| canvas::Action::capture());
+                }
+                state.drag = None;
+                self.zoom.toggle_actual(view, img, local(pos))
+            }
+            Event::Mouse(mouse::Event::CursorMoved { position }) => {
+                let (from, z) = state.drag?;
+                z.pan(view, img, position.x - from.x, position.y - from.y)
+            }
+            Event::Mouse(mouse::Event::ButtonReleased(Button::Left)) => {
+                state.drag.take()?;
+                return Some(canvas::Action::capture());
+            }
+            _ => return None,
+        };
+        let action = Action::SetZoom { scale: zoom.scale, x: zoom.x, y: zoom.y };
+        Some(canvas::Action::publish(action.into()).and_capture())
     }
 
     fn map(&self, bounds: Rectangle) -> Option<ViewMap> {
@@ -76,7 +136,18 @@ impl Overlay {
 pub struct OverlayState {
     pressed: bool,
     last: iced::Point,
+    /// Dragging the zoomed photo: where the press was and the zoom then.
+    drag: Option<(iced::Point, Zoom)>,
+    /// The last press, to see a double-click.
+    click: Option<(Instant, iced::Point)>,
+    /// The zoom shown at the last wheel event, and the one it asked for.
+    wheel: Option<(Zoom, Zoom)>,
 }
+
+/// Two presses closer than this in time (and [`EDGE`] in space) are a double-click.
+const DOUBLE: Duration = Duration::from_millis(400);
+/// Touchpad scrolling: this many pixels are one zoom step.
+const WHEEL_PIXELS: f32 = 60.0;
 
 /// Every shortcut, for the shortcuts panel. Keep in sync with [`key_message`].
 pub const SHORTCUTS: &[(&str, &str)] = &[
@@ -100,6 +171,8 @@ pub const SHORTCUTS: &[(&str, &str)] = &[
     ("R", "Crop: next aspect ratio (original, free, 1:1, 3:2, …)"),
     ("X", "Crop: portrait / landscape"),
     ("O  \\  (hold)", "Show the original photo, without edits"),
+    ("+  -   wheel", "Zoom in / out (drag to move around)"),
+    ("1   double-click", "Zoom: whole photo / actual pixels"),
     ("F  F11", "Full screen on / off"),
     ("N", "File names on / off"),
     ("I", "Info panel on / off: histogram and camera settings"),
@@ -107,7 +180,10 @@ pub const SHORTCUTS: &[(&str, &str)] = &[
     ("Z", "Grid: small / big thumbnails / justified"),
     ("F10", "Menu: ↑ ↓ Home End to move, Enter to pick"),
     ("?  F1", "Keyboard shortcuts"),
-    ("Esc", "Close menu, cancel the tool, drop the crop selection, leave full screen, back to the grid"),
+    (
+        "Esc",
+        "Close menu, cancel the tool, drop the crop selection, zoom out, leave full screen, back to the grid",
+    ),
 ];
 
 /// `key` ignores Shift, `modified` doesn't (Shift+/ is `/` and `?`): symbols like `?` are
@@ -169,6 +245,9 @@ pub fn key_message(key: &Key, modified: &Key, mods: keyboard::Modifiers, m: Mode
             "E" => Some(Action::ToggleEditsPanel),
             "A" if m.tool => Some(Action::AutoAdjust),
             "\\" if !m.grid && !m.crop => Some(Action::ShowOriginal { on: true }),
+            "+" | "=" if !m.grid && !m.crop => Some(Action::ZoomIn),
+            "-" if !m.grid && !m.crop => Some(Action::ZoomOut),
+            "1" if !m.grid && !m.crop => Some(Action::ZoomActual),
             _ => None,
         };
         if let Some(action) = action {
@@ -190,6 +269,7 @@ pub fn key_message(key: &Key, modified: &Key, mods: keyboard::Modifiers, m: Mode
         Key::Named(Named::Escape) if m.about => Action::ToggleAbout.into(),
         Key::Named(Named::Escape) if m.tool => Action::CancelTool.into(),
         Key::Named(Named::Escape) if m.crop => Action::ExitCrop.into(),
+        Key::Named(Named::Escape) if m.zoomed => Action::ZoomFit.into(),
         Key::Named(Named::Escape) if m.fullscreen || m.grid => Action::ExitFullscreen.into(),
         Key::Named(Named::Escape) => Action::ShowGrid.into(),
         Key::Named(Named::F11) => Action::ToggleFullscreen.into(),
@@ -275,8 +355,12 @@ impl canvas::Program<Message> for Overlay {
             Event::Window(iced::window::Event::RedrawRequested(_)) if self.body != Some(bounds.size()) => {
                 return Some(canvas::Action::publish(Message::Body(bounds.size())));
             }
-            _ if !self.active() => {
+            _ if self.zoomable() => {
                 state.pressed = false;
+                return self.zoom_mouse(state, event, bounds, cursor);
+            }
+            _ if !self.active() => {
+                (state.pressed, state.drag) = (false, None);
                 return None;
             }
             Event::Mouse(mouse::Event::ButtonPressed(Button::Left)) => {
@@ -325,7 +409,10 @@ impl canvas::Program<Message> for Overlay {
         vec![frame.into_geometry()]
     }
 
-    fn mouse_interaction(&self, _state: &OverlayState, bounds: Rectangle, cursor: Cursor) -> Interaction {
+    fn mouse_interaction(&self, state: &OverlayState, bounds: Rectangle, cursor: Cursor) -> Interaction {
+        if self.zoomable() && !self.zoom.is_fit() && cursor.is_over(bounds) {
+            return if state.drag.is_some() { Interaction::Grabbing } else { Interaction::Grab };
+        }
         let Some((p, tol)) = cursor
             .position_over(bounds)
             .filter(|_| self.active())

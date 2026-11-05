@@ -26,6 +26,7 @@ use crate::message::Message;
 use crate::palette;
 use crate::state::{Display, Mode, State, ToolPanel, View, tilde};
 use crate::theme;
+use crate::zoom_image::zoom_image;
 use iced::alignment::Horizontal;
 use iced::widget::{
     button, canvas, column, container, image, mouse_area, opaque, row, scrollable, space, stack, text,
@@ -50,12 +51,16 @@ pub fn view(app: &App) -> Element<'_, Message> {
         (Some(_), Some(Err(e))) => text(e.clone()).size(20).into(),
         (Some(_), _) => match &s.shown {
             Some(shown) => {
-                let img = |h: &image::Handle, opacity: f32| {
+                let img = |h: &image::Handle, opacity: f32| -> Element<'_, Message> {
+                    if !s.zoom.is_fit() {
+                        return zoom_image(h.clone(), s.zoom, opacity).into();
+                    }
                     image(h.clone())
                         .content_fit(ContentFit::Contain)
                         .width(Fill)
                         .height(Fill)
                         .opacity(opacity)
+                        .into()
                 };
                 // Underneath: the image the main one replaced, until that is uploaded.
                 let mut layers = stack![];
@@ -100,9 +105,11 @@ pub fn view(app: &App) -> Element<'_, Message> {
             fullscreen: s.fullscreen,
             original: s.original,
             grid,
+            zoomed: !s.zoom.is_fit(),
         },
         selection: s.crop.selection,
         image: s.picture().map(|p| p.source_size()),
+        zoom: s.zoom,
         body: s.body,
     })
     .width(Fill)

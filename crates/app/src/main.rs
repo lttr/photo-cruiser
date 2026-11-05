@@ -29,6 +29,7 @@ mod state;
 mod tests;
 mod theme;
 mod view;
+mod zoom_image;
 
 const USAGE: &str = "usage: photo-cruiser [DIR] [--script steps.json] [--shot out.png] \
 [--dump-state state.json] [--max-side N] [--transition MS] [--timeout SECS]";

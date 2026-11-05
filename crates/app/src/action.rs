@@ -6,7 +6,7 @@
 //! `{"action": "open", "path": "fixtures"}`, `{"action": "show_photo", "index": 2}`,
 //! `{"action": "set_aspect", "aspect": "16:9"}`, `{"action": "palette_query", "query": "crop"}`,
 //! `{"action": "open_tool", "tool": "exposure"}`, `{"action": "set_adjust", "value": 0.5}`,
-//! `{"action": "remove_edit", "index": 0}`.
+//! `{"action": "remove_edit", "index": 0}`, `{"action": "set_zoom", "scale": 2, "x": 0.3, "y": 0.6}`.
 
 use crate::grid::Layout;
 use photo_cruiser_core::crop::Aspect;
@@ -96,6 +96,26 @@ pub enum Action {
     /// Photo view only, not in crop mode.
     ShowOriginal {
         on: bool,
+    },
+    /// Zoom into / out of the photo by one step, at the view's centre (`+` or `=`, `-`).
+    /// Photo view only, not in crop mode. Leaving the photo, cropping or turning it shows
+    /// it whole again.
+    ZoomIn,
+    ZoomOut,
+    /// The whole photo again (`Esc` while zoomed).
+    ZoomFit,
+    /// Whole photo ↔ actual pixels, one photo pixel per screen pixel (`1`; double-click:
+    /// at the pointer).
+    ZoomActual,
+    /// Zoom to `scale` × the whole photo, with the photo point (`x`, `y`, fractions of its
+    /// width and height) at the view's centre, as far as the photo's edges allow (mouse
+    /// wheel, drag).
+    SetZoom {
+        scale: f32,
+        #[serde(default = "half")]
+        x: f32,
+        #[serde(default = "half")]
+        y: f32,
     },
     /// Close the tool, keeping its value (`Enter`, footer "Done").
     CloseTool,
@@ -187,6 +207,10 @@ pub enum Action {
     Quit,
 }
 
+fn half() -> f32 {
+    0.5
+}
+
 /// Parse a script: a JSON array of actions.
 pub fn parse_script(json: &str) -> Result<Vec<Action>, serde_json::Error> {
     serde_json::from_str(json)
@@ -218,7 +242,9 @@ mod tests {
                 {"action":"auto_adjust"},{"action":"neutral_adjust"},
                 {"action":"close_tool"},{"action":"cancel_tool"},
                 {"action":"step_adjust","steps":-2},{"action":"step_adjust","steps":1,"fine":true},{"action":"end_adjust"},
-                {"action":"toggle_edits_panel"},{"action":"remove_edit","index":1},{"action":"toggle_info_panel"},{"action":"copy_info","index":3}]"#,
+                {"action":"toggle_edits_panel"},{"action":"remove_edit","index":1},{"action":"toggle_info_panel"},{"action":"copy_info","index":3},
+                {"action":"zoom_in"},{"action":"zoom_out"},{"action":"zoom_fit"},{"action":"zoom_actual"},
+                {"action":"set_zoom","scale":2,"x":0.25,"y":0.75},{"action":"set_zoom","scale":3}]"#,
         )
         .unwrap();
         assert_eq!(steps[1], Action::Goto { index: 2 });
@@ -251,7 +277,10 @@ mod tests {
         assert_eq!((&steps[60], &steps[61]), (&Action::ToggleEditsPanel, &Action::RemoveEdit { index: 1 }));
         assert_eq!(steps[62], Action::ToggleInfoPanel);
         assert_eq!(steps[63], Action::CopyInfo { index: 3 });
-        assert_eq!(steps.len(), 64);
+        assert_eq!((&steps[64], &steps[67]), (&Action::ZoomIn, &Action::ZoomActual));
+        assert_eq!(steps[68], Action::SetZoom { scale: 2.0, x: 0.25, y: 0.75 });
+        assert_eq!(steps[69], Action::SetZoom { scale: 3.0, x: 0.5, y: 0.5 });
+        assert_eq!(steps.len(), 70);
         let json = serde_json::to_string(&Action::SetCrop(Rect::new(1.0, 2.0, 3.0, 4.0))).unwrap();
         assert_eq!(json, r#"{"action":"set_crop","x":1.0,"y":2.0,"w":3.0,"h":4.0}"#);
         assert!(parse_script(r#"[{"action":"jump"}]"#).is_err());
