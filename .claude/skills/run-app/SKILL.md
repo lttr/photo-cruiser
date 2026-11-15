@@ -50,7 +50,7 @@ Put scripts and outputs in `/tmp/photo-cruiser/` (`mkdir -p` it), never in the r
   {"action": "toggle_crop"},
   {"action": "set_crop", "x": 40, "y": 30, "w": 200, "h": 150},
   {"action": "clear_crop"}, {"action": "exit_crop"},
-  {"action": "toggle_edits_panel"}, {"action": "remove_edit", "index": 0}, {"action": "toggle_info_panel"}, {"action": "copy_info", "index": 0},
+  {"action": "toggle_edits_panel"}, {"action": "remove_edit", "index": 0}, {"action": "toggle_info_panel"}, {"action": "copy_info", "index": 0}, {"action": "open_info_link", "index": 0},
   {"action": "quit"}
 ]
 ```
@@ -60,7 +60,7 @@ Put scripts and outputs in `/tmp/photo-cruiser/` (`mkdir -p` it), never in the r
 - `next_layout` (key `Z`) cycles the grid: `small` → `big` (cells twice as big, thumbnails decoded again at 512 px) → `justified` (rows of photos 4 px apart at their aspect ratio, about as high as the big cells, names over the photos; every photo's size is probed first) → `small`. `set_layout` picks one. The interactive app remembers the layout and `toggle_names` in `~/.config/photo-cruiser/settings.json`; script mode always starts small, names hidden, and never writes that file.
 - `show_photo` opens the current photo (or `index`); `show_grid` goes back. `toggle_crop`/`set_crop` from the grid switch to the photo view.
 - `set_crop` takes source pixels (after orientation), turns crop mode on, and is clamped to the image.
-- `toggle_info_panel` (key `I`) shows a lightness histogram of what the image area shows (the grid: the selected thumbnail) and up to 15 EXIF fields of the current photo (the same as `pcr info`). `copy_info` copies field `index` to the clipboard, as a click on it does. Panels are closed at every start.
+- `toggle_info_panel` (key `I`) shows a lightness histogram of what the image area shows (the grid: the selected thumbnail) and up to 15 EXIF fields of the current photo (the same as `pcr info`). `copy_info` copies field `index` to the clipboard, as a click on it does. A field with a link (Location, marked with an external-link icon) opens it instead on a click: `open_info_link` opens mapy.com on the spot via `xdg-open`. Script mode never launches the browser; it only sets the status `opened the map in the browser`. Panels are closed at every start.
 - `toggle_edits_panel` (key `Shift+E`) shows the current photo's edits on the right, in stack order. `remove_edit` drops one op by its stack index (undoable).
 - `zoom_in`/`zoom_out` (keys `+`/`-`, the wheel) zoom the photo view by √2 at its centre; `zoom_actual` (key `1`, double-click) toggles fit ↔ actual pixels; `zoom_fit` (`Esc` while zoomed) shows it whole. `set_zoom` takes `scale` (× fit) and the photo point `x`, `y` (0–1) to centre, clamped to the edges; a drag pans. Another photo, crop mode or turning resets it. The state's `zoom` is `{scale, x, y}`; the status line shows `zoom N%` (of actual pixels).
 - `quit` ends the script early; the shot and state files are still written.

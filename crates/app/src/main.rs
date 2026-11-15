@@ -19,6 +19,7 @@ mod app;
 mod crop_overlay;
 mod grid;
 mod histogram;
+mod link_icon;
 mod menu;
 mod message;
 mod palette;

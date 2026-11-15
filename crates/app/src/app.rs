@@ -324,6 +324,16 @@ impl App {
             Effect::Quit => iced::exit(),
             Effect::Fullscreen(on) => set_fullscreen(on),
             Effect::Copy(text) => iced::clipboard::write(text),
+            // Script mode runs headless for checks: it must not reach the user's browser.
+            Effect::Open(_) if self.script.is_some() => Task::none(),
+            Effect::Open(url) => {
+                match std::process::Command::new("xdg-open").arg(&url).spawn() {
+                    // Reaped off the UI thread: xdg-open waits for the browser to take it.
+                    Ok(mut child) => drop(std::thread::spawn(move || child.wait())),
+                    Err(e) => self.state.notice = Some(format!("can't open {url}: {e}")),
+                }
+                Task::none()
+            }
             Effect::None => Task::none(),
         }
     }

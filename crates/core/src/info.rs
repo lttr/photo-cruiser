@@ -11,6 +11,9 @@ use std::path::Path;
 pub struct Field {
     pub label: &'static str,
     pub value: String,
+    /// A web page about the value, for Location a map of the spot on mapy.com.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub link: Option<String>,
 }
 
 /// The photo's fields, in this order, each only if the file has it: Taken, Camera, Lens,
@@ -27,9 +30,9 @@ pub fn fields(path: &Path) -> Result<Vec<Field>> {
         true => format!("{} × {} · {} MP", probe.width, probe.height, trim(mp, 1)),
         false => format!("{} × {}", probe.width, probe.height),
     };
-    out.push(Field { label: "Size", value: size });
+    out.push(Field { label: "Size", value: size, link: None });
     let file = format!("{} · {}", probe.format.as_str().to_uppercase(), file_size(bytes));
-    out.push(Field { label: "File", value: file });
+    out.push(Field { label: "File", value: file, link: None });
     Ok(out)
 }
 
@@ -38,7 +41,7 @@ pub fn exif_fields(x: &Exif) -> Vec<Field> {
     let mut out = Vec::new();
     let mut push = |label, value: Option<String>| {
         if let Some(value) = value.filter(|v| !v.is_empty()) {
-            out.push(Field { label, value });
+            out.push(Field { label, value, link: None });
         }
     };
     let taken = x.text(Ifd::Exif, 0x9003).or(x.text(Ifd::Main, 0x0132));
@@ -103,8 +106,20 @@ pub fn exif_fields(x: &Exif) -> Vec<Field> {
         "White balance",
         x.number(Ifd::Exif, 0xA403).map(|w| if w == 0.0 { "Auto" } else { "Manual" }.into()),
     );
-    push("Location", location(x));
+    if let Some((lat, lon)) = position(x) {
+        let (ns, ew) = (if lat < 0.0 { 'S' } else { 'N' }, if lon < 0.0 { 'W' } else { 'E' });
+        out.push(Field {
+            label: "Location",
+            value: format!("{:.5}° {ns}, {:.5}° {ew}", lat.abs(), lon.abs()),
+            link: Some(map_link(lat, lon)),
+        });
+    }
     out
+}
+
+/// mapy.com centred on the spot, with a pin on it (their URL API, `center` is lon,lat).
+pub fn map_link(lat: f64, lon: f64) -> String {
+    format!("https://mapy.com/fnc/v1/showmap?mapset=basic&center={lon:.6},{lat:.6}&zoom=16&marker=true")
 }
 
 /// `2024:07:14 18:32:05` → `2024-07-14 18:32:05`.
@@ -138,8 +153,8 @@ fn shutter(t: f64) -> String {
     }
 }
 
-/// GPS position in decimal degrees: `50.07553° N, 14.43780° E`.
-fn location(x: &Exif) -> Option<String> {
+/// GPS position in signed decimal degrees (south and west negative): latitude, longitude.
+fn position(x: &Exif) -> Option<(f64, f64)> {
     let degrees = |tag| match x.get(Ifd::Gps, tag)? {
         crate::meta::Value::Ratio(v) if v.len() == 3 && v.iter().all(|n| n.is_finite()) => {
             Some(v[0] + v[1] / 60.0 + v[2] / 3600.0)
@@ -147,9 +162,11 @@ fn location(x: &Exif) -> Option<String> {
         _ => None,
     };
     let (lat, lon) = (degrees(0x0002)?, degrees(0x0004)?);
-    let lat_ref = x.text(Ifd::Gps, 0x0001).unwrap_or("N");
-    let lon_ref = x.text(Ifd::Gps, 0x0003).unwrap_or("E");
-    Some(format!("{lat:.5}° {lat_ref}, {lon:.5}° {lon_ref}"))
+    let sign = |tag, negative| match x.text(Ifd::Gps, tag).map(str::trim) {
+        Some(r) if r.eq_ignore_ascii_case(negative) => -1.0,
+        _ => 1.0,
+    };
+    Some((lat * sign(0x0001, "S"), lon * sign(0x0003, "W")))
 }
 
 /// `8.4 MB`, `512 KB`, `900 B` (decimal units).
@@ -310,6 +327,11 @@ mod tests {
                 "Location: 50.07553° N, 14.43780° E",
             ]
         );
+        let links: Vec<_> = exif_fields(&x).into_iter().filter_map(|f| f.link).collect();
+        assert_eq!(
+            links,
+            ["https://mapy.com/fnc/v1/showmap?mapset=basic&center=14.437800,50.075525&zoom=16&marker=true"]
+        );
         assert_eq!(Exif::parse(b"nonsense"), None);
     }
 
@@ -326,13 +348,17 @@ mod tests {
             ("900 B".into(), "51 KB".into(), "8.4 MB".into())
         );
         assert_eq!(date("not a date"), "not a date");
+        assert_eq!(
+            map_link(-33.8568, -151.2153),
+            "https://mapy.com/fnc/v1/showmap?mapset=basic&center=-151.215300,-33.856800&zoom=16&marker=true"
+        );
     }
 
     #[test]
     fn fields_of_a_file_without_exif() {
         let path = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../fixtures/img1.png");
         let f = fields(&path).unwrap();
-        assert_eq!(f[0], Field { label: "Size", value: "320 × 240".into() });
+        assert_eq!(f[0], Field { label: "Size", value: "320 × 240".into(), link: None });
         assert_eq!(f[1].label, "File");
         assert!(f[1].value.starts_with("PNG · ") && f[1].value.ends_with(" KB"), "{}", f[1].value);
         assert_eq!(f.len(), 2);

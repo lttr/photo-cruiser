@@ -21,6 +21,7 @@ use crate::app::App;
 use crate::crop_overlay::{Modes, Overlay, SHORTCUTS};
 use crate::grid::LABEL;
 use crate::histogram::Chart;
+use crate::link_icon::LinkIcon;
 use crate::menu;
 use crate::message::Message;
 use crate::palette;
@@ -527,18 +528,28 @@ fn info_panel(s: &State) -> Element<'_, Message> {
         None => note("Reading…"),
         Some(Err(e)) => note(e),
         Some(Ok(fields)) => {
-            // A click copies the value: iced text can't be selected.
+            // A click copies the value (iced text can't be selected), or opens its link
+            // (Location: the map), marked by the icon.
             let rows = fields.iter().enumerate().map(|(i, f)| {
-                let content = row![
+                let mut content = row![
                     text(f.label).size(12).width(92).style(theme::dim),
                     text(f.value.as_str()).size(12).width(Fill),
                 ]
-                .spacing(8);
+                .spacing(8)
+                .align_y(Center);
+                if f.link.is_some() {
+                    let tint = theme::dim(&iced::Theme::Dark).color.unwrap_or(Color::WHITE);
+                    content = content.push(canvas(LinkIcon(tint)).width(12).height(12));
+                }
+                let action = match f.link {
+                    Some(_) => Action::OpenInfoLink { index: i },
+                    None => Action::CopyInfo { index: i },
+                };
                 let copy = button(content)
                     .padding([3, 8])
                     .width(Fill)
                     .style(theme::flat(false))
-                    .on_press(Action::CopyInfo { index: i }.into());
+                    .on_press(action.into());
                 container(copy).id(format!("info-{i}")).into()
             });
             column(rows).into()

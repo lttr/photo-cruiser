@@ -412,6 +412,8 @@ pub enum Effect {
     Fullscreen(bool),
     /// Put this text on the clipboard.
     Copy(String),
+    /// Open this URL in the web browser.
+    Open(String),
 }
 
 #[derive(Debug)]
@@ -1029,6 +1031,19 @@ impl State {
                         return Effect::Copy(f.value);
                     }
                     None => self.error(format!("copy_info {index}: no such field")),
+                }
+            }
+            Action::OpenInfoLink { index } => {
+                let link = match self.current_info() {
+                    Some(Ok(fields)) if self.info_panel => fields.get(*index).and_then(|f| f.link.clone()),
+                    _ => None,
+                };
+                match link {
+                    Some(url) => {
+                        self.notice = Some("opened the map in the browser".into());
+                        return Effect::Open(url);
+                    }
+                    None => self.error(format!("open_info_link {index}: no such link")),
                 }
             }
             Action::Revert => {

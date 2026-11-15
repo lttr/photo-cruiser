@@ -2281,6 +2281,28 @@ fn update_info_fields_and_histogram() {
 }
 
 #[test]
+fn update_open_info_link() {
+    use crate::state::Effect;
+    use photo_cruiser_core::info::Field;
+    let mut s = opened(&fixtures());
+    s.apply(&Action::ToggleInfoPanel);
+    let img1 = s.current_path().unwrap().to_path_buf();
+    assert_eq!(s.next_info_job(), Some(img1.clone()));
+    let url = "https://mapy.com/fnc/v1/showmap?mapset=basic&center=14.4,50.1&zoom=16&marker=true";
+    let fields = vec![
+        Field { label: "Location", value: "50.1° N, 14.4° E".into(), link: Some(url.into()) },
+        Field { label: "Size", value: "320 × 240".into(), link: None },
+    ];
+    s.finish_info(img1, Ok(fields));
+    let open: Action = serde_json::from_str(r#"{"action":"open_info_link","index":0}"#).unwrap();
+    assert_eq!(s.apply(&open), Effect::Open(url.into()));
+    assert_eq!(s.notice.as_deref(), Some("opened the map in the browser"));
+    assert_eq!(s.apply(&Action::OpenInfoLink { index: 1 }), Effect::None, "Size has no link");
+    s.apply(&Action::ToggleInfoPanel);
+    assert_eq!(s.apply(&Action::OpenInfoLink { index: 0 }), Effect::None, "only with the panel open");
+}
+
+#[test]
 fn info_panel_shows_histogram_and_fields() {
     let mut h = harness(); // img1.png
     h.until("img1 shown", |h| h.bounds("photo").is_some());

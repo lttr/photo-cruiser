@@ -144,6 +144,11 @@ pub enum Action {
     CopyInfo {
         index: usize,
     },
+    /// Open the web link of the info panel's field `index` in the browser (a click on a
+    /// field that has one: Location opens mapy.com on the spot).
+    OpenInfoLink {
+        index: usize,
+    },
     /// Back to the original file now: `reset_edits`, then `save` (menu).
     Revert,
     /// Save the current photo now (`Ctrl+S`, menu). Leaving a photo saves it anyway.
