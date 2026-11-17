@@ -617,3 +617,43 @@ fn local_contrast_render_and_save() {
     assert_eq!((&v["ops"][0]["tool"], &v["dirty"]), (&json!("local_contrast"), &json!(false)));
     assert!(spread(photo).abs_diff(boosted) <= 4, "saved: {} vs {boosted}", spread(photo));
 }
+
+#[test]
+fn contrast_render_and_save() {
+    let (dir, p) = temp_copies(&["adjust/window.jpg"]);
+    let photo = &p[0];
+    let out = dir.path().join("out.png").to_string_lossy().into_owned();
+    // The dark wall left of the window, and the bright sky in it.
+    let green = |path: &str, x: u32, y: u32| image::open(path).unwrap().into_rgba8().get_pixel(x, y).0[1];
+    let tones = |path: &str| (green(path, 150, 100), green(path, 220, 150));
+    json_in(&dir, &["render", photo, "-o", &out, "--json"], 0);
+    let (wall, window) = tones(&out);
+    // No value: 1.2.
+    let v = json_in(&dir, &["render", photo, "--adjust", "contrast", "-o", &out, "--json"], 0);
+    assert_eq!(v["ops"][0], json!({"op": "adjust", "tool": "contrast", "value": 1.2}));
+    let v = json_in(&dir, &["render", photo, "--adjust", "contrast=2", "-o", &out, "--json"], 0);
+    assert_eq!(v["ops"][0]["value"], json!(2.0));
+    let strong = tones(&out);
+    assert!(strong.0 + 3 < wall && strong.1 > window + 3, "{strong:?} vs {:?}", (wall, window));
+    let v = json_in(&dir, &["render", photo, "--adjust", "contrast=1", "-o", &out, "--json"], 0);
+    assert_eq!(v["ops"].as_array().unwrap().len(), 0, "1 is no step");
+
+    let edits = dir.path().join("e.json");
+    std::fs::write(
+        &edits,
+        json!({"version": 1, "ops": [{"op": "adjust", "tool": "contrast", "value": 2.0}]}).to_string(),
+    )
+    .unwrap();
+    let edits = edits.to_string_lossy().into_owned();
+    json_in(&dir, &["render", photo, "--edits", &edits, "-o", &out, "--json"], 0);
+    assert_eq!(tones(&out), strong);
+    let v = json_in(&dir, &["save", photo, "--edits", &edits, "--json"], 0);
+    assert_eq!(v["action"], "saved");
+    let v = json_in(&dir, &["edits", photo, "--json"], 0);
+    assert_eq!((&v["ops"][0]["tool"], &v["dirty"]), (&json!("contrast"), &json!(false)));
+    let saved = tones(photo);
+    assert!(
+        saved.0.abs_diff(strong.0) <= 4 && saved.1.abs_diff(strong.1) <= 4,
+        "saved: {saved:?} vs {strong:?}"
+    );
+}

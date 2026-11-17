@@ -93,6 +93,13 @@ const CASES: &[Case] = &[
         max_side: None,
         adjust: Some(Tool::LocalContrast),
     },
+    Case {
+        name: "window-contrast",
+        fixture: "adjust/window.jpg",
+        crop: None,
+        max_side: None,
+        adjust: Some(Tool::Contrast),
+    },
     Case { name: "avif-max-side", fixture: "img4.AVIF", crop: None, max_side: Some(100), adjust: None },
 ];
 

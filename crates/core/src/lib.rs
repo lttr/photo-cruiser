@@ -7,6 +7,7 @@
 pub mod adjust;
 pub mod catalog;
 pub mod colour;
+pub mod contrast;
 pub mod crop;
 pub mod decode;
 pub mod edit;

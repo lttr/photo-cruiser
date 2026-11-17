@@ -67,6 +67,12 @@ fn describe(tool: Tool) -> (&'static str, &'static str) {
              strong edges get no halo. `clarity` is accepted too. Applied after shadows & \
              highlights.",
         ),
+        Tool::Contrast => (
+            "1.2",
+            "an S-curve like darktable's sigmoid contrast (1 = no change, 2 strong): shadows \
+             darker, highlights brighter, middle grey, black and white stay. Per channel, so \
+             colours get a little stronger too. Applied after local contrast.",
+        ),
         Tool::Colour => (
             "1",
             "colourfulness, darktable's \"basic colorfulness: standard\" × the value, more in the \

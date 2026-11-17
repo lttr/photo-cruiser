@@ -165,6 +165,7 @@ pub const SHORTCUTS: &[(&str, &str)] = &[
     ("E", "Exposure (opens at auto)"),
     ("T", "Shadows & highlights: lift shadows, pull back highlights (opens at 0.45)"),
     ("D", "Local contrast: bring out detail (opens at 125%)"),
+    ("B", "Contrast: an S-curve, darker shadows, brighter highlights (opens at 1.2)"),
     ("W", "Warmth: white balance, warmer / cooler (opens at auto)"),
     ("S", "Colour: more in the shadows, less in the highlights (opens at 1×)"),
     ("A", "Auto levels, for documents (opens at strength 1; 2: whiter paper)"),
@@ -329,6 +330,9 @@ pub fn key_message(key: &Key, modified: &Key, mods: keyboard::Modifiers, m: Mode
         }
         Key::Character(c) if plain && c.eq_ignore_ascii_case("d") => {
             Action::OpenTool { tool: Tool::LocalContrast }.into()
+        }
+        Key::Character(c) if plain && c.eq_ignore_ascii_case("b") => {
+            Action::OpenTool { tool: Tool::Contrast }.into()
         }
         Key::Character(c) if plain && c.eq_ignore_ascii_case("w") => {
             Action::OpenTool { tool: Tool::Warmth }.into()
