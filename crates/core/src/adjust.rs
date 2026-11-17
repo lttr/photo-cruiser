@@ -23,6 +23,9 @@ pub enum Tool {
     /// White balance along the colour temperature: + warmer (amber), − cooler (blue), in
     /// units of 100 mired, −2…2 ([`crate::warmth`]).
     Warmth,
+    /// Removes haze, 0–1, like darktable's haze removal ([`crate::dehaze`]).
+    #[serde(alias = "haze_removal")]
+    Dehaze,
     /// Brightness in EV (stops): linear light × 2^value.
     Exposure,
     /// Lifts shadows and pulls back highlights by area, 0–1, like darktable's tone
@@ -52,14 +55,16 @@ impl Tool {
     /// Every tool, in the order they are applied (the enum's order). Levels comes before
     /// exposure: it stretches each channel to the full range, so it would undo an exposure
     /// done before it. Warmth comes after levels, which would neutralise it per channel.
+    /// Dehaze comes before exposure: it measures the haze against the brightest haze.
     /// Shadows & highlights comes after exposure: it goes by the distance from middle grey.
     /// Local contrast comes after it: it boosts the detail on top of the areas it has set.
     /// Contrast comes after both, as darktable's sigmoid does: it shapes the finished tones.
     /// Colour comes after them: its masks go by brightness. Sharpen comes last, on the
     /// finished tones.
-    pub const ALL: [Tool; 8] = [
+    pub const ALL: [Tool; 9] = [
         Tool::Levels,
         Tool::Warmth,
+        Tool::Dehaze,
         Tool::Exposure,
         Tool::ShadowsHighlights,
         Tool::LocalContrast,
@@ -72,6 +77,7 @@ impl Tool {
         match self {
             Tool::Levels => "Auto levels",
             Tool::Warmth => "Warmth",
+            Tool::Dehaze => "Dehaze",
             Tool::Exposure => "Exposure",
             Tool::ShadowsHighlights => "Shadows & highlights",
             Tool::LocalContrast => "Local contrast",
@@ -85,7 +91,7 @@ impl Tool {
     pub fn range(self) -> RangeInclusive<f32> {
         match self {
             Tool::Levels | Tool::Colour => 0.0..=2.0,
-            Tool::ShadowsHighlights | Tool::Sharpen => 0.0..=1.0,
+            Tool::ShadowsHighlights | Tool::Dehaze | Tool::Sharpen => 0.0..=1.0,
             Tool::LocalContrast | Tool::Contrast => 1.0..=2.0,
             Tool::Exposure | Tool::Warmth => -2.0..=2.0,
         }
@@ -96,6 +102,7 @@ impl Tool {
         match self {
             Tool::Levels
             | Tool::Warmth
+            | Tool::Dehaze
             | Tool::Exposure
             | Tool::ShadowsHighlights
             | Tool::Colour
@@ -107,7 +114,9 @@ impl Tool {
     /// The value as the panel shows it.
     pub fn format(self, value: f32) -> String {
         match self {
-            Tool::Levels | Tool::ShadowsHighlights | Tool::Contrast | Tool::Sharpen => format!("{value:.2}"),
+            Tool::Levels | Tool::ShadowsHighlights | Tool::Dehaze | Tool::Contrast | Tool::Sharpen => {
+                format!("{value:.2}")
+            }
             Tool::Exposure => format!("{value:+.2} EV"),
             Tool::Warmth => format!("{value:+.2}"),
             Tool::Colour => format!("{value:.2}×"),
@@ -131,9 +140,9 @@ impl Tool {
     /// The value the tool opens at for `img`: auto exposure brings the average brightness
     /// to middle grey; levels opens at strength 1 (it measures the image as it applies);
     /// warmth at grey-world white balance; shadows & highlights at 0.45, darktable's
-    /// "medium"; local contrast at 1.25, darktable's default detail; contrast at 1.2, near
-    /// sigmoid's "neutral gray" preset (1.22); colour at 1, the preset as darktable has it.
-    /// Sharpen at 0.5, darktable's default amount.
+    /// "medium"; dehaze at 0.2, darktable's default; local contrast at 1.25, darktable's
+    /// default detail; contrast at 1.2, near sigmoid's "neutral gray" preset (1.22); colour
+    /// at 1, the preset as darktable has it. Sharpen at 0.5, darktable's default amount.
     /// Rounded to 0.01.
     pub fn opening(self, img: &RgbaImage) -> f32 {
         let v = match self {
@@ -141,6 +150,7 @@ impl Tool {
             Tool::Exposure => auto_exposure(img),
             Tool::Warmth => crate::warmth::grey_world(img),
             Tool::ShadowsHighlights => 0.45,
+            Tool::Dehaze => 0.2,
             Tool::LocalContrast => 1.25,
             Tool::Contrast => 1.2,
             Tool::Sharpen => 0.5,
@@ -168,6 +178,7 @@ impl Tool {
             }
             Tool::Exposure => map_rgb(img, &[exposure_lut(value); 3]),
             Tool::Warmth => crate::warmth::apply(img, value),
+            Tool::Dehaze => crate::dehaze::apply(img, value),
             Tool::ShadowsHighlights => crate::tones::apply(img, value),
             Tool::LocalContrast => crate::local_contrast::apply(img, value),
             Tool::Contrast => map_rgb(img, &[crate::contrast::lut(value); 3]),
@@ -519,7 +530,7 @@ mod tests {
         assert_eq!((s.adjust(Tool::Exposure), s.ops.len()), (None, 2), "neutral is no step");
         assert_eq!("exposure".parse::<Tool>(), Ok(Tool::Exposure));
         assert!("blur".parse::<Tool>().unwrap_err().contains(
-            "one of levels, warmth, exposure, shadows_highlights, local_contrast, contrast, colour, sharpen"
+            "one of levels, warmth, dehaze, exposure, shadows_highlights, local_contrast, contrast, colour, sharpen"
         ));
         assert_eq!("color".parse::<Tool>(), Ok(Tool::Colour));
         // Levels goes before exposure, whatever order they're set in.

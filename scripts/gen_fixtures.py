@@ -23,7 +23,9 @@ adjust/: inputs for the adjustment tools:
   warm-cast.jpg (a neutral scene, grey ramps and colour patches, under warm tungsten-like light:
   linear R × 1, G × 0.8, B × 0.55),
   window.jpg (a dark room with a bright window on the right: shelves and a table in the
-  shadows, sky and a tree outside; the window is x 200..300, y 30..170)
+  shadows, sky and a tree outside; the window is x 200..300, y 30..170),
+  woods-haze.jpg (wooded hills in haze, nearer ones clearer: sky y < 50, far ridge to
+  y 110, middle ridge to y 170, a clear foreground below; for Dehaze)
 """
 
 import io
@@ -195,10 +197,43 @@ def window(w=W, h=H):
     return img
 
 
+def woods_haze(w=W, h=H):
+    """Wooded hills in haze: each ridge is the same textured green, seen through more haze
+    the farther it is (linear light: scene × t + airlight × (1 − t))."""
+    import math
+
+    img = Image.new("RGB", (w, h))
+    px = img.load()
+    air = (0.55, 0.58, 0.63)  # an overcast, hazy morning
+
+    def lin(v):
+        v /= 255
+        return v / 12.92 if v <= 0.04045 else ((v + 0.055) / 1.055) ** 2.4
+
+    def enc(v):
+        v = min(max(v, 0.0), 1.0)
+        v = v * 12.92 if v <= 0.0031308 else 1.055 * v ** (1 / 2.4) - 0.055
+        return round(v * 255)
+
+    for y in range(h):
+        for x in range(w):
+            far = 60 + 12 * math.sin(x / 37)
+            mid = 120 + 15 * math.sin(x / 23 + 1)
+            near = 185 + 8 * math.sin(x / 17 + 2)
+            t = 0.0 if y < far else 0.3 if y < mid else 0.55 if y < near else 0.9
+            tex = ((x * 7 + y * 13) % 9) / 8  # tree tops
+            scene = (40 + 30 * tex, 70 + 40 * tex, 35 + 20 * tex)
+            if y >= near:
+                scene = (90 + 40 * tex, 75 + 30 * tex, 50 + 20 * tex)  # a dry meadow
+            px[x, y] = tuple(enc(lin(s) * t + a * (1 - t)) for s, a in zip(scene, air))
+    return img
+
+
 (out / "adjust").mkdir(exist_ok=True)
 document().save(out / "adjust" / "document.jpg", quality=95, subsampling=0)
 cast().save(out / "adjust" / "warm-cast.jpg", quality=95, subsampling=0)
 window().save(out / "adjust" / "window.jpg", quality=95, subsampling=0)
+woods_haze().save(out / "adjust" / "woods-haze.jpg", quality=95, subsampling=0)
 
 from PIL import ImageCms
 

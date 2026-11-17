@@ -1956,6 +1956,31 @@ fn update_sharpen_opens_at_half() {
 }
 
 #[test]
+fn update_dehaze_opens_at_0_2() {
+    use photo_cruiser_core::{EditStack, Tool};
+    let value = |s: &State| s.stack().adjust(Tool::Dehaze);
+    let mut s = opened(&fixtures().join("adjust"));
+    s.apply(&Action::ShowPhoto { index: Some(3) }); // woods-haze.jpg
+    settle(&mut s);
+    s.apply(&Action::OpenTool { tool: Tool::Dehaze });
+    settle(&mut s);
+    assert_eq!(s.tool.as_ref().unwrap().opening, Some(0.2));
+    assert_eq!((value(&s), s.dirty(), s.preview.is_some()), (Some(0.2), true, true));
+    s.apply(&Action::Undo);
+    assert_eq!(s.stack(), EditStack::default(), "opening is one step");
+    s.apply(&Action::Redo);
+    s.apply(&Action::SetAdjust { value: 0.7 });
+    s.apply(&Action::AutoAdjust);
+    assert_eq!(value(&s), Some(0.2), "double-click: 0.2");
+    s.apply(&Action::NeutralAdjust);
+    assert_eq!(s.stack(), EditStack::default(), "0 is no step");
+    s.apply(&Action::SetAdjust { value: 1.0 });
+    s.apply(&Action::CancelTool);
+    assert!(s.tool.is_none() && s.stack() == EditStack::default(), "Esc: as before the tool opened");
+    assert!(s.errors.is_empty(), "{:?}", s.errors);
+}
+
+#[test]
 fn tool_keys() {
     use crate::crop_overlay::key_message;
     use iced::keyboard::Modifiers;
@@ -1980,6 +2005,7 @@ fn tool_keys() {
         action(Key::Character("d".into()), Modes::default()),
         Action::OpenTool { tool: Tool::LocalContrast }
     );
+    assert_eq!(action(Key::Character("m".into()), Modes::default()), Action::OpenTool { tool: Tool::Dehaze });
     assert_eq!(
         action(Key::Character("b".into()), Modes::default()),
         Action::OpenTool { tool: Tool::Contrast }

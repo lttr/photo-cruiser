@@ -107,6 +107,13 @@ const CASES: &[Case] = &[
         max_side: None,
         adjust: Some(Tool::Sharpen),
     },
+    Case {
+        name: "woods-haze-dehaze",
+        fixture: "adjust/woods-haze.jpg",
+        crop: None,
+        max_side: None,
+        adjust: Some(Tool::Dehaze),
+    },
     Case { name: "avif-max-side", fixture: "img4.AVIF", crop: None, max_side: Some(100), adjust: None },
 ];
 
@@ -362,4 +369,36 @@ fn sharpen_on_a_backlit_room() {
         preview.pixels().zip(saved.pixels()).map(|(a, b)| f64::from(a.0[0].abs_diff(b.0[0]))).sum::<f64>()
             / f64::from(preview.width() * preview.height());
     assert!(mean < 1.5, "preview vs save: mean {mean}");
+}
+
+/// Dehaze at its opening 0.2 on `adjust/woods-haze.jpg`: every ridge comes out of the haze
+/// (darker, further from the airlight), the far ridge the most by its share of haze, and
+/// the sky stays. On `adjust/window.jpg`, without haze, it changes little.
+#[test]
+fn dehaze_on_hazy_hills_and_a_clear_room() {
+    let open = |name: &str| {
+        let src = decode(&root().join("../../fixtures/adjust").join(name)).unwrap();
+        let original = render(&src, &EditStack::default(), RenderOpts::default()).unwrap();
+        assert_eq!(Tool::Dehaze.opening(&original), 0.2);
+        let mut out = original.clone();
+        Tool::Dehaze.apply(&mut out, 0.2);
+        (original, out)
+    };
+    let (original, out) = open("woods-haze.jpg");
+    let g = |img: &RgbaImage, y: u32| {
+        (0..20).map(|x| f64::from(img.get_pixel(150 + x, y).0[1])).sum::<f64>() / 20.0
+    };
+    let sky = 15;
+    assert!((g(&out, sky) - g(&original, sky)).abs() < 1.0, "sky");
+    // Ridges at y 95 (far), 150 (middle) and 215 (near): their distance from the sky, in
+    // sRGB levels, grows by a share, the far one's most.
+    let gain = |y| (g(&original, sky) - g(&out, y)) / (g(&original, sky) - g(&original, y));
+    let (far, mid, near) = (gain(95), gain(150), gain(215));
+    assert!(far > mid && mid > near && near > 1.02, "far {far:.3}, middle {mid:.3}, near {near:.3}");
+
+    let (original, out) = open("window.jpg");
+    let mean =
+        original.pixels().zip(out.pixels()).map(|(a, b)| f64::from(a.0[1].abs_diff(b.0[1]))).sum::<f64>()
+            / f64::from(original.width() * original.height());
+    assert!(mean < 3.0, "a clear photo changes little: mean {mean:.2} levels");
 }

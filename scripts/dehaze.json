@@ -1,0 +1,6 @@
+[
+  { "action": "show_photo", "index": 3 },
+  { "action": "open_tool", "tool": "dehaze" },
+  { "action": "set_adjust", "value": 0.8 },
+  { "action": "auto_adjust" }
+]

@@ -1,6 +1,6 @@
 //! Edge-aware smoothing: a self-guided filter (He, Sun and Tang, "Guided Image
 //! Filtering", 2010), for tools that change a photo by its local brightness (Shadows &
-//! highlights, Local contrast; later dehaze).
+//! highlights, Local contrast, Dehaze).
 //!
 //! Inside a window, the output is a linear fit of the input: flat where the input varies
 //! less than `eps` (it averages), the input itself where it varies much more (an edge

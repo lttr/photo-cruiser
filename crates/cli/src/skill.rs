@@ -49,6 +49,13 @@ fn describe(tool: Tool) -> (&'static str, &'static str) {
              mired. Auto makes the average colour neutral, so it also cools a sunset; it doesn't \
              fix green or magenta casts. Applied after levels.",
         ),
+        Tool::Dehaze => (
+            "0.2",
+            "removes haze, like darktable's haze removal. Its distance is fixed at darktable's \
+             default 0.2, so far haze is only partly removed whatever the value; higher values \
+             mostly clear nearer parts. No effect when over 5% of the photo is clipped white. \
+             `haze_removal` is accepted too. Applied after warmth, before exposure.",
+        ),
         Tool::Exposure => (
             "auto (average brightness to middle grey)",
             "brightness in EV (stops), linear light × 2^value. Applied after levels.",

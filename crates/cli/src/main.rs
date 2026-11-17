@@ -80,11 +80,12 @@ enum Cmd {
         /// `--crop`. Without a value: the value the app opens the tool at (auto, measured
         /// on the cropped photo). Repeatable. Tools: levels (auto levels strength, 0..2,
         /// opens at 1), warmth (+ warmer / − cooler, 1 = 100 mired, -2..2, opens at grey-world
-        /// white balance), exposure (EV, -2..2), shadows_highlights (lift shadows, pull back
-        /// highlights, 0..1, opens at 0.45), local_contrast (bring out detail, 1..2 = 100..200%,
-        /// 1 changes nothing, opens at 1.25), contrast (S-curve, 1..2, 1 changes nothing,
-        /// opens at 1.2), colour (× darktable's "basic colorfulness:
-        /// standard", 0..2, opens at 1), sharpen (unsharp mask amount, 0..1, opens at 0.5).
+        /// white balance), dehaze (remove haze, 0..1, opens at 0.2), exposure (EV, -2..2),
+        /// shadows_highlights (lift shadows, pull back highlights, 0..1, opens at 0.45),
+        /// local_contrast (bring out detail, 1..2 = 100..200%, 1 changes nothing, opens at
+        /// 1.25), contrast (S-curve, 1..2, 1 changes nothing, opens at 1.2), colour (×
+        /// darktable's "basic colorfulness: standard", 0..2, opens at 1), sharpen (unsharp
+        /// mask amount, 0..1, opens at 0.5).
         #[arg(long, value_name = "TOOL[=VALUE]", value_parser = parse_adjust)]
         adjust: Vec<(Tool, Option<f32>)>,
         /// Downscale the result so its longer side is at most N.

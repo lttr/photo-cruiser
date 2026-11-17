@@ -690,3 +690,36 @@ fn sharpen_render_and_save() {
     assert_eq!((&v["ops"][0]["tool"], &v["dirty"]), (&json!("sharpen"), &json!(false)));
     assert!(bar(photo).abs_diff(sharpened) <= 6, "saved: {} vs {sharpened}", bar(photo));
 }
+
+#[test]
+fn dehaze_render_and_save() {
+    let (dir, p) = temp_copies(&["adjust/woods-haze.jpg"]);
+    let photo = &p[0];
+    let out = dir.path().join("out.png").to_string_lossy().into_owned();
+    // The middle ridge's green, in haze.
+    let ridge = |path: &str| image::open(path).unwrap().into_rgba8().get_pixel(160, 150).0[1];
+    json_in(&dir, &["render", photo, "-o", &out, "--json"], 0);
+    let hazy = ridge(&out);
+    // No value: 0.2. "haze_removal" works too.
+    let v = json_in(&dir, &["render", photo, "--adjust", "dehaze", "-o", &out, "--json"], 0);
+    assert_eq!(v["ops"][0], json!({"op": "adjust", "tool": "dehaze", "value": 0.2}));
+    let clear = ridge(&out);
+    assert!(clear + 2 < hazy, "out of the haze: {clear} vs {hazy}");
+    let v = json_in(&dir, &["render", photo, "--adjust", "haze_removal=0", "-o", &out, "--json"], 0);
+    assert_eq!(v["ops"].as_array().unwrap().len(), 0, "0 is no step");
+
+    let edits = dir.path().join("e.json");
+    std::fs::write(
+        &edits,
+        json!({"version": 1, "ops": [{"op": "adjust", "tool": "dehaze", "value": 0.2}]}).to_string(),
+    )
+    .unwrap();
+    let edits = edits.to_string_lossy().into_owned();
+    json_in(&dir, &["render", photo, "--edits", &edits, "-o", &out, "--json"], 0);
+    assert_eq!(ridge(&out), clear);
+    let v = json_in(&dir, &["save", photo, "--edits", &edits, "--json"], 0);
+    assert_eq!(v["action"], "saved");
+    let v = json_in(&dir, &["edits", photo, "--json"], 0);
+    assert_eq!((&v["ops"][0]["tool"], &v["dirty"]), (&json!("dehaze"), &json!(false)));
+    assert!(ridge(photo).abs_diff(clear) <= 3, "saved: {} vs {clear}", ridge(photo));
+}

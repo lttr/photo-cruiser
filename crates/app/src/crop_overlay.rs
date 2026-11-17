@@ -168,6 +168,7 @@ pub const SHORTCUTS: &[(&str, &str)] = &[
     ("B", "Contrast: an S-curve, darker shadows, brighter highlights (opens at 1.2)"),
     ("P", "Sharpen: crisper edges and detail (opens at 0.5)"),
     ("W", "Warmth: white balance, warmer / cooler (opens at auto)"),
+    ("M", "Dehaze: remove haze (opens at 0.2)"),
     ("S", "Colour: more in the shadows, less in the highlights (opens at 1×)"),
     ("A", "Auto levels, for documents (opens at strength 1; 2: whiter paper)"),
     ("Shift+A", "Tool: back to auto (or double-click the slider)"),
@@ -340,6 +341,9 @@ pub fn key_message(key: &Key, modified: &Key, mods: keyboard::Modifiers, m: Mode
         }
         Key::Character(c) if plain && c.eq_ignore_ascii_case("w") => {
             Action::OpenTool { tool: Tool::Warmth }.into()
+        }
+        Key::Character(c) if plain && c.eq_ignore_ascii_case("m") => {
+            Action::OpenTool { tool: Tool::Dehaze }.into()
         }
         Key::Character(c) if plain && c.eq_ignore_ascii_case("s") => {
             Action::OpenTool { tool: Tool::Colour }.into()

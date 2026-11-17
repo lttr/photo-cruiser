@@ -10,6 +10,7 @@ pub mod colour;
 pub mod contrast;
 pub mod crop;
 pub mod decode;
+pub mod dehaze;
 pub mod edit;
 pub mod error;
 pub mod export;
