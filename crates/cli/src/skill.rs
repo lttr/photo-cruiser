@@ -60,6 +60,13 @@ fn describe(tool: Tool) -> (&'static str, &'static str) {
              shadows/highlights\": soft 0.25, medium 0.45, strong 0.65. `tones` is accepted too. \
              Applied after exposure.",
         ),
+        Tool::LocalContrast => (
+            "1.25",
+            "brings out detail, like darktable's local contrast \"detail\" (1 = 100%, no change; \
+             1.33 is darktable's \"clarity\", 2 an HDR look). Edge-aware: texture is boosted, \
+             strong edges get no halo. `clarity` is accepted too. Applied after shadows & \
+             highlights.",
+        ),
         Tool::Colour => (
             "1",
             "colourfulness, darktable's \"basic colorfulness: standard\" × the value, more in the \

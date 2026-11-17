@@ -20,6 +20,7 @@ pub fn key(tool: Tool) -> &'static str {
         Tool::Warmth => "W",
         Tool::Exposure => "E",
         Tool::ShadowsHighlights => "T",
+        Tool::LocalContrast => "D",
         Tool::Colour => "S",
     }
 }

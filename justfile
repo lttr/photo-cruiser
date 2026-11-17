@@ -105,12 +105,18 @@ verify: check
         --shot "{{artifacts}}/verify-shadows-highlights.png" --dump-state "{{artifacts}}/verify-shadows-highlights.json"
     jq -e '.index == 2 and .edits == [{"op":"adjust","tool":"shadows_highlights","value":0.45}] and .tool.tool == "shadows_highlights" and .tool.value == 0.45 and .tool.opening == 0.45 and .preview == true and .dirty == true and .errors == []' \
         "{{artifacts}}/verify-shadows-highlights.json" >/dev/null || { cat "{{artifacts}}/verify-shadows-highlights.json"; exit 1; }
+    # Local contrast on the backlit room: opens at 1.25, back to 1.25 after a change; on
+    # top of the shadows & highlights the step above saved when it left the photo.
+    "{{root}}/scripts/headless.sh" "{{root}}/target/debug/photo-cruiser" "$photos/adjust" --script "{{root}}/scripts/local-contrast.json" \
+        --shot "{{artifacts}}/verify-local-contrast.png" --dump-state "{{artifacts}}/verify-local-contrast.json"
+    jq -e '.index == 2 and .edits == [{"op":"adjust","tool":"shadows_highlights","value":0.45},{"op":"adjust","tool":"local_contrast","value":1.25}] and .tool.tool == "local_contrast" and .tool.value == 1.25 and .tool.opening == 1.25 and .preview == true and .dirty == true and .errors == []' \
+        "{{artifacts}}/verify-local-contrast.json" >/dev/null || { cat "{{artifacts}}/verify-local-contrast.json"; exit 1; }
     # Holding O on the saved, cropped img1.png: its original from the backup, uncropped.
     "{{root}}/scripts/headless.sh" "{{root}}/target/debug/photo-cruiser" "$photos" --script "{{root}}/scripts/original.json" \
         --shot "{{artifacts}}/verify-original.png" --dump-state "{{artifacts}}/verify-original.json"
     jq -e '.index == 0 and .original == true and .edits == [{"op":"crop","x":40,"y":30,"w":200,"h":150}] and (.status | contains("original, without edits")) and .errors == []' \
         "{{artifacts}}/verify-original.json" >/dev/null || { cat "{{artifacts}}/verify-original.json"; exit 1; }
-    echo "verify ok: {{artifacts}}/verify.png {{artifacts}}/verify-grid.png {{artifacts}}/verify-save.png {{artifacts}}/verify-exposure.png {{artifacts}}/verify-levels.png {{artifacts}}/verify-colour.png {{artifacts}}/verify-warmth.png {{artifacts}}/verify-shadows-highlights.png {{artifacts}}/verify-original.png"
+    echo "verify ok: {{artifacts}}/verify.png {{artifacts}}/verify-grid.png {{artifacts}}/verify-save.png {{artifacts}}/verify-exposure.png {{artifacts}}/verify-levels.png {{artifacts}}/verify-colour.png {{artifacts}}/verify-warmth.png {{artifacts}}/verify-shadows-highlights.png {{artifacts}}/verify-local-contrast.png {{artifacts}}/verify-original.png"
 
 # Release build of the GUI and the CLI (run before `just install`)
 build-release:

@@ -1880,6 +1880,31 @@ fn update_shadows_highlights_opens_at_medium() {
 }
 
 #[test]
+fn update_local_contrast_opens_at_125() {
+    use photo_cruiser_core::{EditStack, Tool};
+    let value = |s: &State| s.stack().adjust(Tool::LocalContrast);
+    let mut s = opened(&fixtures().join("adjust"));
+    s.apply(&Action::ShowPhoto { index: Some(2) }); // window.jpg
+    settle(&mut s);
+    s.apply(&Action::OpenTool { tool: Tool::LocalContrast });
+    settle(&mut s);
+    assert_eq!(s.tool.as_ref().unwrap().opening, Some(1.25));
+    assert_eq!((value(&s), s.dirty(), s.preview.is_some()), (Some(1.25), true, true));
+    s.apply(&Action::Undo);
+    assert_eq!(s.stack(), EditStack::default(), "opening is one step");
+    s.apply(&Action::Redo);
+    s.apply(&Action::SetAdjust { value: 1.8 });
+    s.apply(&Action::AutoAdjust);
+    assert_eq!(value(&s), Some(1.25), "double-click: 125%");
+    s.apply(&Action::NeutralAdjust);
+    assert_eq!(s.stack(), EditStack::default(), "100% is no step");
+    s.apply(&Action::SetAdjust { value: 2.0 });
+    s.apply(&Action::CancelTool);
+    assert!(s.tool.is_none() && s.stack() == EditStack::default(), "Esc: as before the tool opened");
+    assert!(s.errors.is_empty(), "{:?}", s.errors);
+}
+
+#[test]
 fn tool_keys() {
     use crate::crop_overlay::key_message;
     use iced::keyboard::Modifiers;
@@ -1901,15 +1926,19 @@ fn tool_keys() {
         Action::OpenTool { tool: Tool::ShadowsHighlights }
     );
     assert_eq!(
+        action(Key::Character("d".into()), Modes::default()),
+        Action::OpenTool { tool: Tool::LocalContrast }
+    );
+    assert_eq!(
         key_message(
-            &Key::Character("d".into()),
-            &Key::Character("d".into()),
+            &Key::Character("q".into()),
+            &Key::Character("q".into()),
             Modifiers::empty(),
             Modes::default()
         )
         .map(|_| ()),
         None,
-        "D is free"
+        "Q is free"
     );
     assert_eq!(action(Key::Named(Named::Escape), tool), Action::CancelTool);
     let shift_a =

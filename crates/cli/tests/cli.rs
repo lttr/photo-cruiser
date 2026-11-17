@@ -578,3 +578,42 @@ fn shadows_highlights_render_and_save() {
     let saved = image::open(photo).unwrap().into_rgba8().get_pixel(160, 100).0;
     assert!(saved.iter().zip(lifted).all(|(s, a)| s.abs_diff(a) <= 6), "{saved:?} vs {lifted:?}");
 }
+
+#[test]
+fn local_contrast_render_and_save() {
+    let (dir, p) = temp_copies(&["adjust/window.jpg"]);
+    let photo = &p[0];
+    let out = dir.path().join("out.png").to_string_lossy().into_owned();
+    // The spread of the wall's grain, left of the window.
+    let spread = |path: &str| {
+        let img = image::open(path).unwrap().into_rgba8();
+        let v: Vec<u8> = (140..180).map(|x| img.get_pixel(x, 100).0[1]).collect();
+        v.iter().max().unwrap() - v.iter().min().unwrap()
+    };
+    // No value: 1.25. "clarity" works too.
+    let v = json_in(&dir, &["render", photo, "--adjust", "clarity=2", "-o", &out, "--json"], 0);
+    assert_eq!(v["ops"][0], json!({"op": "adjust", "tool": "local_contrast", "value": 2.0}));
+    let boosted = spread(&out);
+    let v = json_in(&dir, &["render", photo, "--adjust", "local_contrast", "-o", &out, "--json"], 0);
+    assert_eq!(v["ops"][0]["value"], json!(1.25));
+    json_in(&dir, &["render", photo, "-o", &out, "--json"], 0);
+    let original = spread(&out);
+    assert!(boosted > original + 2, "detail: {boosted} vs {original}");
+    let v = json_in(&dir, &["render", photo, "--adjust", "local_contrast=1", "-o", &out, "--json"], 0);
+    assert_eq!(v["ops"].as_array().unwrap().len(), 0, "100% is no step");
+
+    let edits = dir.path().join("e.json");
+    std::fs::write(
+        &edits,
+        json!({"version": 1, "ops": [{"op": "adjust", "tool": "local_contrast", "value": 2.0}]}).to_string(),
+    )
+    .unwrap();
+    let edits = edits.to_string_lossy().into_owned();
+    json_in(&dir, &["render", photo, "--edits", &edits, "-o", &out, "--json"], 0);
+    assert_eq!(spread(&out), boosted);
+    let v = json_in(&dir, &["save", photo, "--edits", &edits, "--json"], 0);
+    assert_eq!(v["action"], "saved");
+    let v = json_in(&dir, &["edits", photo, "--json"], 0);
+    assert_eq!((&v["ops"][0]["tool"], &v["dirty"]), (&json!("local_contrast"), &json!(false)));
+    assert!(spread(photo).abs_diff(boosted) <= 4, "saved: {} vs {boosted}", spread(photo));
+}

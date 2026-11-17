@@ -1,6 +1,6 @@
 //! Edge-aware smoothing: a self-guided filter (He, Sun and Tang, "Guided Image
 //! Filtering", 2010), for tools that change a photo by its local brightness (Shadows &
-//! highlights; later local contrast and dehaze).
+//! highlights, Local contrast; later dehaze).
 //!
 //! Inside a window, the output is a linear fit of the input: flat where the input varies
 //! less than `eps` (it averages), the input itself where it varies much more (an edge
@@ -79,6 +79,13 @@ pub fn box_mean(p: &Plane, r: usize) -> Plane {
 /// found on a copy shrunk so its longer side is at most [`FAST_SIDE`], and applied to `p`
 /// at full size. Edges stay as sharp as `p`'s.
 pub fn guided(p: &Plane, r: usize, eps: f32) -> Plane {
+    let (a, b) = guided_fit(p, r, eps);
+    Plane { data: (0..p.data.len()).map(|i| a.data[i] * p.data[i] + b.data[i]).collect(), ..*p }
+}
+
+/// The per-pixel linear fit `(a, b)` behind [`guided`], at `p`'s size: the smoothed plane
+/// is `a · p + b`. `a` near 1 marks an edge (kept), near 0 a region that is averaged.
+pub fn guided_fit(p: &Plane, r: usize, eps: f32) -> (Plane, Plane) {
     let s = p.width.max(p.height).div_ceil(FAST_SIDE).max(1);
     let small = if s > 1 { shrink(p, s) } else { p.clone() };
     let r_small = (r as f32 / s as f32).round().max(1.0) as usize;
@@ -87,8 +94,7 @@ pub fn guided(p: &Plane, r: usize, eps: f32) -> Plane {
     let a = var.map(|v| v / (v + eps));
     let b = mean.zip(&a, |m, a| m * (1.0 - a));
     let (a, b) = (box_mean(&a, r_small), box_mean(&b, r_small));
-    let (a, b) = if s > 1 { (grow(&a, p.width, p.height), grow(&b, p.width, p.height)) } else { (a, b) };
-    Plane { data: (0..p.data.len()).map(|i| a.data[i] * p.data[i] + b.data[i]).collect(), ..*p }
+    if s > 1 { (grow(&a, p.width, p.height), grow(&b, p.width, p.height)) } else { (a, b) }
 }
 
 /// Planes with a longer side above this are filtered on a shrunk copy.

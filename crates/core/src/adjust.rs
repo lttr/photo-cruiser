@@ -29,6 +29,10 @@ pub enum Tool {
     /// equalizer "compress shadows/highlights" ([`crate::tones`]).
     #[serde(alias = "tones")]
     ShadowsHighlights,
+    /// Brings out detail, 1–2 (100–200 %), like darktable's local contrast "detail"
+    /// ([`crate::local_contrast`]). 1 changes nothing.
+    #[serde(alias = "clarity")]
+    LocalContrast,
     /// Colourfulness: darktable's "basic colorfulness: standard" preset × the value, 0–2.
     /// More in the shadows than in the highlights ([`crate::colour`]).
     #[serde(alias = "color")]
@@ -43,9 +47,16 @@ impl Tool {
     /// exposure: it stretches each channel to the full range, so it would undo an exposure
     /// done before it. Warmth comes after levels, which would neutralise it per channel.
     /// Shadows & highlights comes after exposure: it goes by the distance from middle grey.
-    /// Colour comes after both: its masks go by brightness.
-    pub const ALL: [Tool; 5] =
-        [Tool::Levels, Tool::Warmth, Tool::Exposure, Tool::ShadowsHighlights, Tool::Colour];
+    /// Local contrast comes after it: it boosts the detail on top of the areas it has set.
+    /// Colour comes last: its masks go by brightness.
+    pub const ALL: [Tool; 6] = [
+        Tool::Levels,
+        Tool::Warmth,
+        Tool::Exposure,
+        Tool::ShadowsHighlights,
+        Tool::LocalContrast,
+        Tool::Colour,
+    ];
 
     pub fn label(self) -> &'static str {
         match self {
@@ -53,6 +64,7 @@ impl Tool {
             Tool::Warmth => "Warmth",
             Tool::Exposure => "Exposure",
             Tool::ShadowsHighlights => "Shadows & highlights",
+            Tool::LocalContrast => "Local contrast",
             Tool::Colour => "Colour",
         }
     }
@@ -62,6 +74,7 @@ impl Tool {
         match self {
             Tool::Levels | Tool::Colour => 0.0..=2.0,
             Tool::ShadowsHighlights => 0.0..=1.0,
+            Tool::LocalContrast => 1.0..=2.0,
             Tool::Exposure | Tool::Warmth => -2.0..=2.0,
         }
     }
@@ -70,6 +83,7 @@ impl Tool {
     pub fn neutral(self) -> f32 {
         match self {
             Tool::Levels | Tool::Warmth | Tool::Exposure | Tool::ShadowsHighlights | Tool::Colour => 0.0,
+            Tool::LocalContrast => 1.0,
         }
     }
 
@@ -80,6 +94,7 @@ impl Tool {
             Tool::Exposure => format!("{value:+.2} EV"),
             Tool::Warmth => format!("{value:+.2}"),
             Tool::Colour => format!("{value:.2}×"),
+            Tool::LocalContrast => format!("{:.0}%", value * 100.0),
         }
     }
 
@@ -99,7 +114,7 @@ impl Tool {
     /// The value the tool opens at for `img`: auto exposure brings the average brightness
     /// to middle grey; levels opens at strength 1 (it measures the image as it applies);
     /// warmth at grey-world white balance; shadows & highlights at 0.45, darktable's
-    /// "medium"; colour at 1, the preset as darktable has it.
+    /// "medium"; local contrast at 1.25, darktable's default detail; colour at 1, the preset as darktable has it.
     /// Rounded to 0.01.
     pub fn opening(self, img: &RgbaImage) -> f32 {
         let v = match self {
@@ -107,6 +122,7 @@ impl Tool {
             Tool::Exposure => auto_exposure(img),
             Tool::Warmth => crate::warmth::grey_world(img),
             Tool::ShadowsHighlights => 0.45,
+            Tool::LocalContrast => 1.25,
         };
         // `+ 0.0`: no "-0.00".
         (self.clamp(v) * 100.0).round() / 100.0 + 0.0
@@ -126,6 +142,7 @@ impl Tool {
             Tool::Exposure => map_rgb(img, &[exposure_lut(value); 3]),
             Tool::Warmth => crate::warmth::apply(img, value),
             Tool::ShadowsHighlights => crate::tones::apply(img, value),
+            Tool::LocalContrast => crate::local_contrast::apply(img, value),
             Tool::Colour => crate::colour::apply(img, value),
         }
     }
@@ -475,7 +492,7 @@ mod tests {
             "blur"
                 .parse::<Tool>()
                 .unwrap_err()
-                .contains("one of levels, warmth, exposure, shadows_highlights, colour")
+                .contains("one of levels, warmth, exposure, shadows_highlights, local_contrast, colour")
         );
         assert_eq!("color".parse::<Tool>(), Ok(Tool::Colour));
         // Levels goes before exposure, whatever order they're set in.

@@ -86,6 +86,13 @@ const CASES: &[Case] = &[
         max_side: None,
         adjust: Some(Tool::ShadowsHighlights),
     },
+    Case {
+        name: "window-local-contrast",
+        fixture: "adjust/window.jpg",
+        crop: None,
+        max_side: None,
+        adjust: Some(Tool::LocalContrast),
+    },
     Case { name: "avif-max-side", fixture: "img4.AVIF", crop: None, max_side: Some(100), adjust: None },
 ];
 
@@ -281,4 +288,39 @@ fn shadows_highlights_on_a_backlit_room() {
     let mut grey = image::RgbaImage::from_pixel(64, 64, image::Rgba([119, 119, 119, 255]));
     Tool::ShadowsHighlights.apply(&mut grey, 0.45);
     assert!(grey.get_pixel(32, 32).0[..3].iter().all(|c| c.abs_diff(119) <= 1));
+}
+
+/// Local contrast at 200% on `adjust/window.jpg`: the wall's grain gets stronger, the wall
+/// next to the bright window doesn't darken, and the sky around the tree crown (a soft
+/// edge, about 1 EV) doesn't glow: no halos.
+#[test]
+fn local_contrast_on_a_backlit_room() {
+    let src = decode(&root().join("../../fixtures/adjust/window.jpg")).unwrap();
+    let original = render(&src, &EditStack::default(), RenderOpts::default()).unwrap();
+    assert_eq!(Tool::LocalContrast.opening(&original), 1.25);
+    let mut stack = EditStack::default();
+    stack.set_adjust(Tool::LocalContrast, Some(2.0));
+    let out = render(&src, &stack, RenderOpts::default()).unwrap();
+    let green = |img: &RgbaImage, x: u32| i32::from(img.get_pixel(x, 100).0[1]);
+    let spread = |img: &RgbaImage, xs: std::ops::Range<u32>| {
+        let v: Vec<i32> = xs.map(|x| green(img, x)).collect();
+        v.iter().max().unwrap() - v.iter().min().unwrap()
+    };
+    assert!(spread(&out, 140..180) > spread(&original, 140..180) + 2, "grain stronger");
+    // Up to the window's edge (x 200), the wall stays within the levels of its grain far
+    // from it.
+    let (lo, hi) =
+        (130..170).fold((i32::MAX, i32::MIN), |(lo, hi), x| (lo.min(green(&out, x)), hi.max(green(&out, x))));
+    for x in 170..199 {
+        assert!(
+            (lo - 2..=hi + 2).contains(&green(&out, x)),
+            "column {x}: {} outside {lo}..={hi}",
+            green(&out, x)
+        );
+    }
+    // The sky left and right of the crown (x 235..290 at y 90), against the original.
+    for x in (225..235).chain(291..299) {
+        let (now, was) = (out.get_pixel(x, 90).0[0], original.get_pixel(x, 90).0[0]);
+        assert!(now <= was.saturating_add(4), "sky at {x}: {now} vs {was}");
+    }
 }

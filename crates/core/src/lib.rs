@@ -18,6 +18,7 @@ pub mod info;
 pub mod justified;
 pub mod levels;
 pub mod loader;
+pub mod local_contrast;
 pub mod meta;
 pub mod rating;
 pub mod render;
