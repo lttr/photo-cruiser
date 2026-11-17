@@ -23,7 +23,7 @@ in absolute terms. Only the ratios between rows mean anything.
 - 4:2:0 and 4:4:4 lie on about the same size/score curve. 4:2:0 matches what the cameras write.
 - Every output decodes with our own decoder (`image`/zune-jpeg), progressive ones included.
 
-Chosen: **mozjpeg-rs, progressive (`Encoder::max_compression`), q92, 4:2:0**. Camera JPEGs end up
+Chosen: **`mozjpeg-rs` 0.9.2 (crates.io, BSD-3-Clause, pure Rust), `Encoder::max_compression` (progressive, optimised scans, trellis, deringing), q92, 4:2:0** (later: subsampling follows the original). Camera JPEGs end up
 at 36–62 % of their size (SSIMULACRA2 85.5–89.3). HEICs become JPEGs at 79–94 % of the HEIC's size
 (81–83). q94 would keep more (87.4 mean), but camera JPEGs would then shrink by only about 25 %,
 close to the 20 % threshold below which an unedited JPEG is copied.
@@ -45,3 +45,19 @@ Real run (`pcr export-tree`, release build, 8 workers): 22 JPEGs and 10 HEICs, 1
   would be under 30 dB.
 - With both: 12 photos, 45.1 MB → 26.5 MB in 6.0 s. A 100 % crop of a scaled Nikon photo looks
   the same as the original scaled by ImageMagick.
+
+## Quality 92 vs 95 (user asked; 92 kept)
+
+The same 12 photos at the export size (4032 px, original subsampling). SSIMULACRA2 against
+the uncompressed image, mean (worst):
+
+| Viewing | q92 | q95 |
+| --- | --- | --- |
+| Full screen on 4K (both scaled to fit 3840×2160, Lanczos) | 89.8 (88.2) | 91.2 (89.8) |
+| 1:1, every pixel (worst case for an A4 print at about 345 ppi) | 85.3 (81.2) | 87.9 (84.2) |
+| Size of the 12 | 26.1 MB | 34.3 MB (+31 %) |
+
+The scale, from memory of the tool's README (not re-checked): 90 can't be told from the
+original side by side at 1:1; 80 isn't noticed at normal viewing distance. Lowest scores come
+from photos that were iPhone HEICs, which were compressed once before. q95 would pay off only
+for zooming to 100 % or heavy crops from the archive. `--quality 95` is there for that.

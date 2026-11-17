@@ -14,7 +14,7 @@ Processing photos should take as few steps as possible. Whatever the app can do 
 
 - `crates/core`: all photo logic (catalog, decoding, crop and edit stack, rendering, export). No GUI dependencies.
 - `crates/app`: the `photo-cruiser` GUI, built on [iced](https://iced.rs).
-- `crates/cli`: `pcr`, a command line front end over the same core (`list`, `info`, `render`, `export`, `edits`, `save`, `revert`, `app`, `skill`). Add `--json` for machine-readable output.
+- `crates/cli`: `pcr`, a command line front end over the same core (`list`, `info`, `star`, `render`, `export`, `export-tree`, `edits`, `save`, `revert`, `app`, `skill`). Add `--json` for machine-readable output.
 
 ## Build and run
 
@@ -25,6 +25,34 @@ just run ~/Pictures      # launch the GUI on a folder
 just cli list fixtures   # run the CLI
 just check               # fmt, clippy, tests
 ```
+
+## Export and archive
+
+The last step of cull → edit → export: star the photos worth keeping, edit them, then export the starred ones as JPEGs into a new folder:
+
+```sh
+pcr export-tree ~/Photos/2026 -o ~/Archive/2026 --starred
+```
+
+The sub-folders are mirrored. One command does everything, with these defaults:
+
+| Choice | Default | Why |
+| --- | --- | --- |
+| Output folder | must be new or empty | Nothing is ever overwritten or merged. To export again, pick a new folder. |
+| Which photos | all; `--starred` for starred only | Hidden folders such as `.photo-cruiser/` are skipped. |
+| Format | JPEG | Opens everywhere. HEIC, PNG, WebP, … become `<name>.jpg`; JPEGs keep their names. |
+| Encoder | [`mozjpeg-rs`](https://crates.io/crates/mozjpeg-rs) 0.9 (pure Rust port of Mozilla's mozjpeg, BSD-3-Clause), preset `max_compression`: progressive, optimised scans, trellis quantisation, deringing | About 25 % smaller than the `jpeg-encoder` crate (used before, still used by Save) at the same visual quality. Progressive adds 4 % at no loss. Encoding is slower (about 0.4 s per photo on 8 cores), which is fine for an archive. Not chosen: `jpegli-rs` (AGPL-3.0, deprecated) and the C `mozjpeg` crate (same output, needs cmake and nasm). |
+| Decoding | `image` crate (JPEG via zune-jpeg, PNG, GIF, WebP, BMP); system libheif via `libheif-rs` (HEIC, AVIF) | The same decoders as the rest of the app. Progressive output was checked to decode identically with zune-jpeg and libjpeg. |
+| Scaling | `image` crate, Lanczos3 | Sharper than the quick filter the app uses for previews. |
+| Quality | 92 (`--quality N`) | Visually indistinguishable full screen on a 4K display (SSIMULACRA2 about 90). An A4 print shows no difference either. 95 is 31 % bigger and only helps when zooming to 100 %. |
+| Chroma subsampling | as in the original | 4:2:2 stays 4:2:2, 4:2:0 stays 4:2:0, PNG and other lossless formats get 4:4:4. No colour resolution is lost, and no bytes are spent on colour detail that isn't there. |
+| Size | longer side at most 4032 px (`--max-side N`, `0` = keep) | 4032 is the long side of 12 MP phone photos, so those keep every pixel. Bigger photos are scaled down (Lanczos). Fills a 5K screen; an A4 print gets about 345 ppi. |
+| Edits | applied, rendered once from the original | Saved photos aren't encoded twice: the export starts from the backup of the original. |
+| Unedited JPEGs | copied byte for byte unless re-encoding saves ≥ 20 % or the photo is over the size limit | No needless second lossy step; camera JPEGs still shrink by 40–60 %. |
+| Metadata | EXIF (turned upright), colour profile, star, file time | The archive keeps dates, camera, GPS and ratings. |
+| Failures | the rest is exported; exit code 4 and the report lists them | One broken photo doesn't stop an archive run. |
+
+Measurements behind these choices: `.aiwork/2026-11-17_batch-export/research.md`.
 
 ## Install
 

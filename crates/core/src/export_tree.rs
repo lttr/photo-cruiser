@@ -4,7 +4,8 @@
 //! - Edited photos render from the untouched original ([`store::original`]) with their
 //!   current edit stack, so they go through one lossy step.
 //! - Unedited JPEGs are copied byte for byte, unless the archive encoding is at least
-//!   [`Options::min_saving`] smaller, or bigger than [`Options::max_side`] (a high-quality camera JPEG); then that is written.
+//!   [`Options::min_saving`] smaller (a high-quality camera JPEG), or the photo is bigger
+//!   than [`Options::max_side`]; then that is written.
 //! - Everything else (HEIC, PNG, WebP, …) is encoded.
 //! - Photos bigger than [`Options::max_side`] are scaled down (Lanczos).
 //! - Chroma sampling follows the original (4:2:2 stays 4:2:2, PNG gets 4:4:4).
@@ -12,6 +13,9 @@
 //!
 //! The output folder must be new or empty: nothing is ever overwritten. One photo failing
 //! doesn't stop the others; it is listed in the report.
+//!
+//! The defaults ([`Options::default`]) and why: the README's "Export and archive" table, with
+//! the measurements in `.aiwork/2026-11-17_batch-export/research.md`.
 
 use crate::catalog::{self, Folder, natural_cmp};
 use crate::decode::{self, Format};

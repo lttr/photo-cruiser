@@ -47,7 +47,9 @@ pub enum Encoding {
     },
 }
 
-/// Default quality of [`Encoding::Archive`].
+/// Default quality of [`Encoding::Archive`]: visually indistinguishable full screen on 4K,
+/// fine for A4 prints; 95 is 31 % bigger for a gain visible only at 100 % zoom (see
+/// `.aiwork/2026-11-17_batch-export/research.md`).
 pub const ARCHIVE_QUALITY: u8 = 92;
 
 impl From<OutFormat> for Encoding {
