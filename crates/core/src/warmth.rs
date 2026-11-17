@@ -116,15 +116,15 @@ pub fn matrix(w: f32) -> Mat {
 }
 
 /// sRGB-encoded byte → linear light.
-fn linear_lut() -> &'static [f32; 256] {
+pub(crate) fn linear_lut() -> &'static [f32; 256] {
     static LUT: OnceLock<[f32; 256]> = OnceLock::new();
     LUT.get_or_init(|| std::array::from_fn(|i| srgb_to_linear(i as f32 / 255.0)))
 }
 
-const ENCODE_LEN: usize = 8192;
+pub(crate) const ENCODE_LEN: usize = 8192;
 
 /// Linear light at `i / (ENCODE_LEN − 1)` → sRGB-encoded byte.
-fn encode_lut() -> &'static [u8] {
+pub(crate) fn encode_lut() -> &'static [u8] {
     static LUT: OnceLock<Vec<u8>> = OnceLock::new();
     LUT.get_or_init(|| {
         (0..ENCODE_LEN)

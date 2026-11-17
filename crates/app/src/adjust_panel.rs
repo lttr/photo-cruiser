@@ -19,6 +19,7 @@ pub fn key(tool: Tool) -> &'static str {
         Tool::Levels => "A",
         Tool::Warmth => "W",
         Tool::Exposure => "E",
+        Tool::ShadowsHighlights => "T",
         Tool::Colour => "S",
     }
 }

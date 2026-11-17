@@ -21,7 +21,9 @@ adjust/: inputs for the adjustment tools:
   document.jpg (photo of a page: yellowish paper with a shadow in a corner and grey-brown
   text, on a dark desk at the left; the page is x 60..320),
   warm-cast.jpg (a neutral scene, grey ramps and colour patches, under warm tungsten-like light:
-  linear R × 1, G × 0.8, B × 0.55)
+  linear R × 1, G × 0.8, B × 0.55),
+  window.jpg (a dark room with a bright window on the right: shelves and a table in the
+  shadows, sky and a tree outside; the window is x 200..300, y 30..170)
 """
 
 import io
@@ -164,9 +166,39 @@ def cast(w=W, h=H, gains=(1.0, 0.8, 0.55)):
     return img
 
 
+def window(w=W, h=H):
+    """A backlit room: dark walls and furniture with some texture, and a bright window
+    with sky and a tree, for Shadows & highlights."""
+    img = Image.new("RGB", (w, h))
+    px = img.load()
+    for y in range(h):
+        for x in range(w):
+            grain = (x * 7 + y * 13) % 5
+            if y >= 180:
+                c = (34 + grain + (x // 6) % 2 * 4, 26 + grain, 20)  # floorboards
+            else:
+                c = (30 + grain, 28 + grain, 34 + grain)  # wall
+            if 200 <= x < 300 and 30 <= y < 170:
+                c = (205 + y // 8, 225 + y // 12, 248)  # sky, lighter at the bottom
+            px[x, y] = c
+    d = ImageDraw.Draw(img)
+    d.ellipse([235, 60, 290, 120], fill=(150, 185, 140))  # tree crown
+    d.rectangle([258, 115, 266, 169], fill=(120, 105, 90))  # trunk
+    d.rectangle([248, 30, 252, 169], fill=(60, 52, 46))  # window bar
+    d.rectangle([20, 40, 120, 150], fill=(48, 36, 28))  # shelf
+    for i, y in enumerate(range(52, 140, 22)):
+        d.rectangle([24, y, 116, y + 3], fill=(62, 48, 36))
+        for j in range(7):
+            x = 30 + j * 12
+            d.rectangle([x, y - 14, x + 8, y - 1], fill=((90, 30, 30), (30, 60, 90), (70, 70, 30))[(i + j) % 3])
+    d.rectangle([60, 170, 190, 182], fill=(70, 50, 34))  # table top
+    return img
+
+
 (out / "adjust").mkdir(exist_ok=True)
 document().save(out / "adjust" / "document.jpg", quality=95, subsampling=0)
 cast().save(out / "adjust" / "warm-cast.jpg", quality=95, subsampling=0)
+window().save(out / "adjust" / "window.jpg", quality=95, subsampling=0)
 
 from PIL import ImageCms
 

@@ -53,6 +53,13 @@ fn describe(tool: Tool) -> (&'static str, &'static str) {
             "auto (average brightness to middle grey)",
             "brightness in EV (stops), linear light × 2^value. Applied after levels.",
         ),
+        Tool::ShadowsHighlights => (
+            "0.45",
+            "lifts dark areas and pulls back bright ones towards middle grey, by area (edge-aware, \
+             so detail keeps its contrast), like darktable's tone equalizer \"compress \
+             shadows/highlights\": soft 0.25, medium 0.45, strong 0.65. `tones` is accepted too. \
+             Applied after exposure.",
+        ),
         Tool::Colour => (
             "1",
             "colourfulness, darktable's \"basic colorfulness: standard\" × the value, more in the \

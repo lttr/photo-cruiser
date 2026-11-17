@@ -79,6 +79,13 @@ const CASES: &[Case] = &[
         max_side: None,
         adjust: Some(Tool::Warmth),
     },
+    Case {
+        name: "window-shadows-highlights",
+        fixture: "adjust/window.jpg",
+        crop: None,
+        max_side: None,
+        adjust: Some(Tool::ShadowsHighlights),
+    },
     Case { name: "avif-max-side", fixture: "img4.AVIF", crop: None, max_side: Some(100), adjust: None },
 ];
 
@@ -247,4 +254,31 @@ fn warmth_removes_a_warm_cast() {
         assert!(spread(after) <= 8, "grey at ({x},{y}): {after:?} (was {before:?})");
         assert!(after[2] > after[0].saturating_sub(8), "not left warm: {after:?}");
     }
+}
+
+/// Shadows & highlights on `adjust/window.jpg`, a dark room with a bright window: the room
+/// lifts, the window comes down a little, and the wall next to the window doesn't glow.
+#[test]
+fn shadows_highlights_on_a_backlit_room() {
+    let src = decode(&root().join("../../fixtures/adjust/window.jpg")).unwrap();
+    let original = render(&src, &EditStack::default(), RenderOpts::default()).unwrap();
+    assert_eq!(Tool::ShadowsHighlights.opening(&original), 0.45);
+    let mut stack = EditStack::default();
+    stack.set_adjust(Tool::ShadowsHighlights, Some(0.45));
+    let out = render(&src, &stack, RenderOpts::default()).unwrap();
+    let luma = |img: &RgbaImage, x: u32, y: u32| {
+        let p = img.get_pixel(x, y).0;
+        (u32::from(p[0]) * 2126 + u32::from(p[1]) * 7152 + u32::from(p[2]) * 722) / 10_000
+    };
+    let (wall, sky) = ((160, 100), (215, 50));
+    assert!(luma(&out, wall.0, wall.1) > luma(&original, wall.0, wall.1) + 15, "room lifted");
+    assert!(luma(&out, sky.0, sky.1) + 5 < luma(&original, sky.0, sky.1), "window pulled back");
+    // The wall right next to the window is lifted like the wall far from it: no halo.
+    let near: u32 = (192..198).map(|x| luma(&out, x, 100)).sum::<u32>() / 6;
+    let far: u32 = (150..156).map(|x| luma(&out, x, 100)).sum::<u32>() / 6;
+    assert!(near.abs_diff(far) <= 3, "wall near the window {near}, far {far}");
+    // Mid-tones barely change: a grey card in the middle of a mid-grey photo.
+    let mut grey = image::RgbaImage::from_pixel(64, 64, image::Rgba([119, 119, 119, 255]));
+    Tool::ShadowsHighlights.apply(&mut grey, 0.45);
+    assert!(grey.get_pixel(32, 32).0[..3].iter().all(|c| c.abs_diff(119) <= 1));
 }

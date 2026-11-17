@@ -21,8 +21,10 @@ pub mod loader;
 pub mod meta;
 pub mod rating;
 pub mod render;
+pub mod smooth;
 pub mod source;
 pub mod store;
+pub mod tones;
 pub mod warmth;
 pub mod zoom;
 

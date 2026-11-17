@@ -12,7 +12,7 @@ references:
 ## Acceptance criteria
 
 - [ ] No halos along strong edges at 200%
-- [ ] The smoothing filter lives in core, reusable by other tools
+- [x] The smoothing filter lives in core, reusable by other tools (`core::smooth::guided`, built for Shadows & highlights)
 - [ ] Opening the tool applies the opening value as one undoable step; Esc reverts it; double-clicking the slider resets it to the opening value
 - [ ] Available from the command palette; works the same through `pcr` (edits JSON, render, save)
 - [ ] Unit test in core for the pixel math; a render golden image

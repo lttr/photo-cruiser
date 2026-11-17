@@ -1855,6 +1855,31 @@ fn update_warmth_opens_at_grey_world() {
 }
 
 #[test]
+fn update_shadows_highlights_opens_at_medium() {
+    use photo_cruiser_core::{EditStack, Tool};
+    let value = |s: &State| s.stack().adjust(Tool::ShadowsHighlights);
+    let mut s = opened(&fixtures().join("adjust"));
+    s.apply(&Action::ShowPhoto { index: Some(2) }); // window.jpg
+    settle(&mut s);
+    s.apply(&Action::OpenTool { tool: Tool::ShadowsHighlights });
+    settle(&mut s);
+    assert_eq!(s.tool.as_ref().unwrap().opening, Some(0.45));
+    assert_eq!((value(&s), s.dirty(), s.preview.is_some()), (Some(0.45), true, true));
+    s.apply(&Action::Undo);
+    assert_eq!(s.stack(), EditStack::default(), "opening is one step");
+    s.apply(&Action::Redo);
+    s.apply(&Action::SetAdjust { value: 0.9 });
+    s.apply(&Action::AutoAdjust);
+    assert_eq!(value(&s), Some(0.45), "double-click: medium");
+    s.apply(&Action::NeutralAdjust);
+    assert_eq!(s.stack(), EditStack::default(), "0 is no step");
+    s.apply(&Action::SetAdjust { value: 0.65 });
+    s.apply(&Action::CancelTool);
+    assert!(s.tool.is_none() && s.stack() == EditStack::default(), "Esc: as before the tool opened");
+    assert!(s.errors.is_empty(), "{:?}", s.errors);
+}
+
+#[test]
 fn tool_keys() {
     use crate::crop_overlay::key_message;
     use iced::keyboard::Modifiers;
@@ -1871,6 +1896,10 @@ fn tool_keys() {
     assert_eq!(action(Key::Character("a".into()), Modes::default()), Action::OpenTool { tool: Tool::Levels });
     assert_eq!(action(Key::Character("s".into()), Modes::default()), Action::OpenTool { tool: Tool::Colour });
     assert_eq!(action(Key::Character("w".into()), Modes::default()), Action::OpenTool { tool: Tool::Warmth });
+    assert_eq!(
+        action(Key::Character("t".into()), Modes::default()),
+        Action::OpenTool { tool: Tool::ShadowsHighlights }
+    );
     assert_eq!(
         key_message(
             &Key::Character("d".into()),

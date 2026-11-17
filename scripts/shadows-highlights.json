@@ -1,0 +1,6 @@
+[
+  { "action": "show_photo", "index": 2 },
+  { "action": "open_tool", "tool": "shadows_highlights" },
+  { "action": "set_adjust", "value": 0.9 },
+  { "action": "auto_adjust" }
+]
