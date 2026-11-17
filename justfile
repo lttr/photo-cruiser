@@ -133,7 +133,13 @@ verify: check
         --shot "{{artifacts}}/verify-original.png" --dump-state "{{artifacts}}/verify-original.json"
     jq -e '.index == 0 and .original == true and .edits == [{"op":"crop","x":40,"y":30,"w":200,"h":150}] and (.status | contains("original, without edits")) and .errors == []' \
         "{{artifacts}}/verify-original.json" >/dev/null || { cat "{{artifacts}}/verify-original.json"; exit 1; }
-    echo "verify ok: {{artifacts}}/verify.png {{artifacts}}/verify-grid.png {{artifacts}}/verify-save.png {{artifacts}}/verify-exposure.png {{artifacts}}/verify-levels.png {{artifacts}}/verify-colour.png {{artifacts}}/verify-warmth.png {{artifacts}}/verify-shadows-highlights.png {{artifacts}}/verify-local-contrast.png {{artifacts}}/verify-contrast.png {{artifacts}}/verify-sharpen.png {{artifacts}}/verify-dehaze.png {{artifacts}}/verify-original.png"
+    # Vignette on the saved, cropped img1.png: opens at -0.5, back to -0.5 after a change,
+    # on the cropped frame.
+    "{{root}}/scripts/headless.sh" "{{root}}/target/debug/photo-cruiser" "$photos" --script "{{root}}/scripts/vignette.json" \
+        --shot "{{artifacts}}/verify-vignette.png" --dump-state "{{artifacts}}/verify-vignette.json"
+    jq -e '.index == 0 and .edits == [{"op":"crop","x":40,"y":30,"w":200,"h":150},{"op":"adjust","tool":"vignette","value":-0.5}] and .tool.tool == "vignette" and .tool.value == -0.5 and .tool.opening == -0.5 and .preview == true and .dirty == true and .errors == []' \
+        "{{artifacts}}/verify-vignette.json" >/dev/null || { cat "{{artifacts}}/verify-vignette.json"; exit 1; }
+    echo "verify ok: {{artifacts}}/verify.png {{artifacts}}/verify-grid.png {{artifacts}}/verify-save.png {{artifacts}}/verify-exposure.png {{artifacts}}/verify-levels.png {{artifacts}}/verify-colour.png {{artifacts}}/verify-warmth.png {{artifacts}}/verify-shadows-highlights.png {{artifacts}}/verify-local-contrast.png {{artifacts}}/verify-contrast.png {{artifacts}}/verify-sharpen.png {{artifacts}}/verify-dehaze.png {{artifacts}}/verify-original.png {{artifacts}}/verify-vignette.png"
 
 # Release build of the GUI and the CLI (run before `just install`)
 build-release:

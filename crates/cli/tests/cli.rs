@@ -723,3 +723,49 @@ fn dehaze_render_and_save() {
     assert_eq!((&v["ops"][0]["tool"], &v["dirty"]), (&json!("dehaze"), &json!(false)));
     assert!(ridge(photo).abs_diff(clear) <= 3, "saved: {} vs {clear}", ridge(photo));
 }
+
+#[test]
+fn vignette_render_and_save() {
+    let (dir, p) = temp_copies(&["img2.jpg"]);
+    let photo = &p[0];
+    let out = dir.path().join("out.png").to_string_lossy().into_owned();
+    let corner = |path: &str| {
+        let img = image::open(path).unwrap().into_rgba8();
+        let (w, h) = img.dimensions();
+        let px = |x, y| img.get_pixel(x, y).0[..3].iter().map(|&c| u32::from(c)).sum::<u32>();
+        (px(2, 2) + px(w - 3, h - 3), px(w / 2, h / 2))
+    };
+    // No value: -0.5, on the cropped frame.
+    let crop = ["--crop", "40,30,200,150"];
+    let v = json_in(
+        &dir,
+        &[&["render", photo, "--adjust", "vignette"][..], &crop, &["-o", &out, "--json"]].concat(),
+        0,
+    );
+    assert_eq!(v["ops"][1], json!({"op": "adjust", "tool": "vignette", "value": -0.5}));
+    let (dark, centre) = corner(&out);
+    json_in(&dir, &[&["render", photo][..], &crop, &["-o", &out, "--json"]].concat(), 0);
+    let (plain, plain_centre) = corner(&out);
+    assert!(dark < plain, "corners darker: {dark} vs {plain}");
+    assert_eq!(centre, plain_centre, "centre untouched");
+    let v = json_in(&dir, &["render", photo, "--adjust", "vignette=0", "-o", &out, "--json"], 0);
+    assert_eq!(v["ops"].as_array().unwrap().len(), 0, "0 is no step");
+
+    let edits = dir.path().join("e.json");
+    std::fs::write(
+        &edits,
+        json!({"version": 1, "ops": [{"op": "adjust", "tool": "vignette", "value": 1.0}]}).to_string(),
+    )
+    .unwrap();
+    let edits = edits.to_string_lossy().into_owned();
+    json_in(&dir, &["render", photo, "--edits", &edits, "-o", &out, "--json"], 0);
+    let (bright, _) = corner(&out);
+    json_in(&dir, &["render", photo, "-o", &out, "--json"], 0);
+    let (original, _) = corner(&out);
+    assert!(bright > original, "+1 brightens: {bright} vs {original}");
+    let v = json_in(&dir, &["save", photo, "--edits", &edits, "--json"], 0);
+    assert_eq!(v["action"], "saved");
+    let v = json_in(&dir, &["edits", photo, "--json"], 0);
+    assert_eq!((&v["ops"][0]["tool"], &v["dirty"]), (&json!("vignette"), &json!(false)));
+    assert!(corner(photo).0.abs_diff(bright) <= 12, "saved: {} vs {bright}", corner(photo).0);
+}

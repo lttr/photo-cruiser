@@ -46,6 +46,9 @@ pub enum Tool {
     /// Unsharp mask at an amount, 0–1, like darktable's sharpen (radius 2, threshold 0.5)
     /// ([`crate::sharpen`]).
     Sharpen,
+    /// Darker (−) or brighter (+) corners of the (cropped) frame, −1…1, like darktable's
+    /// vignette at its default shape ([`crate::vignette`]).
+    Vignette,
 }
 
 /// Linear-light luminance of the middle grey that L* = 50 is.
@@ -59,9 +62,9 @@ impl Tool {
     /// Shadows & highlights comes after exposure: it goes by the distance from middle grey.
     /// Local contrast comes after it: it boosts the detail on top of the areas it has set.
     /// Contrast comes after both, as darktable's sigmoid does: it shapes the finished tones.
-    /// Colour comes after them: its masks go by brightness. Sharpen comes last, on the
-    /// finished tones.
-    pub const ALL: [Tool; 9] = [
+    /// Colour comes after them: its masks go by brightness. Sharpen comes next, on the
+    /// finished tones. Vignette comes last, on the finished picture.
+    pub const ALL: [Tool; 10] = [
         Tool::Levels,
         Tool::Warmth,
         Tool::Dehaze,
@@ -71,6 +74,7 @@ impl Tool {
         Tool::Contrast,
         Tool::Colour,
         Tool::Sharpen,
+        Tool::Vignette,
     ];
 
     pub fn label(self) -> &'static str {
@@ -84,6 +88,7 @@ impl Tool {
             Tool::Contrast => "Contrast",
             Tool::Colour => "Colour",
             Tool::Sharpen => "Sharpen",
+            Tool::Vignette => "Vignette",
         }
     }
 
@@ -93,6 +98,7 @@ impl Tool {
             Tool::Levels | Tool::Colour => 0.0..=2.0,
             Tool::ShadowsHighlights | Tool::Dehaze | Tool::Sharpen => 0.0..=1.0,
             Tool::LocalContrast | Tool::Contrast => 1.0..=2.0,
+            Tool::Vignette => -1.0..=1.0,
             Tool::Exposure | Tool::Warmth => -2.0..=2.0,
         }
     }
@@ -106,7 +112,8 @@ impl Tool {
             | Tool::Exposure
             | Tool::ShadowsHighlights
             | Tool::Colour
-            | Tool::Sharpen => 0.0,
+            | Tool::Sharpen
+            | Tool::Vignette => 0.0,
             Tool::LocalContrast | Tool::Contrast => 1.0,
         }
     }
@@ -118,7 +125,7 @@ impl Tool {
                 format!("{value:.2}")
             }
             Tool::Exposure => format!("{value:+.2} EV"),
-            Tool::Warmth => format!("{value:+.2}"),
+            Tool::Warmth | Tool::Vignette => format!("{value:+.2}"),
             Tool::Colour => format!("{value:.2}×"),
             Tool::LocalContrast => format!("{:.0}%", value * 100.0),
         }
@@ -142,7 +149,8 @@ impl Tool {
     /// warmth at grey-world white balance; shadows & highlights at 0.45, darktable's
     /// "medium"; dehaze at 0.2, darktable's default; local contrast at 1.25, darktable's
     /// default detail; contrast at 1.2, near sigmoid's "neutral gray" preset (1.22); colour
-    /// at 1, the preset as darktable has it. Sharpen at 0.5, darktable's default amount.
+    /// at 1, the preset as darktable has it. Sharpen at 0.5, darktable's default amount;
+    /// vignette at −0.5, darktable's default.
     /// Rounded to 0.01.
     pub fn opening(self, img: &RgbaImage) -> f32 {
         let v = match self {
@@ -154,6 +162,7 @@ impl Tool {
             Tool::LocalContrast => 1.25,
             Tool::Contrast => 1.2,
             Tool::Sharpen => 0.5,
+            Tool::Vignette => -0.5,
         };
         // `+ 0.0`: no "-0.00".
         (self.clamp(v) * 100.0).round() / 100.0 + 0.0
@@ -184,6 +193,7 @@ impl Tool {
             Tool::Contrast => map_rgb(img, &[crate::contrast::lut(value); 3]),
             Tool::Colour => crate::colour::apply(img, value),
             Tool::Sharpen => crate::sharpen::apply(img, value, scale),
+            Tool::Vignette => crate::vignette::apply(img, value),
         }
     }
 }
@@ -530,7 +540,7 @@ mod tests {
         assert_eq!((s.adjust(Tool::Exposure), s.ops.len()), (None, 2), "neutral is no step");
         assert_eq!("exposure".parse::<Tool>(), Ok(Tool::Exposure));
         assert!("blur".parse::<Tool>().unwrap_err().contains(
-            "one of levels, warmth, dehaze, exposure, shadows_highlights, local_contrast, contrast, colour, sharpen"
+            "one of levels, warmth, dehaze, exposure, shadows_highlights, local_contrast, contrast, colour, sharpen, vignette"
         ));
         assert_eq!("color".parse::<Tool>(), Ok(Tool::Colour));
         // Levels goes before exposure, whatever order they're set in.

@@ -43,6 +43,7 @@ Each tool is one slider. It opens at a value picked for the photo (auto exposure
 | B | Contrast: an S-curve, darker shadows, brighter highlights | 1.2 |
 | S | Colour: more in the shadows, less in the highlights | 1× |
 | P | Sharpen: crisper edges and detail (unsharp mask) | 0.5 |
+| V | Vignette: darker or brighter corners of the cropped frame | −0.5 |
 
 Tools are applied in this order, whatever order you use them in. Hold O (or `\`) to see the original. The same tools work from `pcr`: `pcr render photo.jpg --adjust exposure=0.5 -o out.jpg`, or `pcr render --help` for all of them.
 
@@ -98,7 +99,7 @@ The app lists every shortcut under `?` (or F1); Ctrl+K finds any action by name.
 | Esc | Close menu, cancel the tool, drop the crop selection, zoom out, leave full screen, back to the grid |
 | 1 | Star on / off: a photo to keep |
 | Ctrl+1 | Only the starred photos / all photos |
-| C, A, W, M, E, T, D, B, S, P | Crop and the tools, see [Editing](#editing) |
+| C, A, W, M, E, T, D, B, S, P, V | Crop and the tools, see [Editing](#editing) |
 | Shift+R / Shift+L | Turn right / left |
 | Ctrl+Z, u / Ctrl+Shift+Z, Ctrl+Y | Undo / redo |
 | Ctrl+S | Save now (leaving a photo saves it) |

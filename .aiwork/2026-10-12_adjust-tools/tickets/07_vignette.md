@@ -1,5 +1,6 @@
 ---
-status: ready
+status: done
+verified: [checks, behaviour]
 blocked_by: [01]
 references:
   - "Research: ../research.md"
@@ -11,8 +12,8 @@ references:
 
 ## Acceptance criteria
 
-- [ ] The vignette follows the crop, not the original frame
-- [ ] Opening the tool applies the opening value as one undoable step; Esc reverts it; double-clicking the slider resets it to the opening value
-- [ ] Available from the command palette; works the same through `pcr` (edits JSON, render, save)
-- [ ] Unit test in core for the pixel math; a render golden image
-- [ ] `just verify` passes; headless shot shows the effect
+- [x] The vignette follows the crop, not the original frame
+- [x] Opening the tool applies the opening value as one undoable step; Esc reverts it; double-clicking the slider resets it to the opening value
+- [x] Available from the command palette; works the same through `pcr` (edits JSON, render, save)
+- [x] Unit test in core for the pixel math; a render golden image
+- [x] `just verify` passes; headless shot shows the effect

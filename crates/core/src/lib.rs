@@ -29,6 +29,7 @@ pub mod smooth;
 pub mod source;
 pub mod store;
 pub mod tones;
+pub mod vignette;
 pub mod warmth;
 pub mod zoom;
 

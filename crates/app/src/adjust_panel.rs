@@ -25,6 +25,7 @@ pub fn key(tool: Tool) -> &'static str {
         Tool::Contrast => "B",
         Tool::Colour => "S",
         Tool::Sharpen => "P",
+        Tool::Vignette => "V",
     }
 }
 

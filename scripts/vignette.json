@@ -1,0 +1,6 @@
+[
+  { "action": "show_photo", "index": 0 },
+  { "action": "open_tool", "tool": "vignette" },
+  { "action": "set_adjust", "value": 0.4 },
+  { "action": "auto_adjust" }
+]

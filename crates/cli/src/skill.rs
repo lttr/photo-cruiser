@@ -89,7 +89,14 @@ fn describe(tool: Tool) -> (&'static str, &'static str) {
             "0.5",
             "unsharp mask amount, like darktable's sharpen (radius 2 px of the full-size photo, \
              threshold 0.5, both fixed; 0 = no change). The radius scales with the render, so a \
-             `--max-side` render or the app's preview look like the full-size save. Applied last.",
+             `--max-side` render or the app's preview look like the full-size save. Applied after \
+             Colour, before Vignette.",
+        ),
+        Tool::Vignette => (
+            "-0.5",
+            "darker (−) or brighter (+) corners, like darktable's vignette at its default shape \
+             (fall-off from 80% to 130% of half the longer side, a circle). Relative to the \
+             cropped frame. Applied last.",
         ),
     }
 }

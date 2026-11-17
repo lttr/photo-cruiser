@@ -170,6 +170,7 @@ pub const SHORTCUTS: &[(&str, &str)] = &[
     ("W", "Warmth: white balance, warmer / cooler (opens at auto)"),
     ("M", "Dehaze: remove haze (opens at 0.2)"),
     ("S", "Colour: more in the shadows, less in the highlights (opens at 1×)"),
+    ("V", "Vignette: darker / brighter corners (opens at -0.50)"),
     ("A", "Auto levels, for documents (opens at strength 1; 2: whiter paper)"),
     ("Shift+A", "Tool: back to auto (or double-click the slider)"),
     ("0", "Tool: no change (the photo as it was)"),
@@ -347,6 +348,9 @@ pub fn key_message(key: &Key, modified: &Key, mods: keyboard::Modifiers, m: Mode
         }
         Key::Character(c) if plain && c.eq_ignore_ascii_case("s") => {
             Action::OpenTool { tool: Tool::Colour }.into()
+        }
+        Key::Character(c) if plain && c.eq_ignore_ascii_case("v") => {
+            Action::OpenTool { tool: Tool::Vignette }.into()
         }
         // Shift+R (turn right) is matched above, on the typed `R`.
         Key::Character(c) if plain && m.crop && c.eq_ignore_ascii_case("r") => Action::NextAspect.into(),

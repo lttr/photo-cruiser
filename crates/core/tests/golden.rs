@@ -114,6 +114,13 @@ const CASES: &[Case] = &[
         max_side: None,
         adjust: Some(Tool::Dehaze),
     },
+    Case {
+        name: "jpeg-crop-vignette",
+        fixture: "img2.jpg",
+        crop: Some(Rect::new(40.0, 30.0, 200.0, 150.0)),
+        max_side: None,
+        adjust: Some(Tool::Vignette),
+    },
     Case { name: "avif-max-side", fixture: "img4.AVIF", crop: None, max_side: Some(100), adjust: None },
 ];
 
@@ -401,4 +408,28 @@ fn dehaze_on_hazy_hills_and_a_clear_room() {
         original.pixels().zip(out.pixels()).map(|(a, b)| f64::from(a.0[1].abs_diff(b.0[1]))).sum::<f64>()
             / f64::from(original.width() * original.height());
     assert!(mean < 3.0, "a clear photo changes little: mean {mean:.2} levels");
+}
+
+/// The vignette follows the crop: the cropped photo's corners darken, as if the crop were
+/// the whole photo, not the corners of the original frame.
+#[test]
+fn vignette_follows_the_crop() {
+    let src = decode(&root().join("../../fixtures/img2.jpg")).unwrap();
+    let crop = EditStack::default().with(Op::Crop(Rect::new(40.0, 30.0, 200.0, 150.0)));
+    let cropped = render(&src, &crop, RenderOpts::default()).unwrap();
+    assert_eq!(Tool::Vignette.opening(&cropped), -0.5);
+    let mut stack = crop.clone();
+    stack.set_adjust(Tool::Vignette, Some(-0.5));
+    let out = render(&src, &stack, RenderOpts::default()).unwrap();
+    let mut expected = cropped.clone();
+    Tool::Vignette.apply(&mut expected, -0.5);
+    assert_eq!(out, expected);
+    let sum = |img: &RgbaImage, x: u32, y: u32| {
+        img.get_pixel(x, y).0[..3].iter().map(|&c| u32::from(c)).sum::<u32>()
+    };
+    let (w, h) = out.dimensions();
+    for (x, y) in [(0, 0), (w - 1, 0), (0, h - 1), (w - 1, h - 1)] {
+        assert!(sum(&out, x, y) < sum(&cropped, x, y), "corner {x},{y} darker");
+    }
+    assert_eq!(out.get_pixel(w / 2, h / 2), cropped.get_pixel(w / 2, h / 2), "centre untouched");
 }
