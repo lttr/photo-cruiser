@@ -1,0 +1,6 @@
+[
+  { "action": "show_photo", "index": 1 },
+  { "action": "open_tool", "tool": "warmth" },
+  { "action": "set_adjust", "value": 1.5 },
+  { "action": "auto_adjust" }
+]

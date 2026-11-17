@@ -17,6 +17,7 @@ const PAD: f32 = 8.0;
 pub fn key(tool: Tool) -> &'static str {
     match tool {
         Tool::Levels => "A",
+        Tool::Warmth => "W",
         Tool::Exposure => "E",
         Tool::Colour => "S",
     }

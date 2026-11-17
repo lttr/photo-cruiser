@@ -23,6 +23,7 @@ pub mod rating;
 pub mod render;
 pub mod source;
 pub mod store;
+pub mod warmth;
 pub mod zoom;
 
 pub use adjust::Tool;

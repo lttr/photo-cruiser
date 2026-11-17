@@ -1829,6 +1829,32 @@ fn update_colour_opens_at_one() {
 }
 
 #[test]
+fn update_warmth_opens_at_grey_world() {
+    use photo_cruiser_core::{EditStack, Tool};
+    let warmth = |s: &State| s.stack().adjust(Tool::Warmth);
+    let mut s = opened(&fixtures().join("adjust"));
+    s.apply(&Action::ShowPhoto { index: Some(1) }); // warm-cast.jpg
+    settle(&mut s);
+    s.apply(&Action::OpenTool { tool: Tool::Warmth });
+    settle(&mut s);
+    let opening = s.tool.as_ref().unwrap().opening.unwrap();
+    assert!(opening < -0.5, "a warm cast opens cooler: {opening}");
+    assert_eq!((warmth(&s), s.dirty(), s.preview.is_some()), (Some(opening), true, true));
+    s.apply(&Action::Undo);
+    assert_eq!(s.stack(), EditStack::default(), "opening is one step");
+    s.apply(&Action::Redo);
+    s.apply(&Action::SetAdjust { value: 1.2 });
+    s.apply(&Action::AutoAdjust);
+    assert_eq!(warmth(&s), Some(opening), "double-click: auto");
+    s.apply(&Action::NeutralAdjust);
+    assert_eq!(s.stack(), EditStack::default(), "0 is no step");
+    s.apply(&Action::SetAdjust { value: 0.5 });
+    s.apply(&Action::CancelTool);
+    assert!(s.tool.is_none() && s.stack() == EditStack::default(), "Esc: as before the tool opened");
+    assert!(s.errors.is_empty(), "{:?}", s.errors);
+}
+
+#[test]
 fn tool_keys() {
     use crate::crop_overlay::key_message;
     use iced::keyboard::Modifiers;
@@ -1844,6 +1870,7 @@ fn tool_keys() {
     );
     assert_eq!(action(Key::Character("a".into()), Modes::default()), Action::OpenTool { tool: Tool::Levels });
     assert_eq!(action(Key::Character("s".into()), Modes::default()), Action::OpenTool { tool: Tool::Colour });
+    assert_eq!(action(Key::Character("w".into()), Modes::default()), Action::OpenTool { tool: Tool::Warmth });
     assert_eq!(
         key_message(
             &Key::Character("d".into()),

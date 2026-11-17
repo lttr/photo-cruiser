@@ -43,6 +43,12 @@ fn describe(tool: Tool) -> (&'static str, &'static str) {
             "per channel, the darkest and brightest 0.5% become black and white (also fixes colour \
              casts). 0–1 blends from the original to that, 1–2 raises the clipping to 5%.",
         ),
+        Tool::Warmth => (
+            "auto (grey-world white balance)",
+            "white balance along the colour temperature: + warmer (amber), − cooler (blue), 1 = 100 \
+             mired. Auto makes the average colour neutral, so it also cools a sunset; it doesn't \
+             fix green or magenta casts. Applied after levels.",
+        ),
         Tool::Exposure => (
             "auto (average brightness to middle grey)",
             "brightness in EV (stops), linear light × 2^value. Applied after levels.",

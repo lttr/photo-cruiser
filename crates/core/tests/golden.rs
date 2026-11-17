@@ -72,6 +72,13 @@ const CASES: &[Case] = &[
         max_side: None,
         adjust: Some(Tool::Colour),
     },
+    Case {
+        name: "warm-cast-warmth",
+        fixture: "adjust/warm-cast.jpg",
+        crop: None,
+        max_side: None,
+        adjust: Some(Tool::Warmth),
+    },
     Case { name: "avif-max-side", fixture: "img4.AVIF", crop: None, max_side: Some(100), adjust: None },
 ];
 
@@ -217,4 +224,27 @@ fn levels_on_a_document() {
     let whole = at(&EditStack::default(), 1.0);
     let on_whole = px(&whole, (text.0 + 60, text.1));
     assert!(on_whole[..3].iter().all(|c| *c >= 60), "desk as the black point: {on_whole:?}");
+}
+
+/// Warmth on `adjust/warm-cast.jpg`, a neutral scene under warm light: opening at grey-world
+/// white balance makes the grey wall and floor grey again.
+#[test]
+fn warmth_removes_a_warm_cast() {
+    let src = decode(&root().join("../../fixtures/adjust/warm-cast.jpg")).unwrap();
+    let original = render(&src, &EditStack::default(), RenderOpts::default()).unwrap();
+    let value = Tool::Warmth.opening(&original);
+    // The cast is linear gains (1, 0.8, 0.55); the warm patches (red, skin) hold it back a little.
+    assert!((-0.95..=-0.6).contains(&value), "opens cooler: {value}");
+    let mut stack = EditStack::default();
+    stack.set_adjust(Tool::Warmth, Some(value));
+    let balanced = render(&src, &stack, RenderOpts::default()).unwrap();
+    let spread =
+        |p: [u8; 4]| i32::from(*p[..3].iter().max().unwrap()) - i32::from(*p[..3].iter().min().unwrap());
+    // The wall above the patches, and the floor.
+    for (x, y) in [(40, 10), (280, 10), (40, 200), (280, 200)] {
+        let (before, after) = (original.get_pixel(x, y).0, balanced.get_pixel(x, y).0);
+        assert!(spread(before) > 20, "cast at ({x},{y}): {before:?}");
+        assert!(spread(after) <= 8, "grey at ({x},{y}): {after:?} (was {before:?})");
+        assert!(after[2] > after[0].saturating_sub(8), "not left warm: {after:?}");
+    }
 }

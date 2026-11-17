@@ -95,12 +95,17 @@ verify: check
         --shot "{{artifacts}}/verify-colour.png" --dump-state "{{artifacts}}/verify-colour.json"
     jq -e '.index == 2 and .edits == [{"op":"adjust","tool":"colour","value":1}] and .tool.tool == "colour" and .tool.value == 1 and .tool.opening == 1 and .preview == true and .dirty == true and .errors == []' \
         "{{artifacts}}/verify-colour.json" >/dev/null || { cat "{{artifacts}}/verify-colour.json"; exit 1; }
+    # Warmth on the warm-cast scene: opens cooler (grey-world auto), back to auto after a change.
+    "{{root}}/scripts/headless.sh" "{{root}}/target/debug/photo-cruiser" "$photos/adjust" --script "{{root}}/scripts/warmth.json" \
+        --shot "{{artifacts}}/verify-warmth.png" --dump-state "{{artifacts}}/verify-warmth.json"
+    jq -e '.index == 1 and (.edits | length) == 1 and .edits[0].tool == "warmth" and .edits[0].value < -0.5 and .tool.tool == "warmth" and .tool.value == .tool.opening and .preview == true and .dirty == true and .errors == []' \
+        "{{artifacts}}/verify-warmth.json" >/dev/null || { cat "{{artifacts}}/verify-warmth.json"; exit 1; }
     # Holding O on the saved, cropped img1.png: its original from the backup, uncropped.
     "{{root}}/scripts/headless.sh" "{{root}}/target/debug/photo-cruiser" "$photos" --script "{{root}}/scripts/original.json" \
         --shot "{{artifacts}}/verify-original.png" --dump-state "{{artifacts}}/verify-original.json"
     jq -e '.index == 0 and .original == true and .edits == [{"op":"crop","x":40,"y":30,"w":200,"h":150}] and (.status | contains("original, without edits")) and .errors == []' \
         "{{artifacts}}/verify-original.json" >/dev/null || { cat "{{artifacts}}/verify-original.json"; exit 1; }
-    echo "verify ok: {{artifacts}}/verify.png {{artifacts}}/verify-grid.png {{artifacts}}/verify-save.png {{artifacts}}/verify-exposure.png {{artifacts}}/verify-levels.png {{artifacts}}/verify-colour.png {{artifacts}}/verify-original.png"
+    echo "verify ok: {{artifacts}}/verify.png {{artifacts}}/verify-grid.png {{artifacts}}/verify-save.png {{artifacts}}/verify-exposure.png {{artifacts}}/verify-levels.png {{artifacts}}/verify-colour.png {{artifacts}}/verify-warmth.png {{artifacts}}/verify-original.png"
 
 # Release build of the GUI and the CLI (run before `just install`)
 build-release:

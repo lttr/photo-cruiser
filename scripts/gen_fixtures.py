@@ -19,7 +19,9 @@ previews/: photos with embedded thumbnails (80×60, a downscaled copy):
 
 adjust/: inputs for the adjustment tools:
   document.jpg (photo of a page: yellowish paper with a shadow in a corner and grey-brown
-  text, on a dark desk at the left; the page is x 60..320)
+  text, on a dark desk at the left; the page is x 60..320),
+  warm-cast.jpg (a neutral scene, grey ramps and colour patches, under warm tungsten-like light:
+  linear R × 1, G × 0.8, B × 0.55)
 """
 
 import io
@@ -134,8 +136,37 @@ def document(w=W, h=H, desk=60):
     return img
 
 
+def cast(w=W, h=H, gains=(1.0, 0.8, 0.55)):
+    """A neutral scene (a grey wall getting lighter to the right, a darker grey floor, and
+    patches of red, green, blue and skin) under light with linear `gains` per channel."""
+
+    def lin(v):
+        v /= 255
+        return v / 12.92 if v <= 0.04045 else ((v + 0.055) / 1.055) ** 2.4
+
+    def enc(v):
+        v = min(max(v, 0.0), 1.0)
+        return round(255 * (v * 12.92 if v <= 0.0031308 else 1.055 * v ** (1 / 2.4) - 0.055))
+
+    patches = [(180, 50, 40), (60, 140, 60), (50, 70, 160), (220, 170, 140)]
+    img = Image.new("RGB", (w, h))
+    px = img.load()
+    for y in range(h):
+        for x in range(w):
+            if y >= h * 2 // 3:
+                c = (90 + x // 8,) * 3
+            else:
+                c = (110 + x * 100 // w,) * 3
+                i, r = divmod(x, w // 4)
+                if 30 <= y < 100 and 15 <= r < w // 4 - 15:
+                    c = patches[i]
+            px[x, y] = tuple(enc(lin(v) * g) for v, g in zip(c, gains))
+    return img
+
+
 (out / "adjust").mkdir(exist_ok=True)
 document().save(out / "adjust" / "document.jpg", quality=95, subsampling=0)
+cast().save(out / "adjust" / "warm-cast.jpg", quality=95, subsampling=0)
 
 from PIL import ImageCms
 

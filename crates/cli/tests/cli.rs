@@ -506,3 +506,40 @@ fn skill_prints_or_writes() {
     assert_eq!(v["path"], json!(target.join("SKILL.md")));
     assert_eq!(std::fs::read_to_string(target.join("SKILL.md")).unwrap(), md);
 }
+
+#[test]
+fn warmth_render_and_save() {
+    let (dir, p) = temp_copies(&["adjust/warm-cast.jpg"]);
+    let photo = &p[0];
+    let out = dir.path().join("out.png").to_string_lossy().into_owned();
+    // The grey wall, top left.
+    let pixel = |path: &str| image::open(path).unwrap().into_rgba8().get_pixel(40, 10).0;
+    let spread = |p: [u8; 4]| p[..3].iter().max().unwrap() - p[..3].iter().min().unwrap();
+    // No value: grey-world auto, cooler for a warm cast.
+    let v = json_in(&dir, &["render", photo, "--adjust", "warmth", "-o", &out, "--json"], 0);
+    let auto = v["ops"][0]["value"].as_f64().unwrap();
+    assert!(auto < -0.5 && v["ops"][0]["tool"] == "warmth", "{v}");
+    let balanced = pixel(&out);
+    json_in(&dir, &["render", photo, "-o", &out, "--json"], 0);
+    let original = pixel(&out);
+    assert!(spread(balanced) <= 8 && spread(original) > 20, "{balanced:?} vs {original:?}");
+    json_in(&dir, &["render", photo, "--adjust", "warmth=1", "-o", &out, "--json"], 0);
+    let warm = pixel(&out);
+    assert!(warm[0] > original[0] && warm[2] < original[2], "warmer: {warm:?} vs {original:?}");
+    let v = json_in(&dir, &["render", photo, "--adjust", "warmth=0", "-o", &out, "--json"], 0);
+    assert_eq!(v["ops"].as_array().unwrap().len(), 0, "0 is no step");
+
+    let edits = dir.path().join("e.json");
+    std::fs::write(
+        &edits,
+        json!({"version": 1, "ops": [{"op": "adjust", "tool": "warmth", "value": auto}]}).to_string(),
+    )
+    .unwrap();
+    let edits = edits.to_string_lossy().into_owned();
+    let v = json_in(&dir, &["save", photo, "--edits", &edits, "--json"], 0);
+    assert_eq!(v["action"], "saved");
+    let v = json_in(&dir, &["edits", photo, "--json"], 0);
+    assert_eq!((&v["ops"][0]["tool"], &v["dirty"]), (&json!("warmth"), &json!(false)));
+    let saved = image::open(photo).unwrap().into_rgba8().get_pixel(40, 10).0;
+    assert!(saved.iter().zip(balanced).all(|(s, a)| s.abs_diff(a) <= 6), "{saved:?} vs {balanced:?}");
+}

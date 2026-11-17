@@ -20,6 +20,9 @@ pub enum Tool {
     /// Auto levels at a strength, 0–2: per channel, the darkest and brightest pixels
     /// become black and white. For photos of documents.
     Levels,
+    /// White balance along the colour temperature: + warmer (amber), − cooler (blue), in
+    /// units of 100 mired, −2…2 ([`crate::warmth`]).
+    Warmth,
     /// Brightness in EV (stops): linear light × 2^value.
     Exposure,
     /// Colourfulness: darktable's "basic colorfulness: standard" preset × the value, 0–2.
@@ -34,12 +37,14 @@ pub const MIDDLE_GREY: f32 = 0.1842;
 impl Tool {
     /// Every tool, in the order they are applied (the enum's order). Levels comes before
     /// exposure: it stretches each channel to the full range, so it would undo an exposure
-    /// done before it. Colour comes after exposure: its masks go by brightness.
-    pub const ALL: [Tool; 3] = [Tool::Levels, Tool::Exposure, Tool::Colour];
+    /// done before it. Warmth comes after levels, which would neutralise it per channel.
+    /// Colour comes after exposure: its masks go by brightness.
+    pub const ALL: [Tool; 4] = [Tool::Levels, Tool::Warmth, Tool::Exposure, Tool::Colour];
 
     pub fn label(self) -> &'static str {
         match self {
             Tool::Levels => "Auto levels",
+            Tool::Warmth => "Warmth",
             Tool::Exposure => "Exposure",
             Tool::Colour => "Colour",
         }
@@ -49,14 +54,14 @@ impl Tool {
     pub fn range(self) -> RangeInclusive<f32> {
         match self {
             Tool::Levels | Tool::Colour => 0.0..=2.0,
-            Tool::Exposure => -2.0..=2.0,
+            Tool::Exposure | Tool::Warmth => -2.0..=2.0,
         }
     }
 
     /// The value that changes nothing.
     pub fn neutral(self) -> f32 {
         match self {
-            Tool::Levels | Tool::Exposure | Tool::Colour => 0.0,
+            Tool::Levels | Tool::Warmth | Tool::Exposure | Tool::Colour => 0.0,
         }
     }
 
@@ -65,6 +70,7 @@ impl Tool {
         match self {
             Tool::Levels => format!("{value:.2}"),
             Tool::Exposure => format!("{value:+.2} EV"),
+            Tool::Warmth => format!("{value:+.2}"),
             Tool::Colour => format!("{value:.2}×"),
         }
     }
@@ -84,12 +90,13 @@ impl Tool {
 
     /// The value the tool opens at for `img`: auto exposure brings the average brightness
     /// to middle grey; levels opens at strength 1 (it measures the image as it applies);
-    /// colour at 1, the preset as darktable has it.
+    /// warmth at grey-world white balance; colour at 1, the preset as darktable has it.
     /// Rounded to 0.01.
     pub fn opening(self, img: &RgbaImage) -> f32 {
         let v = match self {
             Tool::Levels | Tool::Colour => 1.0,
             Tool::Exposure => auto_exposure(img),
+            Tool::Warmth => crate::warmth::grey_world(img),
         };
         // `+ 0.0`: no "-0.00".
         (self.clamp(v) * 100.0).round() / 100.0 + 0.0
@@ -107,6 +114,7 @@ impl Tool {
                 map_rgb(img, &luts)
             }
             Tool::Exposure => map_rgb(img, &[exposure_lut(value); 3]),
+            Tool::Warmth => crate::warmth::apply(img, value),
             Tool::Colour => crate::colour::apply(img, value),
         }
     }
@@ -452,7 +460,7 @@ mod tests {
         s.set_adjust(Tool::Exposure, Some(0.0));
         assert_eq!((s.adjust(Tool::Exposure), s.ops.len()), (None, 2), "neutral is no step");
         assert_eq!("exposure".parse::<Tool>(), Ok(Tool::Exposure));
-        assert!("blur".parse::<Tool>().unwrap_err().contains("one of levels, exposure, colour"));
+        assert!("blur".parse::<Tool>().unwrap_err().contains("one of levels, warmth, exposure, colour"));
         assert_eq!("color".parse::<Tool>(), Ok(Tool::Colour));
         // Levels goes before exposure, whatever order they're set in.
         s.set_adjust(Tool::Exposure, Some(0.5));
