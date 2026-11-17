@@ -6,6 +6,8 @@
 //! less than `eps` (it averages), the input itself where it varies much more (an edge
 //! stays sharp). So smoothed brightness follows strong edges, and changing a photo by it
 //! leaves no halos along them. Costs a few box filters, whatever the radius.
+//!
+//! Also a plain Gaussian blur ([`gaussian`]), for Sharpen's unsharp mask.
 
 /// A single-channel image, row by row.
 #[derive(Clone, Debug, PartialEq)]
@@ -67,6 +69,43 @@ pub fn box_mean(p: &Plane, r: usize) -> Plane {
         (lo, hi) = (want_lo, want_hi);
         let n = (hi - lo) as f64;
         out[y * w..(y + 1) * w].iter_mut().zip(&sums).for_each(|(o, s)| *o = (s / n) as f32);
+    }
+    Plane::new(w, h, out)
+}
+
+/// A normalised Gaussian kernel of σ `sigma`, cut at 2.5 σ; `[1.0]` for σ 0.
+fn kernel(sigma: f32) -> Vec<f32> {
+    let r = (2.5 * sigma).ceil() as i32;
+    let k: Vec<f32> = (-r..=r).map(|i| (-(i * i) as f32 / (2.0 * sigma * sigma)).exp()).collect();
+    let sum: f32 = k.iter().sum();
+    if sum.is_finite() && sum > 0.0 { k.iter().map(|v| v / sum).collect() } else { vec![1.0] }
+}
+
+/// `p` blurred by a Gaussian of σ `sigma` (cut at 2.5 σ, separable), the edges clamped.
+pub fn gaussian(p: &Plane, sigma: f32) -> Plane {
+    let kernel = &kernel(sigma);
+    let (w, h, data) = (p.width, p.height, &p.data);
+    let r = (kernel.len() / 2) as isize;
+    let at = |i: isize, len: usize| i.clamp(0, len as isize - 1) as usize;
+    let mut rows = vec![0f32; w * h];
+    for y in 0..h {
+        for x in 0..w {
+            rows[y * w + x] = kernel
+                .iter()
+                .enumerate()
+                .map(|(j, k)| k * data[y * w + at(x as isize + j as isize - r, w)])
+                .sum();
+        }
+    }
+    let mut out = vec![0f32; w * h];
+    for y in 0..h {
+        for x in 0..w {
+            out[y * w + x] = kernel
+                .iter()
+                .enumerate()
+                .map(|(j, k)| k * rows[at(y as isize + j as isize - r, h) * w + x])
+                .sum();
+        }
     }
     Plane::new(w, h, out)
 }
@@ -145,6 +184,15 @@ fn grow(p: &Plane, w: usize, h: usize) -> Plane {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn kernel_is_normalised_and_cut_at_two_and_a_half_sigma() {
+        let k = kernel(2.0);
+        assert_eq!(k.len(), 11);
+        assert!((k.iter().sum::<f32>() - 1.0).abs() < 1e-5);
+        assert!(k[5] > k[4] && (k[4] - k[6]).abs() < 1e-7);
+        assert_eq!(kernel(0.0), vec![1.0]);
+    }
 
     #[test]
     fn box_mean_cuts_windows_at_edges() {

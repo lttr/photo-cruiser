@@ -95,6 +95,12 @@ impl Decoded {
         self.source_width as f32 / self.image.width().max(1) as f32
     }
 
+    /// Pixels of `image` per source pixel (1.0 when not downscaled, below when it is): the
+    /// `scale` that tools' radii in pixels go by ([`crate::adjust::Tool::apply_at`]).
+    pub fn pixel_scale(&self) -> f32 {
+        1.0 / self.source_scale()
+    }
+
     /// Downscale so that the longer side is at most `max_side`. No-op if already smaller.
     pub fn downscale(mut self, max_side: u32) -> Self {
         let (w, h) = self.image.dimensions();

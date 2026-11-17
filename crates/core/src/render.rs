@@ -8,6 +8,7 @@ use crate::decode::Decoded;
 use crate::edit::{EditStack, Op};
 use crate::{Error, Result};
 use image::RgbaImage;
+use std::borrow::Cow;
 
 #[derive(Clone, Copy, Debug, Default)]
 pub struct RenderOpts {
@@ -19,35 +20,37 @@ pub struct RenderOpts {
 /// `src.image` if it was decoded downscaled. A crop that is empty after clamping to the
 /// image is [`Error::EmptyCrop`]; a partial overlap is clamped.
 pub fn render(src: &Decoded, edits: &EditStack, opts: RenderOpts) -> Result<RgbaImage> {
-    let k = 1.0 / src.source_scale();
+    let k = src.pixel_scale();
     // Straightening keeps the photo's frame, and the crop is a part of it
     // ([`crate::straighten`]): one resampling for both.
     let angle = edits.adjust(Tool::Straighten).unwrap_or(0.0);
+    // Borrowed until an op makes a new image: no copy of the full-size photo to crop it.
     let mut img = match angle != 0.0 && edits.crop().is_none() {
-        true => crate::straighten::apply(&src.image, angle),
-        false => src.image.clone(),
+        true => Cow::Owned(crate::straighten::apply(&src.image, angle)),
+        false => Cow::Borrowed(&src.image),
     };
     for op in &edits.ops {
         match op {
             Op::Crop(r) => {
                 let scaled = crate::Rect::new(r.x * k, r.y * k, r.w * k, r.h * k);
                 let p = scaled.to_pixels(img.dimensions()).ok_or(Error::EmptyCrop(*r))?;
-                img = match angle == 0.0 {
-                    true => image::imageops::crop_imm(&img, p.x, p.y, p.w, p.h).to_image(),
+                img = Cow::Owned(match angle == 0.0 {
+                    true => image::imageops::crop_imm(&*img, p.x, p.y, p.w, p.h).to_image(),
                     false => crate::straighten::render(&img, angle, p.into()),
-                };
+                });
             }
             Op::Rotate { quarters } => {
                 img = match quarters % 4 {
-                    1 => image::imageops::rotate90(&img),
-                    2 => image::imageops::rotate180(&img),
-                    3 => image::imageops::rotate270(&img),
+                    1 => Cow::Owned(image::imageops::rotate90(&*img)),
+                    2 => Cow::Owned(image::imageops::rotate180(&*img)),
+                    3 => Cow::Owned(image::imageops::rotate270(&*img)),
                     _ => img,
                 };
             }
             Op::Adjust { .. } => {}
         }
     }
+    let mut img = img.into_owned();
     crate::adjust::apply_all(&mut img, edits, k);
     Ok(match opts.max_side {
         Some(m) => {

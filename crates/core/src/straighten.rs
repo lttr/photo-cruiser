@@ -326,7 +326,6 @@ mod tests {
             Rgba([v, v, v, 255])
         });
         assert_eq!(detect(&noise), 0.0, "speckle");
-        // Steeper than MAX_AUTO: left alone.
         // Lines steeper than MAX_AUTO (a roof, a slope): left alone.
         let roof =
             drawn(400, 300, 20.0, |_, t| [40.0, 95.0, 170.0, 230.0].iter().any(|y| (t - y).abs() < 2.0));

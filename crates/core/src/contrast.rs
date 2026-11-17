@@ -11,7 +11,8 @@
 //! It's applied per channel (darktable's "per channel" mode), so colours get a little
 //! stronger with the contrast, as on film.
 
-use crate::adjust::{MIDDLE_GREY, linear_to_srgb, srgb_to_linear};
+use crate::adjust::{MIDDLE_GREY, linear_to_srgb, to_byte};
+use crate::warmth::linear_lut;
 
 /// Linear light `x` (0–1) through the curve at `contrast` (1 changes nothing).
 pub fn curve(x: f32, contrast: f32) -> f32 {
@@ -25,10 +26,8 @@ pub fn curve(x: f32, contrast: f32) -> f32 {
 
 /// The curve as an 8-bit table on sRGB-encoded values.
 pub fn lut(contrast: f32) -> [u8; 256] {
-    std::array::from_fn(|i| {
-        let y = linear_to_srgb(curve(srgb_to_linear(i as f32 / 255.0), contrast));
-        (y * 255.0).round().clamp(0.0, 255.0) as u8
-    })
+    let lin = linear_lut();
+    std::array::from_fn(|i| to_byte(linear_to_srgb(curve(lin[i], contrast))))
 }
 
 #[cfg(test)]

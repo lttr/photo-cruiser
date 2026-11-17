@@ -10,9 +10,9 @@
 //! the distance near middle grey and linearly beyond 1 EV. Highlights get half the
 //! shadows' change: there is less room above middle grey (about 2.4 EV) than below.
 
-use crate::adjust::MIDDLE_GREY;
+use crate::adjust::{LUMA, MIDDLE_GREY};
 use crate::smooth::{Plane, guided};
-use crate::warmth::{ENCODE_LEN, encode_lut, linear_lut};
+use crate::warmth::{encode, linear_lut};
 use image::RgbaImage;
 
 /// The filter's radius as a share of the longer side: darktable's default smoothing
@@ -31,9 +31,6 @@ pub fn curve(d: f32, strength: f32) -> f32 {
     (-strength * side * d * d * d / (d * d + 1.0)).clamp(-MAX_EV, MAX_EV)
 }
 
-/// Rec. 709 luminance weights of linear R, G, B.
-const LUMA: [f32; 3] = [0.2126, 0.7152, 0.0722];
-
 /// Apply the tool at `strength` to `img` in place; alpha stays.
 pub fn apply(img: &mut RgbaImage, strength: f32) {
     if strength == 0.0 || img.width() == 0 || img.height() == 0 {
@@ -51,12 +48,10 @@ pub fn apply(img: &mut RgbaImage, strength: f32) {
         .collect();
     let r = ((w.max(h) as f32 * RADIUS).round() as usize).max(1);
     let area = guided(&Plane::new(w, h, ev), r, EDGE_EV * EDGE_EV);
-    let enc = encode_lut();
-    let top = (ENCODE_LEN - 1) as f32;
     for (px, d) in img.pixels_mut().zip(area.data) {
         let k = curve(d, strength).exp2();
         for c in &mut px.0[..3] {
-            *c = enc[((lin[*c as usize] * k).clamp(0.0, 1.0) * top).round() as usize];
+            *c = encode(lin[*c as usize] * k);
         }
     }
 }

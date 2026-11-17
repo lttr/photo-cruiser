@@ -9,10 +9,10 @@
 //! value changes nothing, and a stack never stores it ([`crate::EditStack::set_adjust`]).
 
 use crate::edit::{EditStack, Op};
+use crate::warmth::{encode, linear_lut};
 use image::RgbaImage;
 use serde::{Deserialize, Serialize};
 use std::ops::RangeInclusive;
-use std::sync::OnceLock;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -141,6 +141,13 @@ impl Tool {
         }
     }
 
+    /// Whether the tool is part of the geometry (it changes the photo's shape):
+    /// [`render`](crate::render::render) does it before the crop, not [`apply_all`].
+    /// Only Straighten.
+    pub fn is_geometry(self) -> bool {
+        self == Tool::Straighten
+    }
+
     pub fn clamp(self, value: f32) -> f32 {
         let r = self.range();
         if value.is_nan() { self.neutral() } else { value.clamp(*r.start(), *r.end()) }
@@ -164,18 +171,34 @@ impl Tool {
     /// photo's lines.
     /// Rounded to 0.01.
     pub fn opening(self, img: &RgbaImage) -> f32 {
+        self.fixed_opening().unwrap_or_else(|| {
+            self.rounded(match self {
+                Tool::Exposure => auto_exposure(img),
+                Tool::Warmth => crate::warmth::grey_world(img),
+                Tool::Straighten => crate::straighten::detect(img),
+                _ => unreachable!("{self:?} has a fixed opening"),
+            })
+        })
+    }
+
+    /// [`Tool::opening`] for the tools whose opening doesn't depend on the image; `None`
+    /// for those that measure it (Exposure, Warmth, Straighten).
+    pub fn fixed_opening(self) -> Option<f32> {
         let v = match self {
             Tool::Levels | Tool::Colour => 1.0,
-            Tool::Exposure => auto_exposure(img),
-            Tool::Warmth => crate::warmth::grey_world(img),
             Tool::ShadowsHighlights => 0.45,
             Tool::Dehaze => 0.2,
             Tool::LocalContrast => 1.25,
             Tool::Contrast => 1.2,
             Tool::Sharpen => 0.5,
             Tool::Vignette => -0.5,
-            Tool::Straighten => crate::straighten::detect(img),
+            Tool::Exposure | Tool::Warmth | Tool::Straighten => return None,
         };
+        Some(self.rounded(v))
+    }
+
+    /// `v` clamped and rounded to 0.01.
+    fn rounded(self, v: f32) -> f32 {
         // `+ 0.0`: no "-0.00".
         (self.clamp(v) * 100.0).round() / 100.0 + 0.0
     }
@@ -225,8 +248,11 @@ impl std::str::FromStr for Tool {
 }
 
 /// `tool`'s opening value for `src` with `stack`'s geometry, as the app measures it (on
-/// [`EditStack::geometry_for`]).
+/// [`EditStack::geometry_for`]). Only a tool that measures the image renders it.
 pub fn opening(src: &crate::Decoded, stack: &EditStack, tool: Tool) -> crate::Result<f32> {
+    if let Some(v) = tool.fixed_opening() {
+        return Ok(v);
+    }
     let img = crate::render::render(src, &stack.geometry_for(tool), Default::default())?;
     Ok(tool.opening(&img))
 }
@@ -235,10 +261,13 @@ pub fn opening(src: &crate::Decoded, stack: &EditStack, tool: Tool) -> crate::Re
 /// at `scale` of the full-size photo: what the geometry left out (the straightening, for
 /// Straighten), then the adjustments.
 pub fn preview(base: &RgbaImage, stack: &EditStack, tool: Tool, scale: f32) -> RgbaImage {
-    let mut img = base.clone();
-    if let (Tool::Straighten, Some(v)) = (tool, stack.adjust(Tool::Straighten)) {
-        Tool::Straighten.apply(&mut img, v);
-    }
+    // A geometry tool (Straighten, the only one) is left out of `base`: apply it, as
+    // `Tool::apply` would, without copying `base` first.
+    let left_out = stack.adjust(tool).filter(|_| tool.is_geometry()).map(|v| tool.clamp(v));
+    let mut img = match left_out {
+        Some(v) if v != tool.neutral() => crate::straighten::apply(base, v),
+        _ => base.clone(),
+    };
     apply_all(&mut img, stack, scale);
     img
 }
@@ -247,17 +276,11 @@ pub fn preview(base: &RgbaImage, stack: &EditStack, tool: Tool, scale: f32) -> R
 /// (1: full size), in [`Tool::ALL`] order. Straighten isn't one: it's done with the
 /// geometry.
 pub fn apply_all(img: &mut RgbaImage, stack: &EditStack, scale: f32) {
-    for tool in Tool::ALL.into_iter().filter(|t| *t != Tool::Straighten) {
+    for tool in Tool::ALL.into_iter().filter(|t| !t.is_geometry()) {
         if let Some(v) = stack.adjust(tool) {
             tool.apply_at(img, v, scale);
         }
     }
-}
-
-/// sRGB-encoded byte → linear light, 0–1.
-fn linear_lut() -> &'static [f32; 256] {
-    static LUT: OnceLock<[f32; 256]> = OnceLock::new();
-    LUT.get_or_init(|| std::array::from_fn(|i| srgb_to_linear(i as f32 / 255.0)))
 }
 
 pub fn srgb_to_linear(v: f32) -> f32 {
@@ -269,7 +292,8 @@ pub fn linear_to_srgb(v: f32) -> f32 {
     if v <= 0.003_130_8 { v * 12.92 } else { 1.055 * v.powf(1.0 / 2.4) - 0.055 }
 }
 
-fn to_byte(v: f32) -> u8 {
+/// sRGB-encoded 0–1 → byte.
+pub(crate) fn to_byte(v: f32) -> u8 {
     (v * 255.0).round().clamp(0.0, 255.0) as u8
 }
 
@@ -331,7 +355,30 @@ fn levels_luts(img: &RgbaImage, strength: f32) -> [[u8; 256]; 3] {
 }
 
 /// Rec. 709 luminance weights of linear R, G, B.
-const LUMA: [f32; 3] = [0.2126, 0.7152, 0.0722];
+pub(crate) const LUMA: [f32; 3] = [0.2126, 0.7152, 0.0722];
+
+/// Each pixel's luminance (linear) and lightness (the luminance sRGB-encoded: perceptual,
+/// like Lab L), for tools that change the lightness ([`relight`]).
+pub(crate) fn lightness(img: &RgbaImage) -> (Vec<f32>, Vec<f32>) {
+    let lin = linear_lut();
+    let luma: Vec<f32> =
+        img.pixels().map(|px| (0..3).map(|c| LUMA[c] * lin[px.0[c] as usize]).sum()).collect();
+    let light = luma.iter().map(|y| linear_to_srgb(*y)).collect();
+    (luma, light)
+}
+
+/// Give each pixel `i` of `img` (luminance `luma[i]`) the lightness `new(i)`, clamped to
+/// 0–1, as a gain on linear RGB so the hue stays; alpha stays.
+pub(crate) fn relight(img: &mut RgbaImage, luma: &[f32], new: impl Fn(usize) -> f32) {
+    let lin = linear_lut();
+    for (i, px) in img.pixels_mut().enumerate() {
+        let new = new(i).clamp(0.0, 1.0);
+        let k = if luma[i] > 1e-5 { srgb_to_linear(new) / luma[i] } else { 1.0 };
+        for c in &mut px.0[..3] {
+            *c = encode(lin[*c as usize] * k);
+        }
+    }
+}
 
 /// The EV that brings the mean linear luminance (after clipping at white) to
 /// [`MIDDLE_GREY`], within the tool's range. Opaque pixels only count fully; transparent
@@ -401,6 +448,11 @@ impl EditStack {
         self.ops.insert(at, Op::Adjust { tool, value });
     }
 
+    /// Whether the stack has an adjustment that changes the tones (any but the geometry).
+    pub fn has_tones(&self) -> bool {
+        self.adjustments().any(|(t, _)| !t.is_geometry())
+    }
+
     /// The adjustment steps, in the stack's order.
     pub fn adjustments(&self) -> impl Iterator<Item = (Tool, f32)> + '_ {
         self.ops.iter().filter_map(|op| match op {
@@ -412,7 +464,7 @@ impl EditStack {
     /// The stack without its adjustments, except Straighten: what decides the photo's
     /// shape.
     pub fn geometry(&self) -> EditStack {
-        let shape = |op: &&Op| !matches!(op, Op::Adjust { tool, .. } if *tool != Tool::Straighten);
+        let shape = |op: &&Op| !matches!(op, Op::Adjust { tool, .. } if !tool.is_geometry());
         let ops = self.ops.iter().filter(shape).cloned().collect();
         EditStack { ops, ..self.clone() }
     }
@@ -421,12 +473,19 @@ impl EditStack {
     /// [`EditStack::geometry`], but for Straighten without the straightening and the crop
     /// (it shows the whole photo, levelled as it turns).
     pub fn geometry_for(&self, tool: Tool) -> EditStack {
-        let mut g = self.geometry();
-        if tool == Tool::Straighten {
-            g.set_crop(None);
-            g.set_adjust(Tool::Straighten, None);
+        self.shown_with(tool).geometry()
+    }
+
+    /// The stack as the photo shows while `tool` is open: all of it, but for a geometry
+    /// tool (Straighten) without the crop and the tool's own step: the whole photo, which
+    /// the preview turns.
+    pub fn shown_with(&self, tool: Tool) -> EditStack {
+        let mut s = self.clone();
+        if tool.is_geometry() {
+            s.set_crop(None);
+            s.set_adjust(tool, None);
         }
-        g
+        s
     }
 }
 

@@ -8,7 +8,7 @@
 //! A darker vignette scales linear light by `1 + weight·value`, a brighter one adds
 //! `weight·value`, as darktable does.
 
-use crate::warmth::{ENCODE_LEN, encode_lut, linear_lut};
+use crate::warmth::{encode, linear_lut};
 use image::RgbaImage;
 
 /// Where the fall-off starts, in half the longer side.
@@ -29,8 +29,6 @@ pub fn apply(img: &mut RgbaImage, value: f32) {
         return;
     }
     let lin = linear_lut();
-    let enc = encode_lut();
-    let top = (ENCODE_LEN - 1) as f32;
     let scale = 2.0 / w.max(h) as f32;
     let (cx, cy) = (w as f32 / 2.0, h as f32 / 2.0);
     for (x, y, px) in img.enumerate_pixels_mut() {
@@ -42,7 +40,7 @@ pub fn apply(img: &mut RgbaImage, value: f32) {
         for c in &mut px.0[..3] {
             let v = lin[*c as usize];
             let v = if value < 0.0 { v * (1.0 + k * value) } else { v + k * value };
-            *c = enc[(v.clamp(0.0, 1.0) * top).round() as usize];
+            *c = encode(v);
         }
     }
 }

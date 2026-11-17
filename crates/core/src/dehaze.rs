@@ -21,7 +21,7 @@
 //! wouldn't.
 
 use crate::smooth::{Plane, guided};
-use crate::warmth::{ENCODE_LEN, encode_lut, linear_lut};
+use crate::warmth::{encode, linear_lut};
 use image::RgbaImage;
 
 /// darktable's distance, fixed: how far into the scene haze is removed (1: all of it).
@@ -75,14 +75,11 @@ pub fn apply(img: &mut RgbaImage, strength: f32) {
     let haze: Vec<f32> = lin.iter().map(|p| (0..3).map(|c| p[c] / air[c]).fold(f32::MAX, f32::min)).collect();
     let r = ((w.max(h) as f32 * RADIUS).round() as usize).max(2);
     let haze = guided(&Plane::new(w, h, haze), r, EDGE * EDGE);
-    let t_min =
-        if level > 0.0 { level.powf(1.125 * DISTANCE).clamp(1.0 / 1024.0, 1.0) } else { 1.0 / 1024.0 };
-    let enc = encode_lut();
-    let top = (ENCODE_LEN - 1) as f32;
+    let t_min = level.powf(1.125 * DISTANCE).clamp(1.0 / 1024.0, 1.0);
     for ((px, p), d) in img.pixels_mut().zip(&lin).zip(haze.data) {
         let t = (1.0 - strength * d).max(t_min);
         for c in 0..3 {
-            px.0[c] = enc[(clear(p[c], air[c], t) * top).round() as usize];
+            px.0[c] = encode(clear(p[c], air[c], t));
         }
     }
 }
@@ -90,14 +87,10 @@ pub fn apply(img: &mut RgbaImage, strength: f32) {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::adjust::{linear_to_srgb, srgb_to_linear};
+    use crate::adjust::{linear_to_srgb, srgb_to_linear, to_byte};
     use image::Rgba;
 
     const AIR: [f32; 3] = [0.55, 0.58, 0.63];
-
-    fn to_byte(v: f32) -> u8 {
-        (linear_to_srgb(v) * 255.0).round() as u8
-    }
 
     /// Sky (pure airlight) on top; below, the same textured hill seen through transmission
     /// 0.3 (far, x < 100), 0.6 and 0.9 (near, x ≥ 200).
@@ -106,7 +99,8 @@ mod tests {
             let t = if y < 60 { 0.0 } else { [0.3, 0.6, 0.9][x as usize / 100] };
             let tex = if (x / 2 + y / 2) % 2 == 0 { 0.06 } else { 0.0 };
             let scene = [0.05 + tex, 0.12 + tex, 0.04 + tex];
-            let v: [u8; 3] = std::array::from_fn(|c| to_byte(scene[c] * t + AIR[c] * (1.0 - t)));
+            let v: [u8; 3] =
+                std::array::from_fn(|c| to_byte(linear_to_srgb(scene[c] * t + AIR[c] * (1.0 - t))));
             Rgba([v[0], v[1], v[2], 255])
         })
     }

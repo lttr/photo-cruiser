@@ -14,9 +14,8 @@
 //! edges (a window frame, a tree against the sky) get no halo, while texture gets the
 //! full boost.
 
-use crate::adjust::{linear_to_srgb, srgb_to_linear};
+use crate::adjust::{lightness, relight};
 use crate::smooth::{Plane, guided_fit};
-use crate::warmth::{ENCODE_LEN, encode_lut, linear_lut};
 use image::RgbaImage;
 
 /// The filter's radius as a share of the longer side: detail up to about this size is
@@ -26,9 +25,6 @@ const RADIUS: f32 = 0.01;
 const EDGE: f32 = 0.05;
 /// No pixel's lightness changes by more than this.
 const MAX_CHANGE: f32 = 0.25;
-
-/// Rec. 709 luminance weights of linear R, G, B.
-const LUMA: [f32; 3] = [0.2126, 0.7152, 0.0722];
 
 /// The change in lightness of a pixel `detail` off its base, where the filter's slope is
 /// `a`, at `amount` (1 changes nothing, 2 doubles texture).
@@ -42,24 +38,14 @@ pub fn apply(img: &mut RgbaImage, amount: f32) {
         return;
     }
     let (w, h) = (img.width() as usize, img.height() as usize);
-    let lin = linear_lut();
-    let luma: Vec<f32> =
-        img.pixels().map(|px| (0..3).map(|c| LUMA[c] * lin[px.0[c] as usize]).sum()).collect();
-    let light: Vec<f32> = luma.iter().map(|y| linear_to_srgb(*y)).collect();
+    let (luma, light) = lightness(img);
     let r = ((w.max(h) as f32 * RADIUS).round() as usize).max(2);
     let plane = Plane::new(w, h, light);
     let (a, b) = guided_fit(&plane, r, EDGE * EDGE);
-    let enc = encode_lut();
-    let top = (ENCODE_LEN - 1) as f32;
-    for (i, px) in img.pixels_mut().enumerate() {
+    relight(img, &luma, |i| {
         let (l, a) = (plane.data[i], a.data[i]);
-        let new = (l + change(l - (a * l + b.data[i]), a, amount)).clamp(0.0, 1.0);
-        // The same lightness change as a gain on linear RGB, so the hue stays.
-        let k = if luma[i] > 1e-5 { srgb_to_linear(new) / luma[i] } else { 1.0 };
-        for c in &mut px.0[..3] {
-            *c = enc[((lin[*c as usize] * k).clamp(0.0, 1.0) * top).round() as usize];
-        }
-    }
+        l + change(l - (a * l + b.data[i]), a, amount)
+    });
 }
 
 #[cfg(test)]

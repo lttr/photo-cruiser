@@ -133,19 +133,24 @@ pub(crate) fn encode_lut() -> &'static [u8] {
     })
 }
 
+/// Linear light `v` → sRGB-encoded byte, through [`encode_lut`]; clamped to 0–1.
+#[inline]
+pub(crate) fn encode(v: f32) -> u8 {
+    encode_lut()[(v.clamp(0.0, 1.0) * (ENCODE_LEN - 1) as f32).round() as usize]
+}
+
 /// Apply warmth `w` to `img` in place; alpha stays.
 pub fn apply(img: &mut RgbaImage, w: f32) {
     if w == 0.0 {
         return;
     }
     let m = matrix(w);
-    let (lin, enc) = (linear_lut(), encode_lut());
-    let top = (ENCODE_LEN - 1) as f32;
+    let lin = linear_lut();
     for px in img.pixels_mut() {
         let rgb = [lin[px.0[0] as usize], lin[px.0[1] as usize], lin[px.0[2] as usize]];
         let out = mul(&m, rgb);
         for (c, v) in px.0[..3].iter_mut().zip(out) {
-            *c = enc[(v.clamp(0.0, 1.0) * top).round() as usize];
+            *c = encode(v);
         }
     }
 }
@@ -266,7 +271,7 @@ mod tests {
         // Luminance about kept.
         let luma = |p: [u8; 4]| {
             let l: Vec<f32> = p[..3].iter().map(|c| srgb_to_linear(f32::from(*c) / 255.0)).collect();
-            0.2126 * l[0] + 0.7152 * l[1] + 0.0722 * l[2]
+            (0..3).map(|c| crate::adjust::LUMA[c] * l[c]).sum::<f32>()
         };
         for w in [-2.0, -1.0, 1.0, 2.0] {
             assert!((luma(grey(w)) - luma([119; 4])).abs() < 0.01, "{w}: {:?}", grey(w));
