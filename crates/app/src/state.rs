@@ -61,6 +61,9 @@ pub struct Picture {
     pub handle: Handle,
     /// Full-resolution size of what is shown (after orientation and crop), in source pixels.
     pub source: (u32, u32),
+    /// The decoded pixels per source pixel (below 1: downscaled for the screen), whatever
+    /// the geometry; what radii in pixels are scaled by.
+    pub scale: f32,
     /// The image before its adjustments, if it has any (else the handle's pixels are).
     pub base: Option<Arc<RgbaImage>>,
     /// The handle's pixels halved again and again, largest first ([`levels`]).
@@ -131,6 +134,7 @@ pub fn original_job(job: &OriginalJob) -> Loaded {
     let (w, h) = d.image.dimensions();
     Ok(Picture {
         source: d.source_size(),
+        scale: 1.0 / d.source_scale(),
         handle: Handle::from_rgba(w, h, d.image.into_raw()),
         base: None,
         smaller: Arc::new([]),
@@ -194,7 +198,7 @@ fn decode_job_now(load: &LoadJob, max_side: u32) -> Loaded {
     };
     let (w, h) = img.dimensions();
     let smaller = smaller(&img);
-    Ok(Picture { source, handle: Handle::from_rgba(w, h, img.into_raw()), base, smaller })
+    Ok(Picture { source, scale, handle: Handle::from_rgba(w, h, img.into_raw()), base, smaller })
 }
 
 /// The edits of one photo this session: the sidecar's content and the undo history.
@@ -272,6 +276,7 @@ pub fn thumb_job(path: &Path, side: u32) -> Loaded {
     let (w, h) = d.image.dimensions();
     Ok(Picture {
         source: d.source_size(),
+        scale: 1.0 / d.source_scale(),
         handle: Handle::from_rgba(w, h, d.image.into_raw()),
         base: None,
         smaller: Arc::new([]),
@@ -1342,9 +1347,9 @@ impl State {
                 if !wait && self.preview.as_ref().is_none_or(|pr| pr.index != self.index || pr.stack != stack)
                 {
                     let t0 = Instant::now();
-                    // The preview is downscaled from the photo's full size (`source`).
-                    let full_width = self.picture().map_or(base.width(), |p| p.source.0);
-                    let scale = base.width() as f32 / full_width.max(1) as f32;
+                    // The preview is downscaled from the photo's full size. Not by `base`'s
+                    // size against `source`: for Straighten, `base` is the whole photo.
+                    let scale = self.picture().map_or(1.0, |p| p.scale);
                     let img = adjust::preview(base, &stack, *tool, scale);
                     let (w, h) = img.dimensions();
                     let handle = Handle::from_rgba(w, h, img.into_raw());
