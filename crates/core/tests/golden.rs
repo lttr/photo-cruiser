@@ -100,6 +100,13 @@ const CASES: &[Case] = &[
         max_side: None,
         adjust: Some(Tool::Contrast),
     },
+    Case {
+        name: "window-sharpen",
+        fixture: "adjust/window.jpg",
+        crop: None,
+        max_side: None,
+        adjust: Some(Tool::Sharpen),
+    },
     Case { name: "avif-max-side", fixture: "img4.AVIF", crop: None, max_side: Some(100), adjust: None },
 ];
 
@@ -330,4 +337,29 @@ fn local_contrast_on_a_backlit_room() {
         let (now, was) = (out.get_pixel(x, 90).0[0], original.get_pixel(x, 90).0[0]);
         assert!(now <= was.saturating_add(4), "sky at {x}: {now} vs {was}");
     }
+}
+
+/// Sharpen at 1 on `adjust/window.jpg`: the dark window bar (x 248..252) against the sky
+/// gets darker in the middle and the sky next to it brighter; a downscaled render, whose
+/// radius shrinks with it, stays close to the full-size render downscaled.
+#[test]
+fn sharpen_on_a_backlit_room() {
+    let src = decode(&root().join("../../fixtures/adjust/window.jpg")).unwrap();
+    let original = render(&src, &EditStack::default(), RenderOpts::default()).unwrap();
+    assert_eq!(Tool::Sharpen.opening(&original), 0.5);
+    let mut stack = EditStack::default();
+    stack.set_adjust(Tool::Sharpen, Some(1.0));
+    let out = render(&src, &stack, RenderOpts::default()).unwrap();
+    let red = |img: &RgbaImage, x: u32| i32::from(img.get_pixel(x, 45).0[0]);
+    assert!(red(&out, 250) < red(&original, 250) - 3, "bar: {} vs {}", red(&out, 250), red(&original, 250));
+    assert!(red(&out, 246) > red(&original, 246) + 3, "sky: {} vs {}", red(&out, 246), red(&original, 246));
+
+    let small = decode::decode_max_side(&root().join("../../fixtures/adjust/window.jpg"), Some(160)).unwrap();
+    assert_eq!(small.image.width(), 160);
+    let preview = render(&small, &stack, RenderOpts::default()).unwrap();
+    let saved = render(&src, &stack, RenderOpts { max_side: Some(160) }).unwrap();
+    let mean =
+        preview.pixels().zip(saved.pixels()).map(|(a, b)| f64::from(a.0[0].abs_diff(b.0[0]))).sum::<f64>()
+            / f64::from(preview.width() * preview.height());
+    assert!(mean < 1.5, "preview vs save: mean {mean}");
 }

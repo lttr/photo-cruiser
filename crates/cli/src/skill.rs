@@ -78,6 +78,12 @@ fn describe(tool: Tool) -> (&'static str, &'static str) {
             "colourfulness, darktable's \"basic colorfulness: standard\" × the value, more in the \
              shadows than the highlights. `color` is accepted too.",
         ),
+        Tool::Sharpen => (
+            "0.5",
+            "unsharp mask amount, like darktable's sharpen (radius 2 px of the full-size photo, \
+             threshold 0.5, both fixed; 0 = no change). The radius scales with the render, so a \
+             `--max-side` render or the app's preview look like the full-size save. Applied last.",
+        ),
     }
 }
 

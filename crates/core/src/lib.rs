@@ -23,6 +23,7 @@ pub mod local_contrast;
 pub mod meta;
 pub mod rating;
 pub mod render;
+pub mod sharpen;
 pub mod smooth;
 pub mod source;
 pub mod store;

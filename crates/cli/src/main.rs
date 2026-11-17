@@ -84,7 +84,7 @@ enum Cmd {
         /// highlights, 0..1, opens at 0.45), local_contrast (bring out detail, 1..2 = 100..200%,
         /// 1 changes nothing, opens at 1.25), contrast (S-curve, 1..2, 1 changes nothing,
         /// opens at 1.2), colour (× darktable's "basic colorfulness:
-        /// standard", 0..2, opens at 1).
+        /// standard", 0..2, opens at 1), sharpen (unsharp mask amount, 0..1, opens at 0.5).
         #[arg(long, value_name = "TOOL[=VALUE]", value_parser = parse_adjust)]
         adjust: Vec<(Tool, Option<f32>)>,
         /// Downscale the result so its longer side is at most N.

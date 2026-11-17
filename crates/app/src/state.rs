@@ -177,6 +177,7 @@ fn decode_job_now(load: &LoadJob, max_side: u32) -> Loaded {
     };
     let source = if load.stack.rotation() % 2 == 1 { (h, w) } else { (w, h) };
     let geometry = load.stack.geometry();
+    let scale = 1.0 / d.source_scale();
     let img = match geometry.is_empty() {
         true => d.image,
         false => photo_cruiser_core::render::render(&d, &geometry, Default::default()).map_err(msg)?,
@@ -186,7 +187,7 @@ fn decode_job_now(load: &LoadJob, max_side: u32) -> Loaded {
         None => (img, None),
         Some(_) => {
             let mut adjusted = img.clone();
-            adjust::apply_all(&mut adjusted, &load.stack);
+            adjust::apply_all(&mut adjusted, &load.stack, scale);
             (adjusted, Some(Arc::new(img)))
         }
     };
@@ -1339,7 +1340,10 @@ impl State {
                 {
                     let t0 = Instant::now();
                     let mut img = (**base).clone();
-                    adjust::apply_all(&mut img, &stack);
+                    // The preview is downscaled from the photo's full size (`source`).
+                    let full_width = self.picture().map_or(img.width(), |p| p.source.0);
+                    let scale = img.width() as f32 / full_width.max(1) as f32;
+                    adjust::apply_all(&mut img, &stack, scale);
                     let (w, h) = img.dimensions();
                     let handle = Handle::from_rgba(w, h, img.into_raw());
                     if self.trace {

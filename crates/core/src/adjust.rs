@@ -40,6 +40,9 @@ pub enum Tool {
     /// More in the shadows than in the highlights ([`crate::colour`]).
     #[serde(alias = "color")]
     Colour,
+    /// Unsharp mask at an amount, 0–1, like darktable's sharpen (radius 2, threshold 0.5)
+    /// ([`crate::sharpen`]).
+    Sharpen,
 }
 
 /// Linear-light luminance of the middle grey that L* = 50 is.
@@ -52,8 +55,9 @@ impl Tool {
     /// Shadows & highlights comes after exposure: it goes by the distance from middle grey.
     /// Local contrast comes after it: it boosts the detail on top of the areas it has set.
     /// Contrast comes after both, as darktable's sigmoid does: it shapes the finished tones.
-    /// Colour comes last: its masks go by brightness.
-    pub const ALL: [Tool; 7] = [
+    /// Colour comes after them: its masks go by brightness. Sharpen comes last, on the
+    /// finished tones.
+    pub const ALL: [Tool; 8] = [
         Tool::Levels,
         Tool::Warmth,
         Tool::Exposure,
@@ -61,6 +65,7 @@ impl Tool {
         Tool::LocalContrast,
         Tool::Contrast,
         Tool::Colour,
+        Tool::Sharpen,
     ];
 
     pub fn label(self) -> &'static str {
@@ -72,6 +77,7 @@ impl Tool {
             Tool::LocalContrast => "Local contrast",
             Tool::Contrast => "Contrast",
             Tool::Colour => "Colour",
+            Tool::Sharpen => "Sharpen",
         }
     }
 
@@ -79,7 +85,7 @@ impl Tool {
     pub fn range(self) -> RangeInclusive<f32> {
         match self {
             Tool::Levels | Tool::Colour => 0.0..=2.0,
-            Tool::ShadowsHighlights => 0.0..=1.0,
+            Tool::ShadowsHighlights | Tool::Sharpen => 0.0..=1.0,
             Tool::LocalContrast | Tool::Contrast => 1.0..=2.0,
             Tool::Exposure | Tool::Warmth => -2.0..=2.0,
         }
@@ -88,7 +94,12 @@ impl Tool {
     /// The value that changes nothing.
     pub fn neutral(self) -> f32 {
         match self {
-            Tool::Levels | Tool::Warmth | Tool::Exposure | Tool::ShadowsHighlights | Tool::Colour => 0.0,
+            Tool::Levels
+            | Tool::Warmth
+            | Tool::Exposure
+            | Tool::ShadowsHighlights
+            | Tool::Colour
+            | Tool::Sharpen => 0.0,
             Tool::LocalContrast | Tool::Contrast => 1.0,
         }
     }
@@ -96,7 +107,7 @@ impl Tool {
     /// The value as the panel shows it.
     pub fn format(self, value: f32) -> String {
         match self {
-            Tool::Levels | Tool::ShadowsHighlights | Tool::Contrast => format!("{value:.2}"),
+            Tool::Levels | Tool::ShadowsHighlights | Tool::Contrast | Tool::Sharpen => format!("{value:.2}"),
             Tool::Exposure => format!("{value:+.2} EV"),
             Tool::Warmth => format!("{value:+.2}"),
             Tool::Colour => format!("{value:.2}×"),
@@ -122,6 +133,7 @@ impl Tool {
     /// warmth at grey-world white balance; shadows & highlights at 0.45, darktable's
     /// "medium"; local contrast at 1.25, darktable's default detail; contrast at 1.2, near
     /// sigmoid's "neutral gray" preset (1.22); colour at 1, the preset as darktable has it.
+    /// Sharpen at 0.5, darktable's default amount.
     /// Rounded to 0.01.
     pub fn opening(self, img: &RgbaImage) -> f32 {
         let v = match self {
@@ -131,13 +143,20 @@ impl Tool {
             Tool::ShadowsHighlights => 0.45,
             Tool::LocalContrast => 1.25,
             Tool::Contrast => 1.2,
+            Tool::Sharpen => 0.5,
         };
         // `+ 0.0`: no "-0.00".
         (self.clamp(v) * 100.0).round() / 100.0 + 0.0
     }
 
-    /// Apply the tool at `value` (clamped to its range) to `img` in place.
+    /// Apply the tool at `value` (clamped to its range) to `img`, a full-size render, in place.
     pub fn apply(self, img: &mut RgbaImage, value: f32) {
+        self.apply_at(img, value, 1.0)
+    }
+
+    /// [`Tool::apply`] to `img` rendered at `scale` of the full-size photo (a downscaled
+    /// preview: below 1). Tools that work on a radius in pixels scale it by that.
+    pub fn apply_at(self, img: &mut RgbaImage, value: f32, scale: f32) {
         let value = self.clamp(value);
         if value == self.neutral() {
             return;
@@ -153,6 +172,7 @@ impl Tool {
             Tool::LocalContrast => crate::local_contrast::apply(img, value),
             Tool::Contrast => map_rgb(img, &[crate::contrast::lut(value); 3]),
             Tool::Colour => crate::colour::apply(img, value),
+            Tool::Sharpen => crate::sharpen::apply(img, value, scale),
         }
     }
 }
@@ -175,11 +195,12 @@ pub fn opening(src: &crate::Decoded, stack: &EditStack, tool: Tool) -> crate::Re
     Ok(tool.opening(&img))
 }
 
-/// Apply every adjustment of `stack` to `img`, in [`Tool::ALL`] order.
-pub fn apply_all(img: &mut RgbaImage, stack: &EditStack) {
+/// Apply every adjustment of `stack` to `img`, rendered at `scale` of the full-size photo
+/// (1: full size), in [`Tool::ALL`] order.
+pub fn apply_all(img: &mut RgbaImage, stack: &EditStack, scale: f32) {
     for tool in Tool::ALL {
         if let Some(v) = stack.adjust(tool) {
-            tool.apply(img, v);
+            tool.apply_at(img, v, scale);
         }
     }
 }
@@ -498,7 +519,7 @@ mod tests {
         assert_eq!((s.adjust(Tool::Exposure), s.ops.len()), (None, 2), "neutral is no step");
         assert_eq!("exposure".parse::<Tool>(), Ok(Tool::Exposure));
         assert!("blur".parse::<Tool>().unwrap_err().contains(
-            "one of levels, warmth, exposure, shadows_highlights, local_contrast, contrast, colour"
+            "one of levels, warmth, exposure, shadows_highlights, local_contrast, contrast, colour, sharpen"
         ));
         assert_eq!("color".parse::<Tool>(), Ok(Tool::Colour));
         // Levels goes before exposure, whatever order they're set in.

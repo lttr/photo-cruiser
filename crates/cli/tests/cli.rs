@@ -657,3 +657,36 @@ fn contrast_render_and_save() {
         "saved: {saved:?} vs {strong:?}"
     );
 }
+
+#[test]
+fn sharpen_render_and_save() {
+    let (dir, p) = temp_copies(&["adjust/window.jpg"]);
+    let photo = &p[0];
+    let out = dir.path().join("out.png").to_string_lossy().into_owned();
+    // The window bar's middle, against the sky (x 248..252, y 45).
+    let bar = |path: &str| image::open(path).unwrap().into_rgba8().get_pixel(250, 45).0[0];
+    let v = json_in(&dir, &["render", photo, "--adjust", "sharpen", "-o", &out, "--json"], 0);
+    assert_eq!(v["ops"][0], json!({"op": "adjust", "tool": "sharpen", "value": 0.5}));
+    json_in(&dir, &["render", photo, "--adjust", "sharpen=1", "-o", &out, "--json"], 0);
+    let sharpened = bar(&out);
+    json_in(&dir, &["render", photo, "-o", &out, "--json"], 0);
+    let original = bar(&out);
+    assert!(sharpened + 3 < original, "bar: {sharpened} vs {original}");
+    let v = json_in(&dir, &["render", photo, "--adjust", "sharpen=0", "-o", &out, "--json"], 0);
+    assert_eq!(v["ops"].as_array().unwrap().len(), 0, "0 is no step");
+
+    let edits = dir.path().join("e.json");
+    std::fs::write(
+        &edits,
+        json!({"version": 1, "ops": [{"op": "adjust", "tool": "sharpen", "value": 1.0}]}).to_string(),
+    )
+    .unwrap();
+    let edits = edits.to_string_lossy().into_owned();
+    json_in(&dir, &["render", photo, "--edits", &edits, "-o", &out, "--json"], 0);
+    assert_eq!(bar(&out), sharpened);
+    let v = json_in(&dir, &["save", photo, "--edits", &edits, "--json"], 0);
+    assert_eq!(v["action"], "saved");
+    let v = json_in(&dir, &["edits", photo, "--json"], 0);
+    assert_eq!((&v["ops"][0]["tool"], &v["dirty"]), (&json!("sharpen"), &json!(false)));
+    assert!(bar(photo).abs_diff(sharpened) <= 6, "saved: {} vs {sharpened}", bar(photo));
+}

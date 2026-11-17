@@ -38,7 +38,7 @@ pub fn render(src: &Decoded, edits: &EditStack, opts: RenderOpts) -> Result<Rgba
             Op::Adjust { .. } => {}
         }
     }
-    crate::adjust::apply_all(&mut img, edits);
+    crate::adjust::apply_all(&mut img, edits, k);
     Ok(match opts.max_side {
         Some(m) => {
             Decoded { source_width: img.width(), source_height: img.height(), image: img, format: src.format }
