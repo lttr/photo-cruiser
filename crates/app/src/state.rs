@@ -71,6 +71,18 @@ pub struct Picture {
 }
 
 impl Picture {
+    /// `d` as decoded, without edits.
+    fn unedited(d: photo_cruiser_core::Decoded) -> Picture {
+        let (w, h) = d.image.dimensions();
+        Picture {
+            source: d.source_size(),
+            scale: d.pixel_scale(),
+            handle: Handle::from_rgba(w, h, d.image.into_raw()),
+            base: None,
+            smaller: Arc::new([]),
+        }
+    }
+
     pub fn source_size(&self) -> Size {
         self.source.into()
     }
@@ -131,14 +143,7 @@ pub struct OriginalJob {
 /// Run an [`OriginalJob`] (blocking).
 pub fn original_job(job: &OriginalJob) -> Loaded {
     let d = photo_cruiser_core::decode::decode_max_side(&job.path, Some(job.side)).map_err(failed)?;
-    let (w, h) = d.image.dimensions();
-    Ok(Picture {
-        source: d.source_size(),
-        scale: 1.0 / d.source_scale(),
-        handle: Handle::from_rgba(w, h, d.image.into_raw()),
-        base: None,
-        smaller: Arc::new([]),
-    })
+    Ok(Picture::unedited(d))
 }
 
 /// The current photo's original, without any edits (what holding `O` shows).
@@ -181,16 +186,16 @@ fn decode_job_now(load: &LoadJob, max_side: u32) -> Loaded {
     };
     let source = if load.stack.rotation() % 2 == 1 { (h, w) } else { (w, h) };
     let geometry = load.stack.geometry();
-    let scale = 1.0 / d.source_scale();
+    let scale = d.pixel_scale();
     let img = match geometry.is_empty() {
         true => d.image,
         false => photo_cruiser_core::render::render(&d, &geometry, Default::default()).map_err(msg)?,
     };
     // Same as rendering the whole stack, keeping the image before the adjustments.
     // Straightening is geometry, done above.
-    let (img, base) = match load.stack.adjustments().find(|(t, _)| *t != Tool::Straighten) {
-        None => (img, None),
-        Some(_) => {
+    let (img, base) = match load.stack.has_tones() {
+        false => (img, None),
+        true => {
             let mut adjusted = img.clone();
             adjust::apply_all(&mut adjusted, &load.stack, scale);
             (adjusted, Some(Arc::new(img)))
@@ -273,14 +278,7 @@ pub fn rating_job(paths: &[PathBuf]) -> Vec<i8> {
 /// Decode a grid thumbnail of `path` (blocking).
 pub fn thumb_job(path: &Path, side: u32) -> Loaded {
     let d = photo_cruiser_core::thumbnail(path, side).map_err(failed)?;
-    let (w, h) = d.image.dimensions();
-    Ok(Picture {
-        source: d.source_size(),
-        scale: 1.0 / d.source_scale(),
-        handle: Handle::from_rgba(w, h, d.image.into_raw()),
-        base: None,
-        smaller: Arc::new([]),
-    })
+    Ok(Picture::unedited(d))
 }
 
 /// Probe the displayed sizes of `paths` (blocking); `None` for unreadable ones.
@@ -1656,11 +1654,10 @@ impl State {
             stack.set_crop(None);
         }
         // Straightening shows the whole photo, unturned: the preview turns it.
-        if self.tool.as_ref().is_some_and(|p| p.index == index && p.tool == Tool::Straighten) {
-            stack.set_crop(None);
-            stack.set_adjust(Tool::Straighten, None);
+        match self.tool.as_ref().filter(|p| p.index == index) {
+            Some(p) => stack.shown_with(p.tool),
+            None => stack,
         }
-        stack
     }
 
     /// Reload the images whose edits (or crop mode) changed since they were rendered.

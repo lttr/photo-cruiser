@@ -6,6 +6,7 @@
 //! zooms the photo: the wheel, a double-click (actual pixels) and dragging it around.
 
 use crate::action::Action;
+use crate::adjust_panel;
 use crate::menu;
 use crate::message::Message;
 use iced::keyboard::key::{Code, Named, Physical};
@@ -326,41 +327,16 @@ pub fn key_message(key: &Key, modified: &Key, mods: keyboard::Modifiers, m: Mode
         Key::Character(c) if mods.control() && c.eq_ignore_ascii_case("z") => Action::Undo.into(),
         Key::Character(c) if mods.control() && c.eq_ignore_ascii_case("y") => Action::Redo.into(),
         Key::Character(c) if plain && c.eq_ignore_ascii_case("c") => Action::ToggleCrop.into(),
-        Key::Character(c) if plain && c.eq_ignore_ascii_case("q") => {
-            Action::OpenTool { tool: Tool::Straighten }.into()
-        }
-        Key::Character(c) if plain && c.eq_ignore_ascii_case("e") => {
-            Action::OpenTool { tool: Tool::Exposure }.into()
-        }
-        Key::Character(c) if plain && c.eq_ignore_ascii_case("t") => {
-            Action::OpenTool { tool: Tool::ShadowsHighlights }.into()
-        }
-        Key::Character(c) if plain && c.eq_ignore_ascii_case("d") => {
-            Action::OpenTool { tool: Tool::LocalContrast }.into()
-        }
-        Key::Character(c) if plain && c.eq_ignore_ascii_case("b") => {
-            Action::OpenTool { tool: Tool::Contrast }.into()
-        }
-        Key::Character(c) if plain && c.eq_ignore_ascii_case("p") => {
-            Action::OpenTool { tool: Tool::Sharpen }.into()
-        }
-        Key::Character(c) if plain && c.eq_ignore_ascii_case("w") => {
-            Action::OpenTool { tool: Tool::Warmth }.into()
-        }
-        Key::Character(c) if plain && c.eq_ignore_ascii_case("m") => {
-            Action::OpenTool { tool: Tool::Dehaze }.into()
-        }
-        Key::Character(c) if plain && c.eq_ignore_ascii_case("s") => {
-            Action::OpenTool { tool: Tool::Colour }.into()
-        }
-        Key::Character(c) if plain && c.eq_ignore_ascii_case("v") => {
-            Action::OpenTool { tool: Tool::Vignette }.into()
+        // A tool's shortcut ([`adjust_panel::key`]) opens it.
+        Key::Character(c)
+            if plain
+                && let Some(tool) =
+                    Tool::ALL.into_iter().find(|t| c.eq_ignore_ascii_case(adjust_panel::key(*t))) =>
+        {
+            Action::OpenTool { tool }.into()
         }
         // Shift+R (turn right) is matched above, on the typed `R`.
         Key::Character(c) if plain && m.crop && c.eq_ignore_ascii_case("r") => Action::NextAspect.into(),
-        Key::Character(c) if plain && c.eq_ignore_ascii_case("a") => {
-            Action::OpenTool { tool: Tool::Levels }.into()
-        }
         // `0` typed or the key under it (Czech layout: `é`, Shift gives `0`).
         Key::Character(c) if plain && m.tool && (c == "0" || modified.as_ref() == Key::Character("0")) => {
             Action::NeutralAdjust.into()
