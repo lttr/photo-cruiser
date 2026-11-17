@@ -38,4 +38,4 @@ Use `just` (or plain `cargo`). `.cargo/config.toml` sets `PKG_CONFIG=/usr/bin/pk
 - Your own checks run headless (`just verify`, `just shot`, or `scripts/headless.sh`). Open a visible window (`just run`, or `PC_HEADLESS=0 just shot …`) only when the user asks to see the app.
 - Close every window you launch. Script mode exits on its own; kill anything else, unless the user opened it to use it.
 - Use `trash-put`, not `rm`.
-- Personal photos (`~/sandbox/photo-cruiser/test-photos`, `test-formats`) are fine for local checks. Never commit or copy them into the repo. Large sets are opt-in through `PC_PHOTOS`.
+- Real photos are fine for local checks, but they live outside the repo, so it names no paths for them. When a check needs real photos, ask the user where to take them from. Copy the ones you use to `/tmp/photo-cruiser/`, and never commit them or copy them into the repo. Large sets are opt-in through `PC_PHOTOS`.

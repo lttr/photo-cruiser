@@ -12,6 +12,6 @@ references:
 ## Acceptance criteria
 
 - [ ] Without `PC_PHOTOS` the checks are skipped and say so
-- [ ] With `PC_PHOTOS=~/sandbox/photo-cruiser/test-photos` all photos decode, and a burst browse ends on the last one with its image shown
+- [ ] With `PC_PHOTOS` pointing at a folder of real photos (ask the user which) all photos decode, and a burst browse ends on the last one with its image shown
 - [ ] Decode timings (min/median/max) are reported
 - [ ] Documented in CLAUDE.md / the verify-app skill

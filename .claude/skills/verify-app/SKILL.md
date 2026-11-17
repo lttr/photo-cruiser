@@ -26,9 +26,7 @@ Pick whatever the change touches:
   - **Read the PNG**, and describe what you see and whether it matches what you expected;
   - for mouse or keyboard behaviour, add an `iced_test` case in `crates/app/src/tests.rs`. Script mode can't send input events.
 - **Pixel-level claims** (dim strength, colours): measure them, don't eyeball them. For example, compare mean RGB of a region between two shots with a short `uv run --with pillow` snippet. The test `crop_draw_move_resize_dim_and_esc` shows the method. The real window and `iced_test` render differently (MSAA is off in the app on purpose), so check both when it matters.
-- **Real photos**: optionally run against `~/sandbox/photo-cruiser/test-formats`. Never commit those files or copy them into the repo.
-  - CLI: `target/debug/pcr list ~/sandbox/photo-cruiser/test-formats --json` lists 7 entries.
-  - GUI: next×6, toggle_crop, set_crop. The state should show `7 / 7` and the crop.
+- **Real photos**: for anything that changes pixels (a tool, decoding, export), also check a few real photos; synthetic fixtures miss things. Ask the user where to take them from, copy the ones you use to `/tmp/photo-cruiser/`, and never commit them or copy them into the repo.
 
 ## 3. Report
 

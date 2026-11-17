@@ -12,7 +12,7 @@ description: Launch and drive Photo Cruiser (the iced GUI `photo-cruiser` and th
 - **Never** use `wtype`, `xdotool`, `ydotool` or any other OS input injection, and **never** take a desktop screenshot. Drive the GUI only through script mode, below.
 - Your own runs are headless: wrap every GUI command in `scripts/headless.sh` (`just shot` and `just verify` already do). A visible window is only for when the user asks to see the app; see "Interactive run".
 - Script mode exits on its own. Kill any window you start without a script (`just run`) as soon as you've finished with it, unless the user is using it.
-- Personal photos (`~/sandbox/photo-cruiser/test-formats`, `test-photos`) are read-only inputs. Never copy them into the repo.
+- Real photos are read-only inputs from outside the repo. Ask the user where to take them from, and never copy them into the repo.
 
 ## CLI (fastest; no window)
 
@@ -81,4 +81,4 @@ Never open a visible window for your own checks.
 ## Inputs
 
 - `fixtures/`: 9 synthetic photos in all formats, including an EXIF-rotated JPEG and a broken file. Regenerate them with `just fixtures`.
-- `~/sandbox/photo-cruiser/test-formats` (7 real photos) and `test-photos` (55): for local checks only. `kalendar_0006.HEIC` is genuinely stored sideways; that isn't a bug.
+- Real photos: ask the user where to take them from, and copy the ones you use to `/tmp/photo-cruiser/`. For local checks only.
