@@ -1,6 +1,6 @@
 # Photo Cruiser
 
-A fast photo browser and editor written in Rust. Point it at a folder to see a grid of its photos, open one and flip through them. Previews come from embedded thumbnails, and neighbouring photos are preloaded so switching feels instant. It also has a non-destructive crop tool.
+A fast photo browser and editor written in Rust. Point it at a folder to see a grid of its photos, open one and flip through them. Previews come from embedded thumbnails, and neighbouring photos are preloaded so switching feels instant. It also edits: crop, turn, and one-slider tools for exposure, white balance, tones, detail and colour. Edits are non-destructive, and the original is always kept.
 
 It's built to be driven by agents as well as people. The CLI can print JSON, and the GUI can run a script, take a screenshot and dump its state.
 
@@ -25,6 +25,23 @@ just run ~/Pictures      # launch the GUI on a folder
 just cli list fixtures   # run the CLI
 just check               # fmt, clippy, tests
 ```
+
+## Editing
+
+Each tool is one slider. It opens at a value picked for the photo (auto exposure, auto white balance, or the darktable default), so often opening it is the whole edit. Shift+A (or double-clicking the slider) goes back to that value, 0 to no change, Esc cancels the tool. `j`/`k` or ↓/↑ move the slider, with Alt for fine steps.
+
+| Key | Tool | Opens at |
+| --- | --- | --- |
+| C | Crop (R: next aspect ratio, X: portrait / landscape, Enter: apply) | |
+| Shift+R / Shift+L | Turn right / left | |
+| A | Auto levels: per-channel black and white point, for photos of documents | strength 1 |
+| W | Warmth: white balance, warmer / cooler | auto (grey world) |
+| E | Exposure | auto (average to middle grey) |
+| T | Shadows & highlights: lift shadows, pull back highlights | 0.45 |
+| D | Local contrast: bring out detail, without halos | 125% |
+| S | Colour: more in the shadows, less in the highlights | 1× |
+
+Tools are applied in this order, whatever order you use them in. Hold O (or `\`) to see the original. The same tools work from `pcr`: `pcr render photo.jpg --adjust exposure=0.5 -o out.jpg`, or `pcr render --help` for all of them.
 
 ## Export and archive
 
@@ -67,16 +84,33 @@ just uninstall
 
 ## Keys
 
-| Key         | Action                                |
-| ----------- | ------------------------------------- |
-| ← / →       | Previous / next photo                 |
-| ↑ / ↓       | Grid: row up / down                   |
-| Enter       | Grid: open the photo (or click it)    |
-| C           | Toggle crop                           |
-| F / F11     | Toggle full screen                    |
-| N           | Show / hide file names                |
-| Esc         | Leave crop or full screen, then back to the grid |
-| Ctrl+O      | Open a folder                         |
+The app lists every shortcut under `?` (or F1); Ctrl+K finds any action by name.
+
+| Key | Action |
+| --- | --- |
+| ← / →, h / l | Previous / next photo |
+| ↓ / ↑, j / k | Grid: row down / up; photo: next / previous; tool: slider down / up |
+| Home / End, g / G | First / last photo |
+| Enter | Grid: open the photo; crop: apply; tool: done |
+| Esc | Close menu, cancel the tool, drop the crop selection, zoom out, leave full screen, back to the grid |
+| 1 | Star on / off: a photo to keep |
+| Ctrl+1 | Only the starred photos / all photos |
+| C, A, W, E, T, D, S | Crop and the tools, see [Editing](#editing) |
+| Shift+R / Shift+L | Turn right / left |
+| Ctrl+Z, u / Ctrl+Shift+Z, Ctrl+Y | Undo / redo |
+| Ctrl+S | Save now (leaving a photo saves it) |
+| O, `\` (hold) | Show the original photo, without edits |
+| + / -, wheel | Zoom in / out (drag to move around) |
+| Shift+1, double-click | Zoom: whole photo / actual pixels |
+| F, F11 | Full screen on / off |
+| N | File names on / off |
+| I | Info panel: histogram and camera settings |
+| Shift+E | Edits panel: the photo's edits, in order |
+| Z | Grid: small / big thumbnails / justified |
+| Ctrl+K | Find an action by name |
+| Ctrl+O | Open a folder |
+| F10 | Menu |
+| ?, F1 | Keyboard shortcuts |
 
 ## License
 
