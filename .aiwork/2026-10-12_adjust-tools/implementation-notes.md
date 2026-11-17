@@ -26,3 +26,10 @@
 
 ## Integration
 - `exposure_slider_drag_and_double_click` (app tests) failed twice under load (parallel builds) and passed every rerun, so it looks timing-sensitive.
+
+## Wrap-up: left for later (found by /simplify, skipped because they change design or output)
+- Preview while dragging re-runs the whole tool stack from the base each frame. With Dehaze and Sharpen in the stack this adds up. Caching the image after the tools before the open one would fix it.
+- Dehaze peaks at about 36 B/px (about 0.9 GB on a 24 MP save). Recomputing linear values in the last loop, finding quantiles on a subsample and using `guided_fit` would cut that.
+- Sharpen calls `powf` twice per pixel. f32 lookup tables would be faster but would change output slightly, so the goldens would need re-blessing.
+- Two conventions for radii: Sharpen scales full-size pixels by `scale`; Dehaze, Local contrast and Shadows & highlights use a share of the long side.
+- Each tool's range and opening value are written by hand in five places (clap help, `NeutralAdjust` doc, SHORTCUTS, skill text, README).
