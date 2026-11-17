@@ -544,6 +544,29 @@ fn warmth_render_and_save() {
     assert!(saved.iter().zip(balanced).all(|(s, a)| s.abs_diff(a) <= 6), "{saved:?} vs {balanced:?}");
 }
 
+/// Render `photo` to `out` with an edits file of one `tool` step at `value`, then save it
+/// with that file and check the sidecar: `probe` of the render and of the saved photo.
+fn render_and_save<T>(
+    dir: &tempfile::TempDir,
+    photo: &str,
+    out: &str,
+    tool: &str,
+    value: f64,
+    probe: impl Fn(&str) -> T,
+) -> (T, T) {
+    let edits = dir.path().join("e.json");
+    let ops = json!({"version": 1, "ops": [{"op": "adjust", "tool": tool, "value": value}]});
+    std::fs::write(&edits, ops.to_string()).unwrap();
+    let edits = edits.to_string_lossy().into_owned();
+    json_in(dir, &["render", photo, "--edits", &edits, "-o", out, "--json"], 0);
+    let rendered = probe(out);
+    let v = json_in(dir, &["save", photo, "--edits", &edits, "--json"], 0);
+    assert_eq!(v["action"], "saved");
+    let v = json_in(dir, &["edits", photo, "--json"], 0);
+    assert_eq!((&v["ops"][0]["tool"], &v["dirty"]), (&json!(tool), &json!(false)));
+    (rendered, probe(photo))
+}
+
 #[test]
 fn shadows_highlights_render_and_save() {
     let (dir, p) = temp_copies(&["adjust/window.jpg"]);
@@ -561,21 +584,8 @@ fn shadows_highlights_render_and_save() {
     let v = json_in(&dir, &["render", photo, "--adjust", "shadows_highlights=0", "-o", &out, "--json"], 0);
     assert_eq!(v["ops"].as_array().unwrap().len(), 0, "0 is no step");
 
-    let edits = dir.path().join("e.json");
-    std::fs::write(
-        &edits,
-        json!({"version": 1, "ops": [{"op": "adjust", "tool": "shadows_highlights", "value": 0.45}]})
-            .to_string(),
-    )
-    .unwrap();
-    let edits = edits.to_string_lossy().into_owned();
-    json_in(&dir, &["render", photo, "--edits", &edits, "-o", &out, "--json"], 0);
-    assert_eq!(pixel(&out), lifted);
-    let v = json_in(&dir, &["save", photo, "--edits", &edits, "--json"], 0);
-    assert_eq!(v["action"], "saved");
-    let v = json_in(&dir, &["edits", photo, "--json"], 0);
-    assert_eq!((&v["ops"][0]["tool"], &v["dirty"]), (&json!("shadows_highlights"), &json!(false)));
-    let saved = image::open(photo).unwrap().into_rgba8().get_pixel(160, 100).0;
+    let (rendered, saved) = render_and_save(&dir, photo, &out, "shadows_highlights", 0.45, pixel);
+    assert_eq!(rendered, lifted);
     assert!(saved.iter().zip(lifted).all(|(s, a)| s.abs_diff(a) <= 6), "{saved:?} vs {lifted:?}");
 }
 
@@ -602,20 +612,9 @@ fn local_contrast_render_and_save() {
     let v = json_in(&dir, &["render", photo, "--adjust", "local_contrast=1", "-o", &out, "--json"], 0);
     assert_eq!(v["ops"].as_array().unwrap().len(), 0, "100% is no step");
 
-    let edits = dir.path().join("e.json");
-    std::fs::write(
-        &edits,
-        json!({"version": 1, "ops": [{"op": "adjust", "tool": "local_contrast", "value": 2.0}]}).to_string(),
-    )
-    .unwrap();
-    let edits = edits.to_string_lossy().into_owned();
-    json_in(&dir, &["render", photo, "--edits", &edits, "-o", &out, "--json"], 0);
-    assert_eq!(spread(&out), boosted);
-    let v = json_in(&dir, &["save", photo, "--edits", &edits, "--json"], 0);
-    assert_eq!(v["action"], "saved");
-    let v = json_in(&dir, &["edits", photo, "--json"], 0);
-    assert_eq!((&v["ops"][0]["tool"], &v["dirty"]), (&json!("local_contrast"), &json!(false)));
-    assert!(spread(photo).abs_diff(boosted) <= 4, "saved: {} vs {boosted}", spread(photo));
+    let (rendered, saved) = render_and_save(&dir, photo, &out, "local_contrast", 2.0, spread);
+    assert_eq!(rendered, boosted);
+    assert!(saved.abs_diff(boosted) <= 4, "saved: {saved} vs {boosted}");
 }
 
 #[test]
@@ -638,20 +637,8 @@ fn contrast_render_and_save() {
     let v = json_in(&dir, &["render", photo, "--adjust", "contrast=1", "-o", &out, "--json"], 0);
     assert_eq!(v["ops"].as_array().unwrap().len(), 0, "1 is no step");
 
-    let edits = dir.path().join("e.json");
-    std::fs::write(
-        &edits,
-        json!({"version": 1, "ops": [{"op": "adjust", "tool": "contrast", "value": 2.0}]}).to_string(),
-    )
-    .unwrap();
-    let edits = edits.to_string_lossy().into_owned();
-    json_in(&dir, &["render", photo, "--edits", &edits, "-o", &out, "--json"], 0);
-    assert_eq!(tones(&out), strong);
-    let v = json_in(&dir, &["save", photo, "--edits", &edits, "--json"], 0);
-    assert_eq!(v["action"], "saved");
-    let v = json_in(&dir, &["edits", photo, "--json"], 0);
-    assert_eq!((&v["ops"][0]["tool"], &v["dirty"]), (&json!("contrast"), &json!(false)));
-    let saved = tones(photo);
+    let (rendered, saved) = render_and_save(&dir, photo, &out, "contrast", 2.0, tones);
+    assert_eq!(rendered, strong);
     assert!(
         saved.0.abs_diff(strong.0) <= 4 && saved.1.abs_diff(strong.1) <= 4,
         "saved: {saved:?} vs {strong:?}"
@@ -675,20 +662,9 @@ fn sharpen_render_and_save() {
     let v = json_in(&dir, &["render", photo, "--adjust", "sharpen=0", "-o", &out, "--json"], 0);
     assert_eq!(v["ops"].as_array().unwrap().len(), 0, "0 is no step");
 
-    let edits = dir.path().join("e.json");
-    std::fs::write(
-        &edits,
-        json!({"version": 1, "ops": [{"op": "adjust", "tool": "sharpen", "value": 1.0}]}).to_string(),
-    )
-    .unwrap();
-    let edits = edits.to_string_lossy().into_owned();
-    json_in(&dir, &["render", photo, "--edits", &edits, "-o", &out, "--json"], 0);
-    assert_eq!(bar(&out), sharpened);
-    let v = json_in(&dir, &["save", photo, "--edits", &edits, "--json"], 0);
-    assert_eq!(v["action"], "saved");
-    let v = json_in(&dir, &["edits", photo, "--json"], 0);
-    assert_eq!((&v["ops"][0]["tool"], &v["dirty"]), (&json!("sharpen"), &json!(false)));
-    assert!(bar(photo).abs_diff(sharpened) <= 6, "saved: {} vs {sharpened}", bar(photo));
+    let (rendered, saved) = render_and_save(&dir, photo, &out, "sharpen", 1.0, bar);
+    assert_eq!(rendered, sharpened);
+    assert!(saved.abs_diff(sharpened) <= 6, "saved: {saved} vs {sharpened}");
 }
 
 #[test]
@@ -708,20 +684,9 @@ fn dehaze_render_and_save() {
     let v = json_in(&dir, &["render", photo, "--adjust", "haze_removal=0", "-o", &out, "--json"], 0);
     assert_eq!(v["ops"].as_array().unwrap().len(), 0, "0 is no step");
 
-    let edits = dir.path().join("e.json");
-    std::fs::write(
-        &edits,
-        json!({"version": 1, "ops": [{"op": "adjust", "tool": "dehaze", "value": 0.2}]}).to_string(),
-    )
-    .unwrap();
-    let edits = edits.to_string_lossy().into_owned();
-    json_in(&dir, &["render", photo, "--edits", &edits, "-o", &out, "--json"], 0);
-    assert_eq!(ridge(&out), clear);
-    let v = json_in(&dir, &["save", photo, "--edits", &edits, "--json"], 0);
-    assert_eq!(v["action"], "saved");
-    let v = json_in(&dir, &["edits", photo, "--json"], 0);
-    assert_eq!((&v["ops"][0]["tool"], &v["dirty"]), (&json!("dehaze"), &json!(false)));
-    assert!(ridge(photo).abs_diff(clear) <= 3, "saved: {} vs {clear}", ridge(photo));
+    let (rendered, saved) = render_and_save(&dir, photo, &out, "dehaze", 0.2, ridge);
+    assert_eq!(rendered, clear);
+    assert!(saved.abs_diff(clear) <= 3, "saved: {saved} vs {clear}");
 }
 
 #[test]
@@ -751,23 +716,11 @@ fn vignette_render_and_save() {
     let v = json_in(&dir, &["render", photo, "--adjust", "vignette=0", "-o", &out, "--json"], 0);
     assert_eq!(v["ops"].as_array().unwrap().len(), 0, "0 is no step");
 
-    let edits = dir.path().join("e.json");
-    std::fs::write(
-        &edits,
-        json!({"version": 1, "ops": [{"op": "adjust", "tool": "vignette", "value": 1.0}]}).to_string(),
-    )
-    .unwrap();
-    let edits = edits.to_string_lossy().into_owned();
-    json_in(&dir, &["render", photo, "--edits", &edits, "-o", &out, "--json"], 0);
-    let (bright, _) = corner(&out);
     json_in(&dir, &["render", photo, "-o", &out, "--json"], 0);
     let (original, _) = corner(&out);
+    let ((bright, _), (saved, _)) = render_and_save(&dir, photo, &out, "vignette", 1.0, corner);
     assert!(bright > original, "+1 brightens: {bright} vs {original}");
-    let v = json_in(&dir, &["save", photo, "--edits", &edits, "--json"], 0);
-    assert_eq!(v["action"], "saved");
-    let v = json_in(&dir, &["edits", photo, "--json"], 0);
-    assert_eq!((&v["ops"][0]["tool"], &v["dirty"]), (&json!("vignette"), &json!(false)));
-    assert!(corner(photo).0.abs_diff(bright) <= 12, "saved: {} vs {bright}", corner(photo).0);
+    assert!(saved.abs_diff(bright) <= 12, "saved: {saved} vs {bright}");
 }
 
 #[test]

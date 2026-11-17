@@ -58,6 +58,13 @@ verify: check
     cargo build --workspace
     pcr="{{root}}/target/debug/pcr"
     mkdir -p "{{artifacts}}"
+    # shot <name> <dir> <filter>: run scripts/<name>.json on <dir> (headless), write
+    # verify-<name>.png and .json, and check the state JSON with the jq <filter>.
+    shot() {
+        "{{root}}/scripts/headless.sh" "{{root}}/target/debug/photo-cruiser" "$2" --script "{{root}}/scripts/$1.json" \
+            --shot "{{artifacts}}/verify-$1.png" --dump-state "{{artifacts}}/verify-$1.json"
+        jq -e "$3" "{{artifacts}}/verify-$1.json" >/dev/null || { cat "{{artifacts}}/verify-$1.json"; exit 1; }
+    }
     test "$("$pcr" list "{{fixtures}}" --json | jq .count)" = 9
     "$pcr" render "{{fixtures}}/img5.HEIC" --crop 10,20,100,50 -o "{{artifacts}}/verify-crop.png" | grep -q "100x50"
     code=0; out=$("$pcr" render "{{fixtures}}/img1.png" --crop 400,0,50,50 -o "{{artifacts}}/verify-empty.png" --json 2>/dev/null) || code=$?
@@ -66,85 +73,43 @@ verify: check
         --shot "{{artifacts}}/verify.png" --dump-state "{{artifacts}}/verify.json"
     jq -e '.index == 4 and .view == "photo" and .mode == "crop" and .crop == {"x":40,"y":30,"w":200,"h":150} and .errors == [] and .loading == false' \
         "{{artifacts}}/verify.json" >/dev/null || { cat "{{artifacts}}/verify.json"; exit 1; }
-    "{{root}}/scripts/headless.sh" "{{root}}/target/debug/photo-cruiser" "{{fixtures}}" --script "{{root}}/scripts/grid.json" \
-        --shot "{{artifacts}}/verify-grid.png" --dump-state "{{artifacts}}/verify-grid.json"
-    jq -e '.index == 1 and .view == "grid" and .errors == [] and .loading == false' \
-        "{{artifacts}}/verify-grid.json" >/dev/null || { cat "{{artifacts}}/verify-grid.json"; exit 1; }
+    shot grid "{{fixtures}}" '.index == 1 and .view == "grid" and .errors == [] and .loading == false'
     # Save on leaving (no apply, no save step), on a scratch copy: never into fixtures/.
     photos="{{artifacts}}/verify-save-photos"
     if [ -e "$photos" ]; then trash-put "$photos"; fi
     mkdir -p "$photos" && cp -r "{{fixtures}}/." "$photos"
-    "{{root}}/scripts/headless.sh" "{{root}}/target/debug/photo-cruiser" "$photos" --script "{{root}}/scripts/save.json" \
-        --shot "{{artifacts}}/verify-save.png" --dump-state "{{artifacts}}/verify-save.json"
-    jq -e '.index == 0 and .dirty == false and .saving == [] and .edits == [{"op":"crop","x":40,"y":30,"w":200,"h":150}] and (.backup | endswith(".photo-cruiser/originals/img1.png")) and .errors == []' \
-        "{{artifacts}}/verify-save.json" >/dev/null || { cat "{{artifacts}}/verify-save.json"; exit 1; }
+    shot save "$photos" '.index == 0 and .dirty == false and .saving == [] and .edits == [{"op":"crop","x":40,"y":30,"w":200,"h":150}] and (.backup | endswith(".photo-cruiser/originals/img1.png")) and .errors == []'
     "$pcr" info "$photos/img1.png" | grep -q "size: 200x150" || { echo "img1.png not saved cropped"; exit 1; }
     # Exposure: opens at auto, set by the slider, saved on leaving; reopened, it keeps its value.
-    "{{root}}/scripts/headless.sh" "{{root}}/target/debug/photo-cruiser" "$photos" --script "{{root}}/scripts/exposure.json" \
-        --shot "{{artifacts}}/verify-exposure.png" --dump-state "{{artifacts}}/verify-exposure.json"
-    jq -e '.index == 1 and .dirty == false and .edits == [{"op":"adjust","tool":"exposure","value":0.8}] and .tool.value == 0.8 and .tool.opening < 0 and .preview == true and .underlay == false and (.backup | endswith(".photo-cruiser/originals/img2.jpg")) and .errors == []' \
-        "{{artifacts}}/verify-exposure.json" >/dev/null || { cat "{{artifacts}}/verify-exposure.json"; exit 1; }
+    shot exposure "$photos" '.index == 1 and .dirty == false and .edits == [{"op":"adjust","tool":"exposure","value":0.8}] and .tool.value == 0.8 and .tool.opening < 0 and .preview == true and .underlay == false and (.backup | endswith(".photo-cruiser/originals/img2.jpg")) and .errors == []'
     "$pcr" edits "$photos/img2.jpg" | grep -q '^saved: \[{"op":"adjust","tool":"exposure","value":0.8}\]' || { echo "img2.jpg not saved with exposure"; exit 1; }
     # Auto levels on the page of a document photo: opens at 1, double-click back to 1.
-    "{{root}}/scripts/headless.sh" "{{root}}/target/debug/photo-cruiser" "$photos/adjust" --script "{{root}}/scripts/levels.json" \
-        --shot "{{artifacts}}/verify-levels.png" --dump-state "{{artifacts}}/verify-levels.json"
-    jq -e '.edits == [{"op":"crop","x":60,"y":0,"w":260,"h":240},{"op":"adjust","tool":"levels","value":1}] and .tool.tool == "levels" and .tool.value == 1 and .tool.opening == 1 and .preview == true and .dirty == true and .errors == []' \
-        "{{artifacts}}/verify-levels.json" >/dev/null || { cat "{{artifacts}}/verify-levels.json"; exit 1; }
+    shot levels "$photos/adjust" '.edits == [{"op":"crop","x":60,"y":0,"w":260,"h":240},{"op":"adjust","tool":"levels","value":1}] and .tool.tool == "levels" and .tool.value == 1 and .tool.opening == 1 and .preview == true and .dirty == true and .errors == []'
     # Colour on the gradient: opens at 1×, back to 1× after a change.
-    "{{root}}/scripts/headless.sh" "{{root}}/target/debug/photo-cruiser" "$photos" --script "{{root}}/scripts/colour.json" \
-        --shot "{{artifacts}}/verify-colour.png" --dump-state "{{artifacts}}/verify-colour.json"
-    jq -e '.index == 2 and .edits == [{"op":"adjust","tool":"colour","value":1}] and .tool.tool == "colour" and .tool.value == 1 and .tool.opening == 1 and .preview == true and .dirty == true and .errors == []' \
-        "{{artifacts}}/verify-colour.json" >/dev/null || { cat "{{artifacts}}/verify-colour.json"; exit 1; }
+    shot colour "$photos" '.index == 2 and .edits == [{"op":"adjust","tool":"colour","value":1}] and .tool.tool == "colour" and .tool.value == 1 and .tool.opening == 1 and .preview == true and .dirty == true and .errors == []'
     # Warmth on the warm-cast scene: opens cooler (grey-world auto), back to auto after a change.
-    "{{root}}/scripts/headless.sh" "{{root}}/target/debug/photo-cruiser" "$photos/adjust" --script "{{root}}/scripts/warmth.json" \
-        --shot "{{artifacts}}/verify-warmth.png" --dump-state "{{artifacts}}/verify-warmth.json"
-    jq -e '.index == 1 and (.edits | length) == 1 and .edits[0].tool == "warmth" and .edits[0].value < -0.5 and .tool.tool == "warmth" and .tool.value == .tool.opening and .preview == true and .dirty == true and .errors == []' \
-        "{{artifacts}}/verify-warmth.json" >/dev/null || { cat "{{artifacts}}/verify-warmth.json"; exit 1; }
+    shot warmth "$photos/adjust" '.index == 1 and (.edits | length) == 1 and .edits[0].tool == "warmth" and .edits[0].value < -0.5 and .tool.tool == "warmth" and .tool.value == .tool.opening and .preview == true and .dirty == true and .errors == []'
     # Shadows & highlights on the backlit room: opens at 0.45, back to 0.45 after a change.
-    "{{root}}/scripts/headless.sh" "{{root}}/target/debug/photo-cruiser" "$photos/adjust" --script "{{root}}/scripts/shadows-highlights.json" \
-        --shot "{{artifacts}}/verify-shadows-highlights.png" --dump-state "{{artifacts}}/verify-shadows-highlights.json"
-    jq -e '.index == 2 and .edits == [{"op":"adjust","tool":"shadows_highlights","value":0.45}] and .tool.tool == "shadows_highlights" and .tool.value == 0.45 and .tool.opening == 0.45 and .preview == true and .dirty == true and .errors == []' \
-        "{{artifacts}}/verify-shadows-highlights.json" >/dev/null || { cat "{{artifacts}}/verify-shadows-highlights.json"; exit 1; }
+    shot shadows-highlights "$photos/adjust" '.index == 2 and .edits == [{"op":"adjust","tool":"shadows_highlights","value":0.45}] and .tool.tool == "shadows_highlights" and .tool.value == 0.45 and .tool.opening == 0.45 and .preview == true and .dirty == true and .errors == []'
     # Local contrast on the backlit room: opens at 1.25, back to 1.25 after a change; on
     # top of the shadows & highlights the step above saved when it left the photo.
-    "{{root}}/scripts/headless.sh" "{{root}}/target/debug/photo-cruiser" "$photos/adjust" --script "{{root}}/scripts/local-contrast.json" \
-        --shot "{{artifacts}}/verify-local-contrast.png" --dump-state "{{artifacts}}/verify-local-contrast.json"
-    jq -e '.index == 2 and .edits == [{"op":"adjust","tool":"shadows_highlights","value":0.45},{"op":"adjust","tool":"local_contrast","value":1.25}] and .tool.tool == "local_contrast" and .tool.value == 1.25 and .tool.opening == 1.25 and .preview == true and .dirty == true and .errors == []' \
-        "{{artifacts}}/verify-local-contrast.json" >/dev/null || { cat "{{artifacts}}/verify-local-contrast.json"; exit 1; }
+    shot local-contrast "$photos/adjust" '.index == 2 and .edits == [{"op":"adjust","tool":"shadows_highlights","value":0.45},{"op":"adjust","tool":"local_contrast","value":1.25}] and .tool.tool == "local_contrast" and .tool.value == 1.25 and .tool.opening == 1.25 and .preview == true and .dirty == true and .errors == []'
     # Contrast on the backlit room: opens at 1.2, back to 1.2 after a change; on top of the
     # edits the steps above saved.
-    "{{root}}/scripts/headless.sh" "{{root}}/target/debug/photo-cruiser" "$photos/adjust" --script "{{root}}/scripts/contrast.json" \
-        --shot "{{artifacts}}/verify-contrast.png" --dump-state "{{artifacts}}/verify-contrast.json"
-    jq -e '.index == 2 and (.edits | map(select(.tool == "contrast"))) == [{"op":"adjust","tool":"contrast","value":1.2}] and .tool.tool == "contrast" and .tool.value == 1.2 and .tool.opening == 1.2 and .preview == true and .dirty == true and .errors == []' \
-        "{{artifacts}}/verify-contrast.json" >/dev/null || { cat "{{artifacts}}/verify-contrast.json"; exit 1; }
+    shot contrast "$photos/adjust" '.index == 2 and (.edits | map(select(.tool == "contrast"))) == [{"op":"adjust","tool":"contrast","value":1.2}] and .tool.tool == "contrast" and .tool.value == 1.2 and .tool.opening == 1.2 and .preview == true and .dirty == true and .errors == []'
     # Sharpen on the backlit room: opens at 0.5, back to 0.5 after a change; on top of the
     # steps above.
-    "{{root}}/scripts/headless.sh" "{{root}}/target/debug/photo-cruiser" "$photos/adjust" --script "{{root}}/scripts/sharpen.json" \
-        --shot "{{artifacts}}/verify-sharpen.png" --dump-state "{{artifacts}}/verify-sharpen.json"
-    jq -e '.index == 2 and .edits[-1] == {"op":"adjust","tool":"sharpen","value":0.5} and .tool.tool == "sharpen" and .tool.value == 0.5 and .tool.opening == 0.5 and .preview == true and .dirty == true and .errors == []' \
-        "{{artifacts}}/verify-sharpen.json" >/dev/null || { cat "{{artifacts}}/verify-sharpen.json"; exit 1; }
+    shot sharpen "$photos/adjust" '.index == 2 and .edits[-1] == {"op":"adjust","tool":"sharpen","value":0.5} and .tool.tool == "sharpen" and .tool.value == 0.5 and .tool.opening == 0.5 and .preview == true and .dirty == true and .errors == []'
     # Dehaze on the hazy hills: opens at 0.2, back to 0.2 after a change.
-    "{{root}}/scripts/headless.sh" "{{root}}/target/debug/photo-cruiser" "$photos/adjust" --script "{{root}}/scripts/dehaze.json" \
-        --shot "{{artifacts}}/verify-dehaze.png" --dump-state "{{artifacts}}/verify-dehaze.json"
-    jq -e '.index == 3 and .edits == [{"op":"adjust","tool":"dehaze","value":0.2}] and .tool.tool == "dehaze" and .tool.value == 0.2 and .tool.opening == 0.2 and .preview == true and .dirty == true and .errors == []' \
-        "{{artifacts}}/verify-dehaze.json" >/dev/null || { cat "{{artifacts}}/verify-dehaze.json"; exit 1; }
+    shot dehaze "$photos/adjust" '.index == 3 and .edits == [{"op":"adjust","tool":"dehaze","value":0.2}] and .tool.tool == "dehaze" and .tool.value == 0.2 and .tool.opening == 0.2 and .preview == true and .dirty == true and .errors == []'
     # Straighten on the tilted horizon (3.4° clockwise): opens at about −3.4°, back there
     # after a change; the whole photo shows, straightened.
-    "{{root}}/scripts/headless.sh" "{{root}}/target/debug/photo-cruiser" "$photos/straighten" --script "{{root}}/scripts/straighten.json" \
-        --shot "{{artifacts}}/verify-straighten.png" --dump-state "{{artifacts}}/verify-straighten.json"
-    jq -e '.index == 0 and (.edits | length) == 1 and .edits[0].tool == "straighten" and (.edits[0].value + 3.4 | fabs) <= 0.5 and .tool.tool == "straighten" and .tool.value == .tool.opening and .tool.opening == .edits[0].value and .preview == true and .dirty == true and .errors == []' \
-        "{{artifacts}}/verify-straighten.json" >/dev/null || { cat "{{artifacts}}/verify-straighten.json"; exit 1; }
+    shot straighten "$photos/straighten" '.index == 0 and (.edits | length) == 1 and .edits[0].tool == "straighten" and (.edits[0].value + 3.4 | fabs) <= 0.5 and .tool.tool == "straighten" and .tool.value == .tool.opening and .tool.opening == .edits[0].value and .preview == true and .dirty == true and .errors == []'
     # Holding O on the saved, cropped img1.png: its original from the backup, uncropped.
-    "{{root}}/scripts/headless.sh" "{{root}}/target/debug/photo-cruiser" "$photos" --script "{{root}}/scripts/original.json" \
-        --shot "{{artifacts}}/verify-original.png" --dump-state "{{artifacts}}/verify-original.json"
-    jq -e '.index == 0 and .original == true and .edits == [{"op":"crop","x":40,"y":30,"w":200,"h":150}] and (.status | contains("original, without edits")) and .errors == []' \
-        "{{artifacts}}/verify-original.json" >/dev/null || { cat "{{artifacts}}/verify-original.json"; exit 1; }
+    shot original "$photos" '.index == 0 and .original == true and .edits == [{"op":"crop","x":40,"y":30,"w":200,"h":150}] and (.status | contains("original, without edits")) and .errors == []'
     # Vignette on the saved, cropped img1.png: opens at -0.5, back to -0.5 after a change,
     # on the cropped frame.
-    "{{root}}/scripts/headless.sh" "{{root}}/target/debug/photo-cruiser" "$photos" --script "{{root}}/scripts/vignette.json" \
-        --shot "{{artifacts}}/verify-vignette.png" --dump-state "{{artifacts}}/verify-vignette.json"
-    jq -e '.index == 0 and .edits == [{"op":"crop","x":40,"y":30,"w":200,"h":150},{"op":"adjust","tool":"vignette","value":-0.5}] and .tool.tool == "vignette" and .tool.value == -0.5 and .tool.opening == -0.5 and .preview == true and .dirty == true and .errors == []' \
-        "{{artifacts}}/verify-vignette.json" >/dev/null || { cat "{{artifacts}}/verify-vignette.json"; exit 1; }
+    shot vignette "$photos" '.index == 0 and .edits == [{"op":"crop","x":40,"y":30,"w":200,"h":150},{"op":"adjust","tool":"vignette","value":-0.5}] and .tool.tool == "vignette" and .tool.value == -0.5 and .tool.opening == -0.5 and .preview == true and .dirty == true and .errors == []'
     echo "verify ok: {{artifacts}}/verify.png {{artifacts}}/verify-grid.png {{artifacts}}/verify-save.png {{artifacts}}/verify-exposure.png {{artifacts}}/verify-levels.png {{artifacts}}/verify-colour.png {{artifacts}}/verify-warmth.png {{artifacts}}/verify-shadows-highlights.png {{artifacts}}/verify-local-contrast.png {{artifacts}}/verify-contrast.png {{artifacts}}/verify-sharpen.png {{artifacts}}/verify-dehaze.png {{artifacts}}/verify-straighten.png {{artifacts}}/verify-original.png {{artifacts}}/verify-vignette.png"
 
 # Release build of the GUI and the CLI (run before `just install`)

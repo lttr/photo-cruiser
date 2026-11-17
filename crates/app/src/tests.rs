@@ -31,7 +31,7 @@ use iced_test::selector::{self, Candidate};
 use iced_test::{Instruction, Simulator};
 use photo_cruiser_core::geom::{PixelRect, fit_rect};
 use photo_cruiser_core::loader::Kind;
-use photo_cruiser_core::{Folder, Rect};
+use photo_cruiser_core::{Folder, Rect, Tool};
 use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
 
@@ -1808,29 +1808,39 @@ fn update_levels_opens_at_one_on_the_crop() {
     assert!(s.errors.is_empty(), "{:?}", s.errors);
 }
 
+/// Show photo `index` of `dir`, open `tool` there and check its fixed `opening`: applied
+/// as one undoable step, back on a double-click after moving to `moved`, its neutral value
+/// is no step, and Esc after setting `last` leaves the stack as it was.
+fn check_fixed_opening(dir: &Path, index: usize, tool: Tool, opening: f32, moved: f32, last: f32) {
+    use photo_cruiser_core::EditStack;
+    let value = |s: &State| s.stack().adjust(tool);
+    let mut s = opened(dir);
+    s.apply(&Action::ShowPhoto { index: Some(index) });
+    settle(&mut s);
+    s.apply(&Action::OpenTool { tool });
+    settle(&mut s);
+    assert_eq!(s.tool.as_ref().unwrap().opening, Some(opening), "{tool:?}");
+    assert_eq!((value(&s), s.dirty(), s.preview.is_some()), (Some(opening), true, true), "{tool:?}");
+    s.apply(&Action::Undo);
+    assert_eq!(s.stack(), EditStack::default(), "{tool:?}: opening is one step");
+    s.apply(&Action::Redo);
+    s.apply(&Action::SetAdjust { value: moved });
+    s.apply(&Action::AutoAdjust);
+    assert_eq!(value(&s), Some(opening), "{tool:?}: double-click goes back to the opening");
+    s.apply(&Action::NeutralAdjust);
+    assert_eq!(s.stack(), EditStack::default(), "{tool:?}: neutral is no step");
+    s.apply(&Action::SetAdjust { value: last });
+    s.apply(&Action::CancelTool);
+    assert!(
+        s.tool.is_none() && s.stack() == EditStack::default(),
+        "{tool:?}: Esc: as before the tool opened"
+    );
+    assert!(s.errors.is_empty(), "{tool:?}: {:?}", s.errors);
+}
+
 #[test]
 fn update_colour_opens_at_one() {
-    use photo_cruiser_core::{EditStack, Tool};
-    let colour = |s: &State| s.stack().adjust(Tool::Colour);
-    let mut s = opened(&fixtures());
-    s.apply(&Action::ShowPhoto { index: Some(0) });
-    settle(&mut s);
-    s.apply(&Action::OpenTool { tool: Tool::Colour });
-    settle(&mut s);
-    assert_eq!(s.tool.as_ref().unwrap().opening, Some(1.0));
-    assert_eq!((colour(&s), s.dirty(), s.preview.is_some()), (Some(1.0), true, true));
-    s.apply(&Action::Undo);
-    assert_eq!(s.stack(), EditStack::default(), "opening is one step");
-    s.apply(&Action::Redo);
-    s.apply(&Action::SetAdjust { value: 1.7 });
-    s.apply(&Action::AutoAdjust);
-    assert_eq!(colour(&s), Some(1.0), "double-click: 1×");
-    s.apply(&Action::NeutralAdjust);
-    assert_eq!(s.stack(), EditStack::default(), "0× is no step");
-    s.apply(&Action::SetAdjust { value: 1.5 });
-    s.apply(&Action::CancelTool);
-    assert!(s.tool.is_none() && s.stack() == EditStack::default(), "Esc: as before the tool opened");
-    assert!(s.errors.is_empty(), "{:?}", s.errors);
+    check_fixed_opening(&fixtures(), 0, Tool::Colour, 1.0, 1.7, 1.5);
 }
 
 #[test]
@@ -1861,156 +1871,37 @@ fn update_warmth_opens_at_grey_world() {
 
 #[test]
 fn update_shadows_highlights_opens_at_medium() {
-    use photo_cruiser_core::{EditStack, Tool};
-    let value = |s: &State| s.stack().adjust(Tool::ShadowsHighlights);
-    let mut s = opened(&fixtures().join("adjust"));
-    s.apply(&Action::ShowPhoto { index: Some(2) }); // window.jpg
-    settle(&mut s);
-    s.apply(&Action::OpenTool { tool: Tool::ShadowsHighlights });
-    settle(&mut s);
-    assert_eq!(s.tool.as_ref().unwrap().opening, Some(0.45));
-    assert_eq!((value(&s), s.dirty(), s.preview.is_some()), (Some(0.45), true, true));
-    s.apply(&Action::Undo);
-    assert_eq!(s.stack(), EditStack::default(), "opening is one step");
-    s.apply(&Action::Redo);
-    s.apply(&Action::SetAdjust { value: 0.9 });
-    s.apply(&Action::AutoAdjust);
-    assert_eq!(value(&s), Some(0.45), "double-click: medium");
-    s.apply(&Action::NeutralAdjust);
-    assert_eq!(s.stack(), EditStack::default(), "0 is no step");
-    s.apply(&Action::SetAdjust { value: 0.65 });
-    s.apply(&Action::CancelTool);
-    assert!(s.tool.is_none() && s.stack() == EditStack::default(), "Esc: as before the tool opened");
-    assert!(s.errors.is_empty(), "{:?}", s.errors);
+    check_fixed_opening(&fixtures().join("adjust"), 2, Tool::ShadowsHighlights, 0.45, 0.9, 0.65); // window.jpg
 }
 
 #[test]
 fn update_local_contrast_opens_at_125() {
-    use photo_cruiser_core::{EditStack, Tool};
-    let value = |s: &State| s.stack().adjust(Tool::LocalContrast);
-    let mut s = opened(&fixtures().join("adjust"));
-    s.apply(&Action::ShowPhoto { index: Some(2) }); // window.jpg
-    settle(&mut s);
-    s.apply(&Action::OpenTool { tool: Tool::LocalContrast });
-    settle(&mut s);
-    assert_eq!(s.tool.as_ref().unwrap().opening, Some(1.25));
-    assert_eq!((value(&s), s.dirty(), s.preview.is_some()), (Some(1.25), true, true));
-    s.apply(&Action::Undo);
-    assert_eq!(s.stack(), EditStack::default(), "opening is one step");
-    s.apply(&Action::Redo);
-    s.apply(&Action::SetAdjust { value: 1.8 });
-    s.apply(&Action::AutoAdjust);
-    assert_eq!(value(&s), Some(1.25), "double-click: 125%");
-    s.apply(&Action::NeutralAdjust);
-    assert_eq!(s.stack(), EditStack::default(), "100% is no step");
-    s.apply(&Action::SetAdjust { value: 2.0 });
-    s.apply(&Action::CancelTool);
-    assert!(s.tool.is_none() && s.stack() == EditStack::default(), "Esc: as before the tool opened");
-    assert!(s.errors.is_empty(), "{:?}", s.errors);
+    check_fixed_opening(&fixtures().join("adjust"), 2, Tool::LocalContrast, 1.25, 1.8, 2.0); // window.jpg
 }
 
 #[test]
 fn update_contrast_opens_at_1_2() {
-    use photo_cruiser_core::{EditStack, Tool};
-    let value = |s: &State| s.stack().adjust(Tool::Contrast);
-    let mut s = opened(&fixtures().join("adjust"));
-    s.apply(&Action::ShowPhoto { index: Some(2) }); // window.jpg
-    settle(&mut s);
-    s.apply(&Action::OpenTool { tool: Tool::Contrast });
-    settle(&mut s);
-    assert_eq!(s.tool.as_ref().unwrap().opening, Some(1.2));
-    assert_eq!((value(&s), s.dirty(), s.preview.is_some()), (Some(1.2), true, true));
-    s.apply(&Action::Undo);
-    assert_eq!(s.stack(), EditStack::default(), "opening is one step");
-    s.apply(&Action::Redo);
-    s.apply(&Action::SetAdjust { value: 1.8 });
-    s.apply(&Action::AutoAdjust);
-    assert_eq!(value(&s), Some(1.2), "double-click: 1.2");
-    s.apply(&Action::NeutralAdjust);
-    assert_eq!(s.stack(), EditStack::default(), "1 is no step");
-    s.apply(&Action::SetAdjust { value: 2.0 });
-    s.apply(&Action::CancelTool);
-    assert!(s.tool.is_none() && s.stack() == EditStack::default(), "Esc: as before the tool opened");
-    assert!(s.errors.is_empty(), "{:?}", s.errors);
+    check_fixed_opening(&fixtures().join("adjust"), 2, Tool::Contrast, 1.2, 1.8, 2.0); // window.jpg
 }
 
 #[test]
 fn update_sharpen_opens_at_half() {
-    use photo_cruiser_core::{EditStack, Tool};
-    let value = |s: &State| s.stack().adjust(Tool::Sharpen);
-    let mut s = opened(&fixtures().join("adjust"));
-    s.apply(&Action::ShowPhoto { index: Some(2) }); // window.jpg
-    settle(&mut s);
-    s.apply(&Action::OpenTool { tool: Tool::Sharpen });
-    settle(&mut s);
-    assert_eq!(s.tool.as_ref().unwrap().opening, Some(0.5));
-    assert_eq!((value(&s), s.dirty(), s.preview.is_some()), (Some(0.5), true, true));
-    s.apply(&Action::Undo);
-    assert_eq!(s.stack(), EditStack::default(), "opening is one step");
-    s.apply(&Action::Redo);
-    s.apply(&Action::SetAdjust { value: 0.9 });
-    s.apply(&Action::AutoAdjust);
-    assert_eq!(value(&s), Some(0.5), "double-click: 0.5");
-    s.apply(&Action::NeutralAdjust);
-    assert_eq!(s.stack(), EditStack::default(), "0 is no step");
-    s.apply(&Action::SetAdjust { value: 1.0 });
-    s.apply(&Action::CancelTool);
-    assert!(s.tool.is_none() && s.stack() == EditStack::default(), "Esc: as before the tool opened");
-    assert!(s.errors.is_empty(), "{:?}", s.errors);
+    check_fixed_opening(&fixtures().join("adjust"), 2, Tool::Sharpen, 0.5, 0.9, 1.0); // window.jpg
 }
 
 #[test]
 fn update_dehaze_opens_at_0_2() {
-    use photo_cruiser_core::{EditStack, Tool};
-    let value = |s: &State| s.stack().adjust(Tool::Dehaze);
-    let mut s = opened(&fixtures().join("adjust"));
-    s.apply(&Action::ShowPhoto { index: Some(3) }); // woods-haze.jpg
-    settle(&mut s);
-    s.apply(&Action::OpenTool { tool: Tool::Dehaze });
-    settle(&mut s);
-    assert_eq!(s.tool.as_ref().unwrap().opening, Some(0.2));
-    assert_eq!((value(&s), s.dirty(), s.preview.is_some()), (Some(0.2), true, true));
-    s.apply(&Action::Undo);
-    assert_eq!(s.stack(), EditStack::default(), "opening is one step");
-    s.apply(&Action::Redo);
-    s.apply(&Action::SetAdjust { value: 0.7 });
-    s.apply(&Action::AutoAdjust);
-    assert_eq!(value(&s), Some(0.2), "double-click: 0.2");
-    s.apply(&Action::NeutralAdjust);
-    assert_eq!(s.stack(), EditStack::default(), "0 is no step");
-    s.apply(&Action::SetAdjust { value: 1.0 });
-    s.apply(&Action::CancelTool);
-    assert!(s.tool.is_none() && s.stack() == EditStack::default(), "Esc: as before the tool opened");
-    assert!(s.errors.is_empty(), "{:?}", s.errors);
+    check_fixed_opening(&fixtures().join("adjust"), 3, Tool::Dehaze, 0.2, 0.7, 1.0); // woods-haze.jpg
 }
 
 #[test]
 fn update_vignette_opens_at_minus_half() {
-    use photo_cruiser_core::{EditStack, Tool};
-    let value = |s: &State| s.stack().adjust(Tool::Vignette);
-    let mut s = opened(&fixtures().join("adjust"));
-    s.apply(&Action::ShowPhoto { index: Some(2) }); // window.jpg
-    settle(&mut s);
+    let s = opened(&fixtures().join("adjust"));
     let row =
         crate::palette::filtered(&s).into_iter().find(|c| c.label == "Vignette").expect("in the palette");
     assert_eq!(row.keys, "V");
     assert!(matches!(row.message, Message::Action(Action::OpenTool { tool: Tool::Vignette })));
-    s.apply(&Action::OpenTool { tool: Tool::Vignette });
-    settle(&mut s);
-    assert_eq!(s.tool.as_ref().unwrap().opening, Some(-0.5));
-    assert_eq!((value(&s), s.dirty(), s.preview.is_some()), (Some(-0.5), true, true));
-    s.apply(&Action::Undo);
-    assert_eq!(s.stack(), EditStack::default(), "opening is one step");
-    s.apply(&Action::Redo);
-    s.apply(&Action::SetAdjust { value: 0.7 });
-    s.apply(&Action::AutoAdjust);
-    assert_eq!(value(&s), Some(-0.5), "double-click: -0.5");
-    s.apply(&Action::NeutralAdjust);
-    assert_eq!(s.stack(), EditStack::default(), "0 is no step");
-    s.apply(&Action::SetAdjust { value: -1.0 });
-    s.apply(&Action::CancelTool);
-    assert!(s.tool.is_none() && s.stack() == EditStack::default(), "Esc: as before the tool opened");
-    assert!(s.errors.is_empty(), "{:?}", s.errors);
+    check_fixed_opening(&fixtures().join("adjust"), 2, Tool::Vignette, -0.5, 0.7, -1.0); // window.jpg
 }
 
 #[test]
@@ -2090,38 +1981,10 @@ fn tool_keys() {
         Some(Message::Action(a)) => a,
         other => panic!("{other:?}"),
     };
-    assert_eq!(
-        action(Key::Character("e".into()), Modes::default()),
-        Action::OpenTool { tool: Tool::Exposure }
-    );
-    assert_eq!(action(Key::Character("a".into()), Modes::default()), Action::OpenTool { tool: Tool::Levels });
-    assert_eq!(action(Key::Character("s".into()), Modes::default()), Action::OpenTool { tool: Tool::Colour });
-    assert_eq!(action(Key::Character("w".into()), Modes::default()), Action::OpenTool { tool: Tool::Warmth });
-    assert_eq!(
-        action(Key::Character("t".into()), Modes::default()),
-        Action::OpenTool { tool: Tool::ShadowsHighlights }
-    );
-    assert_eq!(
-        action(Key::Character("d".into()), Modes::default()),
-        Action::OpenTool { tool: Tool::LocalContrast }
-    );
-    assert_eq!(action(Key::Character("m".into()), Modes::default()), Action::OpenTool { tool: Tool::Dehaze });
-    assert_eq!(
-        action(Key::Character("b".into()), Modes::default()),
-        Action::OpenTool { tool: Tool::Contrast }
-    );
-    assert_eq!(
-        action(Key::Character("p".into()), Modes::default()),
-        Action::OpenTool { tool: Tool::Sharpen }
-    );
-    assert_eq!(
-        action(Key::Character("v".into()), Modes::default()),
-        Action::OpenTool { tool: Tool::Vignette }
-    );
-    assert_eq!(
-        action(Key::Character("q".into()), Modes::default()),
-        Action::OpenTool { tool: Tool::Straighten }
-    );
+    for t in Tool::ALL {
+        let k = crate::adjust_panel::key(t).to_lowercase();
+        assert_eq!(action(Key::Character(k.into()), Modes::default()), Action::OpenTool { tool: t }, "{t:?}");
+    }
     assert_eq!(
         key_message(
             &Key::Character("y".into()),
