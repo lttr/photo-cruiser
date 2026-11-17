@@ -180,6 +180,61 @@ fn export_jpeg_with_edits() {
 }
 
 #[test]
+fn export_keeps_exif() {
+    let dir = tempfile::tempdir().unwrap();
+    let out = dir.path().join("out.jpg");
+    pcr().args(["export", &fixture("img3-exif6.jpg"), "-o", out.to_str().unwrap()]).assert().success();
+    let v = run_json(&["info", out.to_str().unwrap(), "--json"], 0);
+    // EXIF is there and says upright: the pixels are turned already.
+    assert_eq!(
+        (v["width"].as_u64(), v["height"].as_u64(), v["orientation"].as_u64()),
+        (Some(240), Some(320), Some(1))
+    );
+    assert!(image::open(&out).is_ok());
+    let exif = photo_cruiser_core::decode::metadata(&out).unwrap().exif;
+    assert!(exif.is_some(), "EXIF kept");
+}
+
+#[test]
+fn export_tree_json_and_partial_failure() {
+    let dir = tempfile::tempdir().unwrap();
+    let input = dir.path().join("in");
+    std::fs::create_dir_all(input.join("sub")).unwrap();
+    std::fs::copy(fixtures().join("img2.jpg"), input.join("img2.jpg")).unwrap();
+    std::fs::copy(fixtures().join("img5.HEIC"), input.join("sub/img5.HEIC")).unwrap();
+    std::fs::copy(fixtures().join("img1.png"), input.join("sub/img1.png")).unwrap();
+    let (i, out) = (input.to_str().unwrap(), dir.path().join("out"));
+    pcr().args(["star", &format!("{i}/img2.jpg"), &format!("{i}/sub/img5.HEIC")]).assert().success();
+
+    let v = run_json(&["export-tree", i, "-o", out.to_str().unwrap(), "--starred", "--json"], 0);
+    assert_eq!((v["count"].as_u64(), v["failed"].as_u64()), (Some(2), Some(0)));
+    assert!(out.join("img2.jpg").is_file() && out.join("sub/img5.jpg").is_file());
+    assert!(!out.join("sub/img1.jpg").exists(), "not starred");
+    let f =
+        v["files"].as_array().unwrap().iter().find(|f| f["output"].as_str().unwrap().ends_with("img5.jpg"));
+    assert_eq!(f.unwrap()["action"], "encoded");
+
+    // Not empty now.
+    let v = run_json(&["export-tree", i, "-o", out.to_str().unwrap(), "--json"], 2);
+    assert_eq!(v["error"]["kind"], "not_empty");
+
+    // A broken photo: the rest is exported, exit 4, the report says which failed.
+    std::fs::copy(fixtures().join("img12-broken.jpg"), input.join("img12-broken.jpg")).unwrap();
+    let out2 = dir.path().join("out2");
+    let v = run_json(&["export-tree", i, "-o", out2.to_str().unwrap(), "--max-side", "100", "--json"], 4);
+    assert_eq!((v["count"].as_u64(), v["failed"].as_u64()), (Some(4), Some(1)));
+    assert!(out2.join("sub/img1.jpg").is_file());
+    let png =
+        v["files"].as_array().unwrap().iter().find(|f| f["source"].as_str().unwrap().ends_with("img1.png"));
+    let png = png.unwrap();
+    assert_eq!(
+        (png["width"].as_u64(), png["height"].as_u64(), png["resized"].as_bool()),
+        (Some(100), Some(75), Some(true))
+    );
+    assert_eq!(png["sampling"], "4:4:4");
+}
+
+#[test]
 fn missing_file_is_io() {
     let v = run_json(&["info", &fixture("nope.jpg"), "--json"], 2);
     assert_eq!(v["error"]["kind"], "io");

@@ -1,5 +1,5 @@
 ---
-status: not-started
+status: agent-done
 references:
   - "Process: ../2026-11-05_cull-edit-export/intent.md (step 3)"
   - "Save path it reuses: ../2026-10-11_save-edits/spec.md"
@@ -14,11 +14,10 @@ there is no app UI. Instead it's one `pcr` command, documented in the `pcr` skil
 > starred photo into Y as JPEG at archive quality, keeping EXIF.
 
 ```
-pcr export-tree <X> -o <Y> [--starred] [--json]
+pcr export-tree <X> -o <Y> [--starred] [--quality N] [--max-side N] [--json]
 ```
 
-(Name to settle in implementation: a separate subcommand keeps `pcr export FILE -o out.jpg`
-unchanged. An alternative is letting `pcr export` take a folder.)
+A separate subcommand, so `pcr export FILE -o out.jpg` stays as it is.
 
 ## Decisions
 
@@ -55,9 +54,16 @@ unchanged. An alternative is letting `pcr export` take a folder.)
   Writes go through a temp name and are renamed, so no half-written JPEGs.
 - **Parallel.** Photos run across CPU cores (a fixed worker pool, no async runtime in
   core). On gvfs sources, file access is already serialised by `source::one_at_a_time`.
-- **Full resolution.** No downscale. The target is large screens and the occasional print.
+- **Size limit 4032 px on the longer side** (`--max-side N`, 0 for none). 4032 is the long
+  side of 12 MP phone photos, so those keep every pixel. Bigger photos (Nikon 4512, realme
+  4608) are scaled down with Lanczos. That's enough for a 5K screen and an A4 print at
+  300 ppi. An unedited JPEG over the limit is always encoded.
+- **Chroma sampling kept from the original.** JPEG from its header (4:2:2 stays 4:2:2),
+  HEIC and AVIF from libheif, lossy WebP 4:2:0, lossless formats 4:4:4.
 
 ## Archive preset
+
+Chosen: mozjpeg-rs, progressive, q92. Chroma sampling follows the original. See `research.md`.
 
 Goal: visually lossless at 100 % zoom on a large screen, fine for an occasional print,
 and as small as possible at that quality. Encode time doesn't matter much.
@@ -107,4 +113,10 @@ On temp copies of `fixtures/` in a nested tree:
 
 ## Out of scope
 
-Resizing, other output formats, a GUI action, incremental re-export into an existing Y.
+Other output formats, a GUI action, incremental re-export into an existing Y.
+
+## Implementation notes
+
+- Exit code 4: some photos failed, the others were exported. The report lists the failures.
+- `pcr render` and `pcr export` now also use the archive encoder for JPEG output and keep EXIF
+  and ICC. Save keeps its own encoder: it reuses the source's quantisation tables.

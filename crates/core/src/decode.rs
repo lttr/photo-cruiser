@@ -293,6 +293,41 @@ fn metadata_once(path: &Path) -> Result<Metadata> {
     Ok(Metadata { icc, exif })
 }
 
+/// How much colour resolution the photo has, as JPEG luma sampling factors (see
+/// [`crate::meta::JpegSettings::sampling`]): (1, 1) full, (2, 1) half across, (2, 2) half
+/// both ways. JPEG from its header; HEIC and AVIF from libheif; lossy WebP is always
+/// 4:2:0; lossless formats (PNG, GIF, BMP, lossless WebP) have full colour resolution.
+/// Unusual JPEG samplings map to the nearest one that loses nothing: 4:4:0 to (1, 1).
+/// (2, 2) when the file doesn't say.
+pub fn chroma_sampling(path: &Path) -> Result<(u8, u8)> {
+    let format = probe(path)?.format;
+    Ok(match format {
+        Format::Jpeg => match jpeg_settings(path)?.map(|s| s.sampling) {
+            Some((1, _)) => (1, 1),
+            Some((2, 1)) => (2, 1),
+            _ => (2, 2),
+        },
+        Format::Heic | Format::Avif => retry_io(|| {
+            let _one = one_at_a_time(path);
+            let (_ctx, handle) = heif_open(path)?;
+            use libheif_rs::{Chroma, ColorSpace};
+            Ok(match handle.preferred_decoding_colorspace() {
+                Ok(ColorSpace::YCbCr(Chroma::C444) | ColorSpace::Rgb(_)) => (1, 1),
+                Ok(ColorSpace::YCbCr(Chroma::C422)) => (2, 1),
+                _ => (2, 2),
+            })
+        })?,
+        Format::Webp => {
+            let bytes = retry_io(|| crate::source::read(path))?;
+            match crate::meta::webp_info(&bytes).is_some_and(|i| i.lossless) {
+                true => (1, 1),
+                false => (2, 2),
+            }
+        }
+        Format::Png | Format::Gif | Format::Bmp => (1, 1),
+    })
+}
+
 /// Quantisation tables, sampling and density of a JPEG (see [`crate::meta::jpeg_settings`]).
 /// `Ok(None)` for other formats.
 pub fn jpeg_settings(path: &Path) -> Result<Option<crate::meta::JpegSettings>> {

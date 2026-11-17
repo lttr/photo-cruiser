@@ -1,6 +1,6 @@
 ---
 name: pcr
-description: Inspect, edit, save, revert and export photos with `pcr`, the Photo Cruiser command line (crop, rotate, auto levels, exposure and other one-slider tools). Use when asked to edit, crop, straighten, brighten, fix or export photos, to apply the same change to many photos, or to read or change Photo Cruiser's edits and backups (`.photo-cruiser/` folders).
+description: Inspect, edit, save, revert and export photos with `pcr`, the Photo Cruiser command line (crop, rotate, auto levels, exposure and other one-slider tools). Use when asked to edit, crop, straighten, brighten, fix or export photos, to export or archive a folder of (starred) photos as JPEGs, to apply the same change to many photos, or to read or change Photo Cruiser's edits and backups (`.photo-cruiser/` folders).
 ---
 
 # pcr: Photo Cruiser from the command line
@@ -178,8 +178,31 @@ stack without that op. To find every edited photo in a folder, run `pcr edits` o
 look at `saved` (`null` means never saved) and `dirty`.
 
 Export a copy without touching the photo: `pcr export FILE -o out.jpg --quality 92 --json`. It uses
-the photo's own edits, or `--edits` / `--no-edits`, at full resolution. The output must end in `.png`,
-`.jpg` or `.jpeg`.
+the photo's own edits, or `--edits` / `--no-edits`, at full resolution, and keeps EXIF and the colour
+profile. The output must end in `.png`, `.jpg` or `.jpeg`.
+
+Export or archive a whole folder: `pcr export-tree DIR -o OUT --starred --json`. "Export the starred
+photos of X into Y, keeping the folder structure" is exactly this command; one call does all of it.
+
+- `OUT` must not exist (it is created; its parent must exist) or be empty. Exit 2 `not_empty`
+  otherwise: nothing is ever overwritten or merged. To export again, pick a new folder.
+- Sub-folders of `DIR` are mirrored; hidden ones (`.photo-cruiser/`) are skipped, folders with nothing
+  to export aren't created. Without `--starred` every photo is exported.
+- Every output is a JPEG (archive preset: mozjpeg, progressive, quality 92; `--quality N`
+  overrides). Chroma sampling follows the original: 4:2:2 stays 4:2:2, PNG and other lossless
+  formats get 4:4:4.
+- Photos with a longer side over 4032 px (the size of 12 MP phone photos) are scaled down to it.
+  `--max-side N` sets another limit, `--max-side 0` keeps every photo's size. HEIC, PNG and the rest become `<name>.jpg`; JPEGs keep their names. Two photos that
+  would get the same name: the JPEG keeps it, the other gets `name (2).jpg` (`renamed: true`).
+- Edited photos render once from the original with their current edits (saved or not), so there is no
+  second lossy step. An unedited JPEG is copied byte for byte unless it is over the size limit or
+  re-encoding makes it at least 20 % smaller (camera JPEGs usually shrink by 40-60 %).
+- EXIF (made upright), colour profile, star and file time carry over.
+- One photo failing doesn't stop the rest: exit 4, and its entry has `action: "failed"` and `error`.
+  Report per file: `source`, `output`, `action` (`encoded`, `copied`, `failed`), `reason` (`edited`,
+  `converted`, `resized`, `smaller`, `original`), `resized`, `width`, `height`, `sampling`, `bytes`,
+  `source_bytes`; totals `count`, `encoded`, `copied`,
+  `failed`, `bytes`, `source_bytes`.
 
 Open the app on a folder for the user: `pcr app DIR`. It blocks until the window closes, so only run it
 when the user asks to see the photos.
@@ -196,6 +219,7 @@ when the user asks to see the photos.
 | `unsupported_output` | 2 | `-o` is not `.png`, `.jpg` or `.jpeg` |
 | `read_only` | 2 | the photo's folder can't be written; save is impossible |
 | `name_taken` | 2 | save would convert to a name that already exists |
+| `not_empty` | 2 | the `export-tree` output folder isn't empty |
 | `unsupported` | 3 | not a supported image |
 | `decode` | 3 | corrupt image |
 | `edits` | 3 | invalid edit stack JSON (the message says what's wrong) |
@@ -203,6 +227,7 @@ when the user asks to see the photos.
 | `animated` | 3 | animated images can't be saved |
 | `high_bit_depth` | 3 | 16-bit images can't be saved |
 
+`export-tree` exits 4 when some photos failed and the others were exported; the report lists them.
 `list --probe` reports errors per entry (`"error": {...}` in place of the probe fields) and still exits
 0. A `stale_edits` warning on stderr is not a failure.
 

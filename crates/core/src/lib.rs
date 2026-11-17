@@ -12,6 +12,7 @@ pub mod decode;
 pub mod edit;
 pub mod error;
 pub mod export;
+pub mod export_tree;
 pub mod geom;
 pub mod info;
 pub mod justified;

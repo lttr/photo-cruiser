@@ -39,28 +39,87 @@ pub enum Encoding {
         lossless: bool,
         quality: u8,
     },
+    /// The archive JPEG of `pcr export-tree` and `pcr export` ([`ARCHIVE_QUALITY`]).
+    /// `sampling` as in [`JpegSettings::sampling`]: (1, 1) 4:4:4, (2, 1) 4:2:2, else 4:2:0.
+    Archive {
+        quality: u8,
+        sampling: (u8, u8),
+    },
 }
+
+/// Default quality of [`Encoding::Archive`].
+pub const ARCHIVE_QUALITY: u8 = 92;
 
 impl From<OutFormat> for Encoding {
     fn from(f: OutFormat) -> Self {
         match f {
-            OutFormat::Jpeg { quality } => Encoding::Jpeg { settings: Box::default(), quality },
+            OutFormat::Jpeg { quality } => Encoding::Archive { quality, sampling: (2, 2) },
             OutFormat::Png => Encoding::Png,
         }
     }
 }
 
+/// Write `img` to `path` without metadata.
 pub fn save(img: &RgbaImage, path: &Path, format: OutFormat) -> Result<()> {
     write(img, path, &format.into(), &Metadata::default())
+}
+
+/// The ICC profile and EXIF of `source` for a rendering of it of `width`×`height`: EXIF
+/// patched as [`meta::patch_exif`] does (upright, new size, no stale thumbnail), and left
+/// out if it can't be parsed.
+pub fn saved_metadata(source: &Path, width: u32, height: u32) -> Result<Metadata> {
+    let meta = crate::decode::metadata(source)?;
+    Ok(Metadata { icc: meta.icc, exif: meta.exif.and_then(|e| meta::patch_exif(&e, width, height)) })
 }
 
 /// Encode `img` into a new file at `path`, with `meta` (EXIF already patched by the
 /// caller). JPEG has no alpha: transparent pixels are flattened onto white.
 pub fn write(img: &RgbaImage, path: &Path, encoding: &Encoding, meta: &Metadata) -> Result<()> {
-    let bytes = encode(img, encoding, meta).map_err(|e| Error::encode(path, e))?;
+    let bytes = encode_to_vec(img, encoding, meta).map_err(|e| Error::encode(path, e))?;
+    write_bytes(path, &bytes)
+}
+
+/// Write encoded bytes into a new file at `path`, synced.
+pub fn write_bytes(path: &Path, bytes: &[u8]) -> Result<()> {
     let _one = crate::source::one_at_a_time(path);
     let mut file = std::fs::File::create(path).map_err(|e| Error::io(path, e))?;
-    file.write_all(&bytes).and_then(|_| file.sync_all()).map_err(|e| Error::io(path, e))
+    file.write_all(bytes).and_then(|_| file.sync_all()).map_err(|e| Error::io(path, e))
+}
+
+/// The name of a chroma sampling, `4:2:0` and so on (see [`Encoding::Archive`]).
+pub fn sampling_name(sampling: (u8, u8)) -> &'static str {
+    match sampling {
+        (1, 1) => "4:4:4",
+        (2, 1) => "4:2:2",
+        _ => "4:2:0",
+    }
+}
+
+/// The archive JPEG: mozjpeg's progressive encoding with trellis quantisation and
+/// optimised scans, smallest for its quality; encoding time doesn't matter here (see
+/// `.aiwork/2026-11-17_batch-export/research.md` for the benchmark behind the preset).
+fn archive_jpeg(
+    img: &RgbaImage,
+    quality: u8,
+    sampling: (u8, u8),
+    meta: &Metadata,
+) -> std::result::Result<Vec<u8>, String> {
+    use mozjpeg_rs::{Encoder, Subsampling};
+    let subsampling = match sampling_name(sampling) {
+        "4:4:4" => Subsampling::S444,
+        "4:2:2" => Subsampling::S422,
+        _ => Subsampling::S420,
+    };
+    let mut enc = Encoder::max_compression().quality(quality.clamp(1, 100)).subsampling(subsampling);
+    // Best effort, as for the other encoders: a block too big for its segment is left out.
+    if let Some(icc) = &meta.icc {
+        enc = enc.icc_profile(icc.clone());
+    }
+    if let Some(exif) = meta.exif.as_ref().filter(|e| e.len() <= 65535 - 8) {
+        enc = enc.exif_data(exif.clone());
+    }
+    let (w, h) = img.dimensions();
+    enc.encode_rgb(&rgb(img), w, h).map_err(|e| e.to_string())
 }
 
 fn opaque(img: &RgbaImage) -> bool {
@@ -77,7 +136,12 @@ fn rgb(img: &RgbaImage) -> Vec<u8> {
     out
 }
 
-fn encode(img: &RgbaImage, encoding: &Encoding, meta: &Metadata) -> std::result::Result<Vec<u8>, String> {
+/// `img` encoded with `encoding` and `meta`, in memory.
+pub fn encode_to_vec(
+    img: &RgbaImage,
+    encoding: &Encoding,
+    meta: &Metadata,
+) -> std::result::Result<Vec<u8>, String> {
     let (w, h) = img.dimensions();
     let mut out = Vec::new();
     match encoding {
@@ -117,6 +181,7 @@ fn encode(img: &RgbaImage, encoding: &Encoding, meta: &Metadata) -> std::result:
             }
             enc.encode(&rgb(img), w16, h16, ColorType::Rgb).map_err(|e| e.to_string())?;
         }
+        Encoding::Archive { quality, sampling } => out = archive_jpeg(img, *quality, *sampling, meta)?,
         Encoding::Png => {
             let mut enc = image::codecs::png::PngEncoder::new(&mut out);
             if let Some(icc) = &meta.icc {

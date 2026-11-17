@@ -35,6 +35,9 @@ pub enum Error {
     /// A warning, not a failure.
     #[error("{path}: changed outside Photo Cruiser, its saved edits are ignored")]
     StaleEdits { path: PathBuf },
+    /// An export folder that holds files already (exports never overwrite or merge).
+    #[error("{path}: not empty, export into a new or empty folder")]
+    NotEmpty { path: PathBuf },
 }
 
 impl Error {
@@ -106,7 +109,8 @@ impl Error {
             | Error::NameTaken { path }
             | Error::Animated { path }
             | Error::HighBitDepth { path }
-            | Error::StaleEdits { path } => Some(path),
+            | Error::StaleEdits { path }
+            | Error::NotEmpty { path } => Some(path),
             Error::Edits(_) | Error::EmptyCrop(_) => None,
         }
     }
@@ -126,6 +130,7 @@ impl Error {
             Error::Animated { .. } => "animated",
             Error::HighBitDepth { .. } => "high_bit_depth",
             Error::StaleEdits { .. } => "stale_edits",
+            Error::NotEmpty { .. } => "not_empty",
         }
     }
 }

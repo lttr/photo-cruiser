@@ -7,13 +7,15 @@
 //! Exit codes: 0 ok, 1 usage, 2 I/O (missing files, write/encode failures, unsupported
 //! output extension, a read-only folder or a taken name on save, missing `photo-cruiser`
 //! binary), 3 decode (corrupt or unsupported input image, invalid edits JSON, a crop that
-//! is empty after clamping to the image, an animated or 16-bit image on save).
+//! is empty after clamping to the image, an animated or 16-bit image on save), 4 some
+//! photos of an `export-tree` failed (the others are exported; see the report).
 
 mod skill;
 
 use clap::{CommandFactory, Parser, Subcommand};
 use photo_cruiser_core::adjust;
 use photo_cruiser_core::export::{self, OutFormat};
+use photo_cruiser_core::export_tree;
 use photo_cruiser_core::info::Field;
 use photo_cruiser_core::rating;
 use photo_cruiser_core::render::{self, RenderOpts};
@@ -28,8 +30,8 @@ use std::time::Instant;
 const AFTER_HELP: &str = "\
 --json prints pretty JSON to stdout; on failure {\"error\": {\"kind\", \"message\"}}.
 Exit codes: 0 ok, 1 usage, 2 I/O (incl. encode, unsupported output format, read-only
-folder, name taken), 3 decode (incl. unsupported input, invalid edits JSON, crop outside
-the image, animated or 16-bit image).";
+folder, name taken, export folder not empty), 3 decode (incl. unsupported input, invalid edits JSON, crop outside
+the image, animated or 16-bit image), 4 export-tree exported some photos but not all.";
 
 #[derive(Parser)]
 #[command(name = "pcr", version, about = "Photo Cruiser command line", after_help = AFTER_HELP)]
@@ -101,8 +103,29 @@ enum Cmd {
         #[arg(short, long)]
         output: PathBuf,
         /// JPEG quality 1-100.
-        #[arg(long, default_value_t = 90, value_parser = clap::value_parser!(u8).range(1..=100))]
+        #[arg(long, default_value_t = export::ARCHIVE_QUALITY, value_parser = clap::value_parser!(u8).range(1..=100))]
         quality: u8,
+        #[arg(long)]
+        json: bool,
+    },
+    /// Export a folder tree into a new or empty folder: the same sub-folders, each photo as
+    /// an archive JPEG with its edits applied, EXIF, colour profile, star and file time
+    /// kept. Edited photos render once from their original. Unedited JPEGs are copied
+    /// unless re-encoding makes them at least 20 % smaller. Hidden folders are skipped.
+    ExportTree {
+        dir: PathBuf,
+        /// The output folder: created if missing, must be empty if it exists.
+        #[arg(short, long)]
+        output: PathBuf,
+        /// Only starred photos.
+        #[arg(long)]
+        starred: bool,
+        /// JPEG quality 1-100 (default: the archive preset).
+        #[arg(long, value_parser = clap::value_parser!(u8).range(1..=100))]
+        quality: Option<u8>,
+        /// Scale photos down to this longer side; 0 keeps every photo's size.
+        #[arg(long, value_name = "N", default_value_t = export_tree::MAX_SIDE)]
+        max_side: u32,
         #[arg(long)]
         json: bool,
     },
@@ -176,7 +199,8 @@ impl From<Error> for Fail {
             | Error::Encode { .. }
             | Error::UnsupportedOutput { .. }
             | Error::ReadOnly { .. }
-            | Error::NameTaken { .. } => 2,
+            | Error::NameTaken { .. }
+            | Error::NotEmpty { .. } => 2,
             Error::Unsupported { .. }
             | Error::Decode { .. }
             | Error::Edits(_)
@@ -213,6 +237,7 @@ fn main() -> ExitCode {
         | Cmd::Star { json, .. }
         | Cmd::Render { json, .. }
         | Cmd::Export { json, .. }
+        | Cmd::ExportTree { json, .. }
         | Cmd::Edits { json, .. }
         | Cmd::Save { json, .. }
         | Cmd::Revert { json, .. }
@@ -246,6 +271,9 @@ fn run(cmd: Cmd) -> Result<ExitCode, Fail> {
         Cmd::Export { file, edits, no_edits, output, quality, json } => {
             let stack = stack_for(&file, edits.as_deref(), no_edits)?;
             write_rendered(&file, &stack, &[], None, &output, quality, json)?
+        }
+        Cmd::ExportTree { dir, output, starred, quality, max_side, json } => {
+            return export_tree(&dir, &output, starred, quality, max_side, json);
         }
         Cmd::Edits { file, json } => show_edits(&file, json)?,
         Cmd::Save { file, edits, json } => {
@@ -389,7 +417,18 @@ fn write_rendered(
         edits.set_adjust(*tool, Some(value));
     }
     let img = render::render(&src, &edits, RenderOpts { max_side })?;
-    export::save(&img, output, format)?;
+    // EXIF and the colour profile go along, made upright.
+    let original = store::original(file);
+    let meta = export::saved_metadata(&original, img.width(), img.height())?;
+    let encoding = match format {
+        // The original's colour resolution: 4:2:2 stays 4:2:2, a PNG gets 4:4:4.
+        OutFormat::Jpeg { quality } => export::Encoding::Archive {
+            quality,
+            sampling: photo_cruiser_core::decode::chroma_sampling(&original)?,
+        },
+        OutFormat::Png => export::Encoding::Png,
+    };
+    export::write(&img, output, &encoding, &meta)?;
     let (width, height) = img.dimensions();
     if json {
         print_json(&RenderJson { path: output, width, height, ops: &edits.ops });
@@ -570,6 +609,59 @@ fn parse_adjust(s: &str) -> Result<(Tool, Option<f32>), String> {
         Some(v) if !v.is_finite() => Err(format!("{v}: not a number")),
         _ => Ok((name.trim().parse()?, value)),
     }
+}
+
+fn export_tree(
+    dir: &Path,
+    output: &Path,
+    starred: bool,
+    quality: Option<u8>,
+    max_side: u32,
+    json: bool,
+) -> Result<ExitCode, Fail> {
+    let defaults = export_tree::Options::default();
+    let opts = export_tree::Options {
+        starred,
+        quality: quality.unwrap_or(defaults.quality),
+        max_side: (max_side > 0).then_some(max_side),
+        ..defaults
+    };
+    let r = export_tree::export_tree(dir, output, &opts)?;
+    if json {
+        print_json(&r);
+    } else {
+        for f in &r.files {
+            match &f.error {
+                Some(e) => println!("failed\t{}\t{}", f.source.display(), e.message),
+                None => println!(
+                    "{}\t{}\t{}x{} {}\t{} bytes\t{}",
+                    f.action,
+                    f.output.display(),
+                    f.width,
+                    f.height,
+                    f.sampling,
+                    f.bytes,
+                    f.reason
+                ),
+            }
+        }
+        let mb = |b: u64| b as f64 / 1e6;
+        println!(
+            "{} photos: {} encoded, {} copied, {} failed; {:.1} MB -> {:.1} MB in {:.1} s",
+            r.count,
+            r.encoded,
+            r.copied,
+            r.failed,
+            mb(r.source_bytes),
+            mb(r.bytes),
+            r.ms / 1000.0
+        );
+    }
+    if r.failed > 0 {
+        eprintln!("pcr: {} of {} photos failed", r.failed, r.count);
+        return Ok(ExitCode::from(4));
+    }
+    Ok(ExitCode::SUCCESS)
 }
 
 fn error_json(f: &Fail) -> Value {
