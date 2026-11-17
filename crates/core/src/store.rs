@@ -394,9 +394,13 @@ fn raise_tables(mut s: JpegSettings) -> (JpegSettings, String) {
 }
 
 /// Snap the crop's top-left corner down to even pixels, so the chroma samples of a
-/// subsampled source line up with the original's and the crop adds no colour blur.
+/// subsampled source line up with the original's and the crop adds no colour blur. A
+/// straightened photo is resampled anyway: its crop stays as it is.
 fn snap_crop(stack: &EditStack, size: (u32, u32)) -> EditStack {
     let mut out = stack.clone();
+    if stack.adjust(crate::Tool::Straighten).is_some() {
+        return out;
+    }
     if let Some(px) = stack.crop().and_then(|r| r.to_pixels(size)) {
         let (x, y) = (px.x - px.x % 2, px.y - px.y % 2);
         out.set_crop(Some(Rect::new(x as f32, y as f32, px.w as f32, px.h as f32)));
@@ -657,7 +661,9 @@ mod tests {
 
     #[test]
     fn snap_to_even() {
-        let stack = EditStack::default().with(Op::Crop(Rect::new(11.0, 7.0, 50.0, 40.0)));
+        let mut stack = EditStack::default().with(Op::Crop(Rect::new(11.0, 7.0, 50.0, 40.0)));
         assert_eq!(snap_crop(&stack, (100, 100)).crop(), Some(Rect::new(10.0, 6.0, 50.0, 40.0)));
+        stack.set_adjust(crate::Tool::Straighten, Some(2.0));
+        assert_eq!(snap_crop(&stack, (100, 100)), stack, "straightened: resampled anyway");
     }
 }

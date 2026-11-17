@@ -14,7 +14,8 @@ pub enum Op {
     Crop(Rect),
     /// Turn clockwise by `quarters` × 90° (1–3), after the crop.
     Rotate { quarters: u8 },
-    /// A one-slider tool at `value` (see [`crate::adjust`]). Applied after the geometry.
+    /// A one-slider tool at `value` (see [`crate::adjust`]). Applied after the geometry,
+    /// except Straighten, which is part of it.
     Adjust { tool: Tool, value: f32 },
 }
 

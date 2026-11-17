@@ -23,7 +23,8 @@ pub fn render(src: &Decoded, edits: &EditStack, opts: RenderOpts) -> Result<Rgba
     let k = src.pixel_scale();
     // Straightening keeps the photo's frame, and the crop is a part of it
     // ([`crate::straighten`]): one resampling for both.
-    let angle = edits.adjust(Tool::Straighten).unwrap_or(0.0);
+    // Clamped to its range, as `Tool::apply` and the app's preview do.
+    let angle = edits.adjust(Tool::Straighten).map_or(0.0, |v| Tool::Straighten.clamp(v));
     // Borrowed until an op makes a new image: no copy of the full-size photo to crop it.
     let mut img = match angle != 0.0 && edits.crop().is_none() {
         true => Cow::Owned(crate::straighten::apply(&src.image, angle)),
@@ -145,6 +146,12 @@ mod tests {
             let half = Rect::new(30.0, 25.0, 20.0, 25.0);
             ((half.w * s).round() as u32, (half.h * s).round() as u32)
         });
+        // An angle past the range (a hand-written edits file) is clamped, as the tool is.
+        let steep = EditStack::default().with(Op::Adjust { tool: Tool::Straighten, value: 60.0 });
+        assert_eq!(
+            render(&gradient(100, 100), &steep, RenderOpts::default()).unwrap(),
+            straighten::apply(&gradient(100, 100).image, 45.0)
+        );
     }
 
     #[test]

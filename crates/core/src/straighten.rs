@@ -204,7 +204,10 @@ fn edges(img: &RgbaImage) -> (Vec<Edge>, f32) {
 /// upright ones apart.
 fn line_score(edges: &[Edge], tilt: f32, side: f32, agree: f32) -> f32 {
     let (sin, cos) = tilt.to_radians().sin_cos();
-    let bands = (2.0 * side) as usize + 2;
+    // The distance across runs from about −side·sin to side·(cos + sin) (up to 1.2 side
+    // at the steepest tilts), offset by `side`: 3 side bands hold all of it, so no pixels
+    // pile up in a clamped end band.
+    let bands = (3.0 * side) as usize + 2;
     let (mut level, mut upright) = (vec![0f32; bands], vec![0f32; bands]);
     for e in edges.iter().filter(|e| (e.tilt - tilt).abs() <= agree) {
         // The distance across the line: along its normal.
@@ -276,6 +279,18 @@ mod tests {
         // Clamped to the frame.
         let side = (50.0 * s).round() as u32;
         assert_eq!(render(&img, 8.0, Rect::new(150.0, 50.0, 500.0, 500.0)).dimensions(), (side, side));
+    }
+
+    /// Edge pixels far apart across the lines score apart, wherever they are in the frame:
+    /// near the bottom right of a landscape photo, an upright edge at a clockwise tilt is
+    /// more than `side` across.
+    #[test]
+    fn line_score_keeps_far_edges_in_their_own_bands() {
+        let edge = |x, y| Edge { x, y, weight: 1.0, tilt: 8.0, level: false };
+        let score = |e: &[Edge]| line_score(e, 8.0, 400.0, AGREE);
+        let corner = [edge(370.0, 290.0), edge(390.0, 290.0)];
+        let apart: f32 = corner.iter().map(|e| score(std::slice::from_ref(e))).sum();
+        assert!((score(&corner) - apart).abs() < 1e-4, "{} vs {apart}", score(&corner));
     }
 
     /// Light stripes on dark (level lines every 30 px, and upright ones every 50 px),

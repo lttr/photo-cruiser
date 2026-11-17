@@ -364,6 +364,9 @@ pub struct ToolPanel {
     /// source and what the opening value was measured on (so on the cropped photo; for
     /// Straighten, see [`EditStack::geometry_for`]).
     base: Option<Arc<RgbaImage>>,
+    /// `base`'s pixels per full-size pixel (the decoded photo's scale times the shrink to
+    /// screen size): what radii in pixels are scaled by.
+    scale: f32,
     /// The geometry `base` was made with; a change closes the tool.
     geometry: EditStack,
     /// When the preview was last rendered while dragging (for [`PREVIEW_EVERY`]).
@@ -1288,6 +1291,7 @@ impl State {
             before,
             drag: None,
             base: None,
+            scale: 1.0,
             geometry,
             rendered_at: None,
         });
@@ -1321,13 +1325,13 @@ impl State {
             }
         }
         if self.tool.as_ref().is_some_and(|p| p.base.is_none())
-            && let Some(base) = self.preview_base()
+            && let Some((base, scale)) = self.preview_base()
         {
             let stack = self.stack();
             let Some(p) = &mut self.tool else { return };
             let opening = p.tool.opening(&base);
-            (p.base, p.opening, p.geometry) =
-                (Some(Arc::new(base)), Some(opening), stack.geometry_for(p.tool));
+            (p.base, p.scale, p.opening, p.geometry) =
+                (Some(Arc::new(base)), scale, Some(opening), stack.geometry_for(p.tool));
             if stack.adjust(p.tool).is_none() {
                 self.set_adjust(opening);
                 self.sync_display();
@@ -1336,7 +1340,7 @@ impl State {
         let mut stack = self.stack();
         let now = self.now();
         match &self.tool {
-            Some(ToolPanel { tool, drag, base: Some(base), rendered_at, .. }) => {
+            Some(ToolPanel { tool, drag, base: Some(base), scale, rendered_at, .. }) => {
                 if let Some(v) = drag {
                     stack.set_adjust(*tool, Some(*v));
                 }
@@ -1345,10 +1349,7 @@ impl State {
                 if !wait && self.preview.as_ref().is_none_or(|pr| pr.index != self.index || pr.stack != stack)
                 {
                     let t0 = Instant::now();
-                    // The preview is downscaled from the photo's full size. Not by `base`'s
-                    // size against `source`: for Straighten, `base` is the whole photo.
-                    let scale = self.picture().map_or(1.0, |p| p.scale);
-                    let img = adjust::preview(base, &stack, *tool, scale);
+                    let img = adjust::preview(base, &stack, *tool, *scale);
                     let (w, h) = img.dimensions();
                     let handle = Handle::from_rgba(w, h, img.into_raw());
                     if self.trace {
@@ -1377,9 +1378,12 @@ impl State {
     }
 
     /// The current photo, loaded with its current geometry, at screen size without
-    /// adjustments.
-    fn preview_base(&self) -> Option<RgbaImage> {
-        let img = self.picture()?.unadjusted()?;
+    /// adjustments, and its pixels per full-size pixel: the decoded photo's scale times
+    /// the shrink to screen size. Not by its size against `source`: for Straighten, it is
+    /// the whole photo.
+    fn preview_base(&self) -> Option<(RgbaImage, f32)> {
+        let picture = self.picture()?;
+        let img = picture.unadjusted()?;
         let body = self.body_size();
         let (w, h) = img.dimensions();
         let k = (body.width * PREVIEW_SCALE / w as f32).min(body.height * PREVIEW_SCALE / h as f32);
@@ -1387,9 +1391,9 @@ impl State {
             true => {
                 let (nw, nh) =
                     (((w as f32 * k).round() as u32).max(1), ((h as f32 * k).round() as u32).max(1));
-                image::imageops::thumbnail(&img, nw, nh)
+                (image::imageops::thumbnail(&img, nw, nh), picture.scale * nw as f32 / w as f32)
             }
-            false => img,
+            false => (img, picture.scale),
         })
     }
 

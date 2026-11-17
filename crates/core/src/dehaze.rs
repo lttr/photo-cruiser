@@ -35,20 +35,26 @@ const RADIUS: f32 = 0.0025;
 /// stronger ones kept as edges.
 const EDGE: f32 = 0.1;
 
-/// The airlight (linear RGB) of `lin`, linear pixels whose darkest channels are `dark`,
-/// and the haziest 5 %'s dark channel.
-pub fn airlight(lin: &[[f32; 3]], dark: &[f32]) -> ([f32; 3], f32) {
+/// Pixel `i` of `img` in linear light.
+fn linear(img: &RgbaImage, i: usize) -> [f32; 3] {
+    let (lut, px) = (linear_lut(), &img.as_raw()[4 * i..4 * i + 3]);
+    std::array::from_fn(|c| lut[px[c] as usize])
+}
+
+/// The airlight (linear RGB) of `img`, whose pixels' darkest channels (linear) are
+/// `dark`, and the haziest 5 %'s dark channel.
+pub fn airlight(img: &RgbaImage, dark: &[f32]) -> ([f32; 3], f32) {
     let at = |v: &mut Vec<f32>| {
         let i = ((v.len() as f32 * QUANTILE) as usize).min(v.len() - 1);
         *v.select_nth_unstable_by(i, f32::total_cmp).1
     };
     let level = at(&mut dark.to_vec());
     let hazy: Vec<usize> = (0..dark.len()).filter(|i| dark[*i] >= level).collect();
-    let sum = |i: &usize| lin[*i].iter().sum::<f32>();
+    let sum = |i: &usize| linear(img, *i).iter().sum::<f32>();
     let bright = at(&mut hazy.iter().map(sum).collect());
     let (mut total, mut n) = ([0f64; 3], 0u32);
     for i in hazy.iter().filter(|i| sum(i) >= bright) {
-        lin[*i].iter().zip(&mut total).for_each(|(v, t)| *t += f64::from(*v));
+        linear(img, *i).iter().zip(&mut total).for_each(|(v, t)| *t += f64::from(*v));
         n += 1;
     }
     (total.map(|t| (t / f64::from(n)) as f32), level)
@@ -65,21 +71,25 @@ pub fn apply(img: &mut RgbaImage, strength: f32) {
         return;
     }
     let (w, h) = (img.width() as usize, img.height() as usize);
+    // Linear light through the table as it's needed: no full-size copy of it.
     let lut = linear_lut();
-    let lin: Vec<[f32; 3]> = img.pixels().map(|px| std::array::from_fn(|c| lut[px.0[c] as usize])).collect();
-    let dark: Vec<f32> = lin.iter().map(|p| p[0].min(p[1]).min(p[2])).collect();
-    let (air, level) = airlight(&lin, &dark);
+    let dark: Vec<f32> = img.pixels().map(|px| lut[px.0[0].min(px.0[1]).min(px.0[2]) as usize]).collect();
+    let (air, level) = airlight(img, &dark);
     if air.iter().any(|a| *a <= 1e-4) {
         return; // A black photo: no haze to measure.
     }
-    let haze: Vec<f32> = lin.iter().map(|p| (0..3).map(|c| p[c] / air[c]).fold(f32::MAX, f32::min)).collect();
+    drop(dark);
+    let haze: Vec<f32> = img
+        .pixels()
+        .map(|px| (0..3).map(|c| lut[px.0[c] as usize] / air[c]).fold(f32::MAX, f32::min))
+        .collect();
     let r = ((w.max(h) as f32 * RADIUS).round() as usize).max(2);
     let haze = guided(&Plane::new(w, h, haze), r, EDGE * EDGE);
     let t_min = level.powf(1.125 * DISTANCE).clamp(1.0 / 1024.0, 1.0);
-    for ((px, p), d) in img.pixels_mut().zip(&lin).zip(haze.data) {
+    for (px, d) in img.pixels_mut().zip(haze.data) {
         let t = (1.0 - strength * d).max(t_min);
         for c in 0..3 {
-            px.0[c] = encode(clear(p[c], air[c], t));
+            px.0[c] = encode(clear(lut[px.0[c] as usize], air[c], t));
         }
     }
 }
@@ -113,7 +123,7 @@ mod tests {
             .map(|p| std::array::from_fn(|c| srgb_to_linear(f32::from(p.0[c]) / 255.0)))
             .collect();
         let dark: Vec<f32> = lin.iter().map(|p| p[0].min(p[1]).min(p[2])).collect();
-        let (air, level) = airlight(&lin, &dark);
+        let (air, level) = airlight(&img, &dark);
         for c in 0..3 {
             assert!((air[c] - AIR[c]).abs() < 0.01, "{air:?}");
         }

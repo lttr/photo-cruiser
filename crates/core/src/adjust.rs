@@ -2,7 +2,8 @@
 //! with a single value. [`render`](crate::render::render) applies the adjustments after
 //! the geometry (crop, rotation), in [`Tool::ALL`] order, whatever their order in the
 //! stack. So a tool that measures the image (auto exposure, auto levels) sees the cropped
-//! photo.
+//! photo. Straighten is the exception: it is part of the geometry, done before the crop
+//! ([`Tool::is_geometry`]).
 //!
 //! A tool opens at a value chosen for the photo ([`Tool::opening`]), measured on the
 //! image the tool will be applied to (geometry done, earlier tools not). Its neutral
