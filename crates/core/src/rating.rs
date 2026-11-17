@@ -68,10 +68,16 @@ pub fn star(photo: &Path, on: bool) -> Result<bool> {
 /// Give a new file of the photo (a save or revert just wrote it) the rating the old one had.
 /// Best effort: the photo itself is written already.
 pub(crate) fn carry(photo: &Path, rating: i8) {
-    if read(photo).unwrap_or(0) != rating
-        && let Err(e) = write(photo, rating)
-    {
+    if let Err(e) = try_carry(photo, rating) {
         eprintln!("photo-cruiser: {}: the star was lost: {e}", photo.display());
+    }
+}
+
+/// [`carry`] for a file not in place yet: the error is returned, not printed.
+pub(crate) fn try_carry(photo: &Path, rating: i8) -> Result<()> {
+    match read(photo).unwrap_or(0) == rating {
+        true => Ok(()),
+        false => write(photo, rating),
     }
 }
 

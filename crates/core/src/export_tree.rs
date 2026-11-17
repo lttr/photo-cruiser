@@ -12,7 +12,8 @@
 //! - ICC and EXIF (patched like Save does), the star and the file time carry over.
 //!
 //! The output folder must be new or empty: nothing is ever overwritten. One photo failing
-//! doesn't stop the others; it is listed in the report.
+//! doesn't stop the others; it is listed in the report. So are the files that aren't photos
+//! pcr can read (videos, TIFF, …), which aren't exported at all.
 //!
 //! The defaults ([`Options::default`]) and why: the README's "Export and archive" table, with
 //! the measurements in `.aiwork/2026-11-17_batch-export/research.md`.
@@ -80,6 +81,9 @@ pub struct Report {
     pub bytes: u64,
     pub ms: f64,
     pub files: Vec<FileReport>,
+    /// Files under `source` that aren't photos pcr can read (videos, TIFF, RAW, documents),
+    /// so nothing was exported for them. Hidden files and [`COMPANIONS`] aren't listed.
+    pub unreadable: Vec<PathBuf>,
 }
 
 #[derive(Clone, Debug, Serialize)]
@@ -136,8 +140,8 @@ pub fn export_tree(source: &Path, output: &Path, opts: &Options) -> Result<Repor
         return Err(Error::NotEmpty { path: output.to_path_buf() });
     }
 
-    let mut photos = Vec::new();
-    walk(&source, &output_abs, &mut photos)?;
+    let (mut photos, mut unreadable) = (Vec::new(), Vec::new());
+    walk(&source, &output_abs, &mut photos, &mut unreadable)?;
     if opts.starred {
         photos.retain(|p| rating::read(p).is_ok_and(rating::is_starred));
     }
@@ -176,6 +180,7 @@ pub fn export_tree(source: &Path, output: &Path, opts: &Options) -> Result<Repor
         bytes: done().map(|f| f.bytes).sum(),
         ms: ms(t0),
         files,
+        unreadable,
     })
 }
 
@@ -202,22 +207,40 @@ fn check_output(output: &Path) -> Result<()> {
 
 /// The photos under `dir` in natural order, each folder's photos before its sub-folders.
 /// Hidden entries (`.photo-cruiser/` too), folder symlinks and `skip` (the output, if it
-/// lies inside) are left out.
-fn walk(dir: &Path, skip: &Path, out: &mut Vec<PathBuf>) -> Result<()> {
+/// lies inside) are left out. Other files go to `unreadable`, except [`COMPANIONS`].
+fn walk(dir: &Path, skip: &Path, out: &mut Vec<PathBuf>, unreadable: &mut Vec<PathBuf>) -> Result<()> {
     out.extend(Folder::open(dir)?.entries.into_iter().map(|e| e.path));
-    let mut subdirs: Vec<(String, PathBuf)> = std::fs::read_dir(dir)
-        .map_err(|e| Error::io(dir, e))?
-        .filter_map(|e| e.ok())
-        .filter(|e| e.file_type().is_ok_and(|t| t.is_dir()))
-        .map(|e| (e.file_name().to_string_lossy().into_owned(), e.path()))
-        .filter(|(name, path)| !name.starts_with('.') && path != skip)
-        .collect();
+    let mut subdirs: Vec<(String, PathBuf)> = Vec::new();
+    let mut files: Vec<(String, PathBuf)> = Vec::new();
+    for e in std::fs::read_dir(dir).map_err(|e| Error::io(dir, e))?.filter_map(|e| e.ok()) {
+        let name = e.file_name().to_string_lossy().into_owned();
+        let path = e.path();
+        if name.starts_with('.') || path == skip {
+            continue;
+        }
+        match e.file_type() {
+            Ok(t) if t.is_dir() => subdirs.push((name, path)),
+            Ok(_) if path.is_file() && !catalog::is_photo_name(&name) => {
+                let ext = catalog::extension(&name).unwrap_or_default();
+                if !COMPANIONS.contains(&ext.as_str()) {
+                    files.push((name, path));
+                }
+            }
+            _ => {}
+        }
+    }
+    files.sort_by(|a, b| natural_cmp(&a.0, &b.0));
+    unreadable.extend(files.into_iter().map(|(_, p)| p));
     subdirs.sort_by(|a, b| natural_cmp(&a.0, &b.0));
     for (_, sub) in subdirs {
-        walk(&sub, skip, out)?;
+        walk(&sub, skip, out, unreadable)?;
     }
     Ok(())
 }
+
+/// Files that belong to a photo and aren't missed when they're not exported: XMP sidecars
+/// (the star carries over into the JPEG) and Apple's edit files.
+const COMPANIONS: &[&str] = &["xmp", "aae"];
 
 /// Output paths: the same relative folder, JPEG names kept, other formats as `<stem>.jpg`.
 /// A name taken already (case-insensitive) gets ` (2)`, ` (3)`, …: JPEGs keep their own
@@ -318,24 +341,25 @@ fn write_one(job: &Job, opts: &Options, report: &mut FileReport) -> Result<()> {
             std::fs::copy(&original, &tmp).map_err(|e| Error::io(&tmp, e))?;
             report.action = "copied";
             report.reason = "original";
-            return Ok(());
+        } else {
+            export::write_bytes(&tmp, &out.bytes)?;
+            report.action = "encoded";
+            report.reason = match (stack.is_empty(), format) {
+                (false, _) => "edited",
+                (true, Format::Jpeg) if out.resized => "resized",
+                (true, Format::Jpeg) => "smaller",
+                (true, _) => "converted",
+            };
         }
-        export::write_bytes(&tmp, &out.bytes)?;
-        report.action = "encoded";
-        report.reason = match (stack.is_empty(), format) {
-            (false, _) => "edited",
-            (true, Format::Jpeg) if out.resized => "resized",
-            (true, Format::Jpeg) => "smaller",
-            (true, _) => "converted",
-        };
-        Ok(())
+        // Before the rename: a photo whose star can't be written fails, with nothing left
+        // behind, since `--starred` chose it for the star.
+        rating::try_carry(&tmp, star)
     })();
     let written = written.and_then(|()| std::fs::rename(&tmp, &job.output).map_err(|e| Error::io(&tmp, e)));
     if let Err(e) = written {
         let _ = std::fs::remove_file(&tmp);
         return Err(e);
     }
-    rating::carry(&job.output, star);
     if let Some(t) = mtime {
         set_mtime(&job.output, t);
     }

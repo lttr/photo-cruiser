@@ -259,3 +259,41 @@ fn chroma_sampling_follows_the_original() {
     let want = decode::chroma_sampling(&input.join("img5.HEIC")).unwrap();
     assert_eq!(decode::jpeg_settings(&heic.output).unwrap().unwrap().sampling, want);
 }
+
+#[test]
+fn files_pcr_cant_read_are_listed() {
+    let dir = tree(&[("img2.jpg", "img2.jpg"), ("notes.txt", "a/notes.txt"), ("img2.jpg", ".hidden/y.jpg")]);
+    let input = dir.path().join("in");
+    for name in ["clip.MOV", "a/scan.tif", "img2.jpg.xmp", "IMG_1.AAE", ".DS_Store", ".hidden/v.mp4"] {
+        std::fs::write(input.join(name), b"x").unwrap();
+    }
+    let r = run(dir.path(), &Options::default());
+    let rel: Vec<_> = r
+        .unreadable
+        .iter()
+        .map(|p| p.strip_prefix(&r.source).unwrap().to_string_lossy().into_owned())
+        .collect();
+    assert_eq!(rel, ["clip.MOV", "a/notes.txt", "a/scan.tif"], "sidecars and hidden files aren't listed");
+    assert_eq!((r.count, r.failed), (1, 0), "a warning, not a failure");
+}
+
+#[test]
+fn a_star_that_cant_be_written_fails_the_photo() {
+    // A copied JPEG whose XMP isn't UTF-8 can't take the star (kept in a sidecar here).
+    let dir = tree(&[("save/q75.jpg", "q75.jpg")]);
+    let photo = dir.path().join("in/q75.jpg");
+    let bytes = std::fs::read(&photo).unwrap();
+    let payload = [b"http://ns.adobe.com/xap/1.0/\0".as_slice(), &[0xff, 0xfe, 0x80, 0x81]].concat();
+    let mut app1 = vec![0xff, 0xe1];
+    app1.extend_from_slice(&((payload.len() + 2) as u16).to_be_bytes());
+    app1.extend_from_slice(&payload);
+    std::fs::write(&photo, [&bytes[..2], &app1, &bytes[2..]].concat()).unwrap();
+    let xmp = r#"<x:xmpmeta xmlns:x="adobe:ns:meta/"><rdf:RDF xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#"><rdf:Description xmlns:xmp="http://ns.adobe.com/xap/1.0/" xmp:Rating="1"/></rdf:RDF></x:xmpmeta>"#;
+    std::fs::write(rating::sidecar(&photo), xmp).unwrap();
+    assert!(rating::is_starred(rating::read(&photo).unwrap()));
+
+    let r = run(dir.path(), &Options { starred: true, ..Options::default() });
+    assert_eq!((r.count, r.failed), (1, 1));
+    assert_eq!(file(&r, "q75.jpg").error.as_ref().unwrap().kind, "decode");
+    assert_eq!(listing(&dir.path().join("out")), Vec::<String>::new(), "nothing left behind");
+}

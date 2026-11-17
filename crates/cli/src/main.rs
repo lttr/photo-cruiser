@@ -14,6 +14,7 @@ mod skill;
 
 use clap::{CommandFactory, Parser, Subcommand};
 use photo_cruiser_core::adjust;
+use photo_cruiser_core::catalog;
 use photo_cruiser_core::export::{self, OutFormat};
 use photo_cruiser_core::export_tree;
 use photo_cruiser_core::info::Field;
@@ -657,11 +658,31 @@ fn export_tree(
             r.ms / 1000.0
         );
     }
+    if !r.unreadable.is_empty() {
+        eprintln!("pcr: warning: {}", unreadable_summary(&r.unreadable));
+    }
     if r.failed > 0 {
         eprintln!("pcr: {} of {} photos failed", r.failed, r.count);
         return Ok(ExitCode::from(4));
     }
     Ok(ExitCode::SUCCESS)
+}
+
+/// `3 files not exported, pcr can't read them: 2 .mov, 1 .tif`, most common first.
+fn unreadable_summary(files: &[PathBuf]) -> String {
+    let mut by_ext: Vec<(String, usize)> = Vec::new();
+    for f in files {
+        let name = f.file_name().unwrap_or_default().to_string_lossy();
+        let ext = catalog::extension(&name).map_or("no extension".to_string(), |e| format!(".{e}"));
+        match by_ext.iter_mut().find(|(e, _)| *e == ext) {
+            Some((_, n)) => *n += 1,
+            None => by_ext.push((ext, 1)),
+        }
+    }
+    by_ext.sort_by(|a, b| b.1.cmp(&a.1).then_with(|| a.0.cmp(&b.0)));
+    let kinds: Vec<String> = by_ext.iter().map(|(e, n)| format!("{n} {e}")).collect();
+    let noun = if files.len() == 1 { "file" } else { "files" };
+    format!("{} {noun} not exported, pcr can't read them: {}", files.len(), kinds.join(", "))
 }
 
 fn error_json(f: &Fail) -> Value {

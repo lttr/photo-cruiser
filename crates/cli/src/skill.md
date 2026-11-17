@@ -197,12 +197,17 @@ photos of X into Y, keeping the folder structure" is exactly this command; one c
 - Edited photos render once from the original with their current edits (saved or not), so there is no
   second lossy step. An unedited JPEG is copied byte for byte unless it is over the size limit or
   re-encoding makes it at least 20 % smaller (camera JPEGs usually shrink by 40-60 %).
-- EXIF (made upright), colour profile, star and file time carry over.
+- EXIF (made upright), colour profile, star and file time carry over. A photo whose star can't be
+  written into its JPEG fails.
+- Files that aren't photos pcr can read (videos, TIFF, RAW, documents) aren't exported. They're
+  listed in `unreadable`, with a warning on stderr that counts them by extension. Exit stays 0.
+  Always tell the user about them (e.g. "120 .mov and 3 .tif weren't exported"), so they can copy
+  them themselves. XMP sidecars, `.aae` files and hidden files aren't listed.
 - One photo failing doesn't stop the rest: exit 4, and its entry has `action: "failed"` and `error`.
   Report per file: `source`, `output`, `action` (`encoded`, `copied`, `failed`), `reason` (`edited`,
   `converted`, `resized`, `smaller`, `original`), `resized`, `width`, `height`, `sampling`, `bytes`,
   `source_bytes`; totals `count`, `encoded`, `copied`,
-  `failed`, `bytes`, `source_bytes`.
+  `failed`, `bytes`, `source_bytes`; `unreadable` (paths).
 
 Open the app on a folder for the user: `pcr app DIR`. It blocks until the window closes, so only run it
 when the user asks to see the photos.

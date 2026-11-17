@@ -206,8 +206,15 @@ fn export_tree_json_and_partial_failure() {
     let (i, out) = (input.to_str().unwrap(), dir.path().join("out"));
     pcr().args(["star", &format!("{i}/img2.jpg"), &format!("{i}/sub/img5.HEIC")]).assert().success();
 
-    let v = run_json(&["export-tree", i, "-o", out.to_str().unwrap(), "--starred", "--json"], 0);
+    std::fs::write(input.join("sub/clip.MOV"), b"x").unwrap();
+    let o = out.to_str().unwrap();
+    let res =
+        pcr().args(["export-tree", i, "-o", o, "--starred", "--json"]).assert().code(0).get_output().clone();
+    let v: Value = serde_json::from_slice(&res.stdout).unwrap();
     assert_eq!((v["count"].as_u64(), v["failed"].as_u64()), (Some(2), Some(0)));
+    assert!(v["unreadable"][0].as_str().unwrap().ends_with("sub/clip.MOV"));
+    let stderr = String::from_utf8_lossy(&res.stderr);
+    assert!(stderr.contains("1 file not exported, pcr can't read them: 1 .mov"), "{stderr}");
     assert!(out.join("img2.jpg").is_file() && out.join("sub/img5.jpg").is_file());
     assert!(!out.join("sub/img1.jpg").exists(), "not starred");
     let f =
