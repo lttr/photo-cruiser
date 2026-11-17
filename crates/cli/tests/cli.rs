@@ -769,3 +769,46 @@ fn vignette_render_and_save() {
     assert_eq!((&v["ops"][0]["tool"], &v["dirty"]), (&json!("vignette"), &json!(false)));
     assert!(corner(photo).0.abs_diff(bright) <= 12, "saved: {} vs {bright}", corner(photo).0);
 }
+
+#[test]
+fn straighten_render_and_save() {
+    use photo_cruiser_core::straighten::fit_scale;
+    let (dir, p) = temp_copies(&["straighten/horizon.jpg"]);
+    let photo = &p[0];
+    let out = dir.path().join("out.png").to_string_lossy().into_owned();
+    let size = |v: &Value| (v["width"].as_u64().unwrap() as u32, v["height"].as_u64().unwrap() as u32);
+    let scaled = |w: f32, h: f32, deg: f32| {
+        let k = fit_scale(320.0, 240.0, deg);
+        ((w * k).round() as u32, (h * k).round() as u32)
+    };
+    // No value: the angle that levels the horizon (turned 3.4° clockwise).
+    let v = json_in(&dir, &["render", photo, "--adjust", "straighten", "-o", &out, "--json"], 0);
+    let auto_json = v["ops"][0]["value"].clone();
+    let auto = auto_json.as_f64().unwrap() as f32;
+    assert!((auto + 3.4).abs() <= 0.5, "{v}");
+    assert_eq!(size(&v), scaled(320.0, 240.0, auto), "empty corners cut off");
+    // With a crop: the same angle (measured on the whole photo), a part of the straightened photo.
+    let v = json_in(
+        &dir,
+        &["render", photo, "--crop", "170,10,130,150", "--adjust", "straighten", "-o", &out, "--json"],
+        0,
+    );
+    assert_eq!(v["ops"][1], json!({"op": "adjust", "tool": "straighten", "value": auto_json}));
+    assert_eq!(size(&v), scaled(130.0, 150.0, auto));
+    let v = json_in(&dir, &["render", photo, "--adjust", "straighten=0", "-o", &out, "--json"], 0);
+    assert_eq!(v["ops"].as_array().unwrap().len(), 0, "0° is no step");
+
+    let edits = dir.path().join("e.json");
+    let ops = json!({"version": 1, "ops": [
+        {"op": "crop", "x": 0, "y": 100, "w": 320, "h": 140},
+        {"op": "adjust", "tool": "straighten", "value": -3.4}]});
+    std::fs::write(&edits, ops.to_string()).unwrap();
+    let edits = edits.to_string_lossy().into_owned();
+    let v = json_in(&dir, &["render", photo, "--edits", &edits, "-o", &out, "--json"], 0);
+    assert_eq!(size(&v), scaled(320.0, 140.0, -3.4));
+    let v = json_in(&dir, &["save", photo, "--edits", &edits, "--json"], 0);
+    assert_eq!(v["action"], "saved");
+    let v = json_in(&dir, &["edits", photo, "--json"], 0);
+    assert_eq!((&v["ops"][1]["tool"], &v["dirty"]), (&json!("straighten"), &json!(false)));
+    assert_eq!(image::image_dimensions(photo).unwrap(), scaled(320.0, 140.0, -3.4));
+}

@@ -21,12 +21,15 @@ struct Case {
     fixture: &'static str,
     crop: Option<Rect>,
     max_side: Option<u32>,
-    /// A tool at its opening value for the cropped photo.
+    /// A tool at its opening value for the cropped photo (the whole photo for Straighten).
     adjust: Option<Tool>,
 }
 
 /// The page in `adjust/document.jpg`, without the desk.
 const PAGE: Rect = Rect::new(60.0, 0.0, 260.0, 240.0);
+
+/// The house in `straighten/horizon.jpg`, as it is before straightening.
+const HOUSE: Rect = Rect::new(170.0, 10.0, 130.0, 150.0);
 
 const CASES: &[Case] = &[
     Case { name: "png-full", fixture: "img1.png", crop: None, max_side: None, adjust: None },
@@ -121,6 +124,20 @@ const CASES: &[Case] = &[
         max_side: None,
         adjust: Some(Tool::Vignette),
     },
+    Case {
+        name: "horizon-straighten",
+        fixture: "straighten/horizon.jpg",
+        crop: None,
+        max_side: None,
+        adjust: Some(Tool::Straighten),
+    },
+    Case {
+        name: "horizon-straighten-crop",
+        fixture: "straighten/horizon.jpg",
+        crop: Some(HOUSE),
+        max_side: None,
+        adjust: Some(Tool::Straighten),
+    },
     Case { name: "avif-max-side", fixture: "img4.AVIF", crop: None, max_side: Some(100), adjust: None },
 ];
 
@@ -138,7 +155,7 @@ fn render_case(c: &Case) -> RgbaImage {
     let src = decode(&root().join("../../fixtures").join(c.fixture)).unwrap();
     let mut edits = c.crop.map_or_else(EditStack::default, |r| EditStack::default().with(Op::Crop(r)));
     if let Some(tool) = c.adjust {
-        let value = tool.opening(&render(&src, &edits, RenderOpts::default()).unwrap());
+        let value = tool.opening(&render(&src, &edits.geometry_for(tool), RenderOpts::default()).unwrap());
         edits.set_adjust(tool, Some(value));
     }
     render(&src, &edits, RenderOpts { max_side: c.max_side }).unwrap()
@@ -432,4 +449,35 @@ fn vignette_follows_the_crop() {
         assert!(sum(&out, x, y) < sum(&cropped, x, y), "corner {x},{y} darker");
     }
     assert_eq!(out.get_pixel(w / 2, h / 2), cropped.get_pixel(w / 2, h / 2), "centre untouched");
+}
+
+/// Straighten on `straighten/horizon.jpg`, turned 3.4° clockwise: it opens within 0.5° of
+/// −3.4°, and then the horizon is level: as high at the left as at the right.
+#[test]
+fn straighten_levels_a_tilted_horizon() {
+    let src = decode(&root().join("../../fixtures/straighten/horizon.jpg")).unwrap();
+    let mut stack = EditStack::default();
+    let angle = photo_cruiser_core::adjust::opening(&src, &stack, Tool::Straighten).unwrap();
+    assert!((angle + 3.4).abs() <= 0.5, "opens at {angle}");
+    // A crop made before keeps the same opening: it is measured on the whole photo.
+    stack.set_crop(Some(HOUSE));
+    assert_eq!(photo_cruiser_core::adjust::opening(&src, &stack, Tool::Straighten).unwrap(), angle);
+    stack.set_crop(None);
+    // The horizon: the first row from the top that is sea (blue over red), per column.
+    let horizon = |img: &RgbaImage, x: u32| {
+        (0..img.height()).find(|&y| {
+            let p = img.get_pixel(x, y).0;
+            p[0] < 80 && p[2] > 100
+        })
+    };
+    let before = render(&src, &stack, RenderOpts::default()).unwrap();
+    let tilt = |img: &RgbaImage| {
+        let (l, r) = (horizon(img, 10).unwrap() as f32, horizon(img, img.width() - 11).unwrap() as f32);
+        ((r - l) / (img.width() - 21) as f32).atan().to_degrees()
+    };
+    assert!((tilt(&before) - 3.4).abs() < 0.5, "fixture tilt {}", tilt(&before));
+    stack.set_adjust(Tool::Straighten, Some(angle));
+    let after = render(&src, &stack, RenderOpts::default()).unwrap();
+    assert!(tilt(&after).abs() < 0.5, "after: {}", tilt(&after));
+    assert!(after.pixels().all(|p| p.0[3] == 255), "no empty corners");
 }

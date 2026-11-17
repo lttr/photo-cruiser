@@ -183,7 +183,8 @@ fn decode_job_now(load: &LoadJob, max_side: u32) -> Loaded {
         false => photo_cruiser_core::render::render(&d, &geometry, Default::default()).map_err(msg)?,
     };
     // Same as rendering the whole stack, keeping the image before the adjustments.
-    let (img, base) = match load.stack.adjustments().next() {
+    // Straightening is geometry, done above.
+    let (img, base) = match load.stack.adjustments().find(|(t, _)| *t != Tool::Straighten) {
         None => (img, None),
         Some(_) => {
             let mut adjusted = img.clone();
@@ -357,7 +358,8 @@ pub struct ToolPanel {
     /// The slider's value while it is dragged (not in the stack yet).
     pub drag: Option<f32>,
     /// The photo at screen size, with its geometry but no adjustments: the preview's
-    /// source and what the opening value was measured on (so on the cropped photo).
+    /// source and what the opening value was measured on (so on the cropped photo; for
+    /// Straighten, see [`EditStack::geometry_for`]).
     base: Option<Arc<RgbaImage>>,
     /// The geometry `base` was made with; a change closes the tool.
     geometry: EditStack,
@@ -1275,7 +1277,7 @@ impl State {
         }
         self.close_tool();
         let before = self.stack();
-        let geometry = before.geometry();
+        let geometry = before.geometry_for(tool);
         self.tool = Some(ToolPanel {
             tool,
             index: self.index,
@@ -1310,7 +1312,7 @@ impl State {
     /// re-render the preview when the values changed; drop a preview no longer needed.
     fn sync_tool(&mut self) {
         if let Some(p) = &self.tool {
-            let same_shape = p.base.is_none() || p.geometry == self.stack().geometry();
+            let same_shape = p.base.is_none() || p.geometry == self.stack().geometry_for(p.tool);
             if p.index != self.index || self.view != View::Photo || self.mode != Mode::Browse || !same_shape {
                 self.close_tool();
             }
@@ -1321,7 +1323,8 @@ impl State {
             let stack = self.stack();
             let Some(p) = &mut self.tool else { return };
             let opening = p.tool.opening(&base);
-            (p.base, p.opening, p.geometry) = (Some(Arc::new(base)), Some(opening), stack.geometry());
+            (p.base, p.opening, p.geometry) =
+                (Some(Arc::new(base)), Some(opening), stack.geometry_for(p.tool));
             if stack.adjust(p.tool).is_none() {
                 self.set_adjust(opening);
                 self.sync_display();
@@ -1339,11 +1342,10 @@ impl State {
                 if !wait && self.preview.as_ref().is_none_or(|pr| pr.index != self.index || pr.stack != stack)
                 {
                     let t0 = Instant::now();
-                    let mut img = (**base).clone();
                     // The preview is downscaled from the photo's full size (`source`).
-                    let full_width = self.picture().map_or(img.width(), |p| p.source.0);
-                    let scale = img.width() as f32 / full_width.max(1) as f32;
-                    adjust::apply_all(&mut img, &stack, scale);
+                    let full_width = self.picture().map_or(base.width(), |p| p.source.0);
+                    let scale = base.width() as f32 / full_width.max(1) as f32;
+                    let img = adjust::preview(base, &stack, *tool, scale);
                     let (w, h) = img.dimensions();
                     let handle = Handle::from_rgba(w, h, img.into_raw());
                     if self.trace {
@@ -1639,7 +1641,7 @@ impl State {
     }
 
     /// What photo `index` should show: its edits, but the whole original while it is
-    /// being cropped.
+    /// being cropped or straightened.
     fn display_stack(&self, index: usize) -> EditStack {
         let Some(path) = self.folder.as_ref().and_then(|f| f.entries.get(index)).map(|e| &e.path) else {
             return EditStack::default();
@@ -1647,6 +1649,11 @@ impl State {
         let mut stack = self.stack_of(path);
         if index == self.index && self.mode == Mode::Crop {
             stack.set_crop(None);
+        }
+        // Straightening shows the whole photo, unturned: the preview turns it.
+        if self.tool.as_ref().is_some_and(|p| p.index == index && p.tool == Tool::Straighten) {
+            stack.set_crop(None);
+            stack.set_adjust(Tool::Straighten, None);
         }
         stack
     }

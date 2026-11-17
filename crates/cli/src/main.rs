@@ -78,7 +78,10 @@ enum Cmd {
         crop: Option<Rect>,
         /// A one-slider tool `TOOL[=VALUE]` (e.g. `exposure=0.5`), set after the edits and
         /// `--crop`. Without a value: the value the app opens the tool at (auto, measured
-        /// on the cropped photo). Repeatable. Tools: levels (auto levels strength, 0..2,
+        /// on the cropped photo). Repeatable. Tools: straighten (turn by degrees, clockwise
+        /// positive, -45..45, empty corners cut off; opens at the angle that levels the
+        /// photo's lines, measured on the whole photo; the crop is a part of the straightened
+        /// photo), levels (auto levels strength, 0..2,
         /// opens at 1), warmth (+ warmer / − cooler, 1 = 100 mired, -2..2, opens at grey-world
         /// white balance), dehaze (remove haze, 0..1, opens at 0.2), exposure (EV, -2..2),
         /// shadows_highlights (lift shadows, pull back highlights, 0..1, opens at 0.45),

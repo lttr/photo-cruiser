@@ -162,6 +162,7 @@ pub const SHORTCUTS: &[(&str, &str)] = &[
     ("Ctrl+K", "Find an action by name"),
     ("Ctrl+O", "Open folder"),
     ("C", "Crop on / off"),
+    ("Q", "Straighten: level the horizon, corners cut off (opens at auto)"),
     ("E", "Exposure (opens at auto)"),
     ("T", "Shadows & highlights: lift shadows, pull back highlights (opens at 0.45)"),
     ("D", "Local contrast: bring out detail (opens at 125%)"),
@@ -325,6 +326,9 @@ pub fn key_message(key: &Key, modified: &Key, mods: keyboard::Modifiers, m: Mode
         Key::Character(c) if mods.control() && c.eq_ignore_ascii_case("z") => Action::Undo.into(),
         Key::Character(c) if mods.control() && c.eq_ignore_ascii_case("y") => Action::Redo.into(),
         Key::Character(c) if plain && c.eq_ignore_ascii_case("c") => Action::ToggleCrop.into(),
+        Key::Character(c) if plain && c.eq_ignore_ascii_case("q") => {
+            Action::OpenTool { tool: Tool::Straighten }.into()
+        }
         Key::Character(c) if plain && c.eq_ignore_ascii_case("e") => {
             Action::OpenTool { tool: Tool::Exposure }.into()
         }

@@ -128,6 +128,12 @@ verify: check
         --shot "{{artifacts}}/verify-dehaze.png" --dump-state "{{artifacts}}/verify-dehaze.json"
     jq -e '.index == 3 and .edits == [{"op":"adjust","tool":"dehaze","value":0.2}] and .tool.tool == "dehaze" and .tool.value == 0.2 and .tool.opening == 0.2 and .preview == true and .dirty == true and .errors == []' \
         "{{artifacts}}/verify-dehaze.json" >/dev/null || { cat "{{artifacts}}/verify-dehaze.json"; exit 1; }
+    # Straighten on the tilted horizon (3.4° clockwise): opens at about −3.4°, back there
+    # after a change; the whole photo shows, straightened.
+    "{{root}}/scripts/headless.sh" "{{root}}/target/debug/photo-cruiser" "$photos/straighten" --script "{{root}}/scripts/straighten.json" \
+        --shot "{{artifacts}}/verify-straighten.png" --dump-state "{{artifacts}}/verify-straighten.json"
+    jq -e '.index == 0 and (.edits | length) == 1 and .edits[0].tool == "straighten" and (.edits[0].value + 3.4 | fabs) <= 0.5 and .tool.tool == "straighten" and .tool.value == .tool.opening and .tool.opening == .edits[0].value and .preview == true and .dirty == true and .errors == []' \
+        "{{artifacts}}/verify-straighten.json" >/dev/null || { cat "{{artifacts}}/verify-straighten.json"; exit 1; }
     # Holding O on the saved, cropped img1.png: its original from the backup, uncropped.
     "{{root}}/scripts/headless.sh" "{{root}}/target/debug/photo-cruiser" "$photos" --script "{{root}}/scripts/original.json" \
         --shot "{{artifacts}}/verify-original.png" --dump-state "{{artifacts}}/verify-original.json"
@@ -139,7 +145,7 @@ verify: check
         --shot "{{artifacts}}/verify-vignette.png" --dump-state "{{artifacts}}/verify-vignette.json"
     jq -e '.index == 0 and .edits == [{"op":"crop","x":40,"y":30,"w":200,"h":150},{"op":"adjust","tool":"vignette","value":-0.5}] and .tool.tool == "vignette" and .tool.value == -0.5 and .tool.opening == -0.5 and .preview == true and .dirty == true and .errors == []' \
         "{{artifacts}}/verify-vignette.json" >/dev/null || { cat "{{artifacts}}/verify-vignette.json"; exit 1; }
-    echo "verify ok: {{artifacts}}/verify.png {{artifacts}}/verify-grid.png {{artifacts}}/verify-save.png {{artifacts}}/verify-exposure.png {{artifacts}}/verify-levels.png {{artifacts}}/verify-colour.png {{artifacts}}/verify-warmth.png {{artifacts}}/verify-shadows-highlights.png {{artifacts}}/verify-local-contrast.png {{artifacts}}/verify-contrast.png {{artifacts}}/verify-sharpen.png {{artifacts}}/verify-dehaze.png {{artifacts}}/verify-original.png {{artifacts}}/verify-vignette.png"
+    echo "verify ok: {{artifacts}}/verify.png {{artifacts}}/verify-grid.png {{artifacts}}/verify-save.png {{artifacts}}/verify-exposure.png {{artifacts}}/verify-levels.png {{artifacts}}/verify-colour.png {{artifacts}}/verify-warmth.png {{artifacts}}/verify-shadows-highlights.png {{artifacts}}/verify-local-contrast.png {{artifacts}}/verify-contrast.png {{artifacts}}/verify-sharpen.png {{artifacts}}/verify-dehaze.png {{artifacts}}/verify-straighten.png {{artifacts}}/verify-original.png {{artifacts}}/verify-vignette.png"
 
 # Release build of the GUI and the CLI (run before `just install`)
 build-release:

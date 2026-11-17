@@ -16,6 +16,7 @@ const PAD: f32 = 8.0;
 /// The tool's shortcut, or `""`.
 pub fn key(tool: Tool) -> &'static str {
     match tool {
+        Tool::Straighten => "Q",
         Tool::Levels => "A",
         Tool::Warmth => "W",
         Tool::Dehaze => "M",

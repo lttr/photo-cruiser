@@ -38,6 +38,14 @@ fn tools() -> String {
 /// The tool's opening value and what it does, for the skill.
 fn describe(tool: Tool) -> (&'static str, &'static str) {
     match tool {
+        Tool::Straighten => (
+            "auto (levels the photo's lines, within ±10°)",
+            "turns the photo by degrees, clockwise positive, and cuts off the empty corners (the \
+             largest rectangle of the photo's shape inside it, at the photo's resolution). Done \
+             before the crop: the crop is a part of the straightened photo, in the same \
+             coordinates as before (so it never reaches outside it). The opening angle is \
+             measured on the whole photo; 0 if it has no clear level or upright lines.",
+        ),
         Tool::Levels => (
             "1",
             "per channel, the darkest and brightest 0.5% become black and white (also fixes colour \

@@ -1,0 +1,6 @@
+[
+  { "action": "show_photo", "index": 0 },
+  { "action": "open_tool", "tool": "straighten" },
+  { "action": "set_adjust", "value": 12 },
+  { "action": "auto_adjust" }
+]

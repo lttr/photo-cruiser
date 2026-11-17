@@ -28,6 +28,7 @@ pub mod sharpen;
 pub mod smooth;
 pub mod source;
 pub mod store;
+pub mod straighten;
 pub mod tones;
 pub mod vignette;
 pub mod warmth;

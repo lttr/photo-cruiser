@@ -34,6 +34,7 @@ Each tool is one slider. It opens at a value picked for the photo (auto exposure
 | --- | --- | --- |
 | C | Crop (R: next aspect ratio, X: portrait / landscape, Enter: apply) | |
 | Shift+R / Shift+L | Turn right / left | |
+| Q | Straighten: level the horizon, empty corners cut off (shows the whole photo while open; the crop is part of the straightened photo) | auto (from the photo's lines) |
 | A | Auto levels: per-channel black and white point, for photos of documents | strength 1 |
 | W | Warmth: white balance, warmer / cooler | auto (grey world) |
 | M | Dehaze: remove haze | 0.2 |
@@ -99,7 +100,7 @@ The app lists every shortcut under `?` (or F1); Ctrl+K finds any action by name.
 | Esc | Close menu, cancel the tool, drop the crop selection, zoom out, leave full screen, back to the grid |
 | 1 | Star on / off: a photo to keep |
 | Ctrl+1 | Only the starred photos / all photos |
-| C, A, W, M, E, T, D, B, S, P, V | Crop and the tools, see [Editing](#editing) |
+| C, Q, A, W, M, E, T, D, B, S, P, V | Crop and the tools, see [Editing](#editing) |
 | Shift+R / Shift+L | Turn right / left |
 | Ctrl+Z, u / Ctrl+Shift+Z, Ctrl+Y | Undo / redo |
 | Ctrl+S | Save now (leaving a photo saves it) |

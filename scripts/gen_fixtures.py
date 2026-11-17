@@ -26,6 +26,9 @@ adjust/: inputs for the adjustment tools:
   shadows, sky and a tree outside; the window is x 200..300, y 30..170),
   woods-haze.jpg (wooded hills in haze, nearer ones clearer: sky y < 50, far ridge to
   y 110, middle ridge to y 170, a clear foreground below; for Dehaze)
+
+straighten/: horizon.jpg (a harbour with a house and a pole, turned 3.4° clockwise: the
+  Straighten tool should open at −3.4°)
 """
 
 import io
@@ -234,6 +237,41 @@ document().save(out / "adjust" / "document.jpg", quality=95, subsampling=0)
 cast().save(out / "adjust" / "warm-cast.jpg", quality=95, subsampling=0)
 window().save(out / "adjust" / "window.jpg", quality=95, subsampling=0)
 woods_haze().save(out / "adjust" / "woods-haze.jpg", quality=95, subsampling=0)
+
+
+def tilted(w=W, h=H, tilt=3.4):
+    """A harbour taken with the camera tilted: a horizon over the sea, a house with
+    upright walls, windows and a gable roof (diagonals that aren't the tilt), and a pole,
+    all turned `tilt`° clockwise. Drawn at 3× on a larger canvas, turned, cropped to the
+    middle (no empty corners) and scaled down."""
+    k, bw, bh = 3, int(w * 1.5), int(h * 1.5)
+    img = Image.new("RGB", (bw * k, bh * k))
+    d = ImageDraw.Draw(img)
+    horizon = bh * k // 2
+    for y in range(horizon):
+        t = y / horizon
+        d.line([(0, y), (bw * k, y)], fill=(int(120 + 80 * t), int(160 + 60 * t), 235))  # sky
+    for y in range(horizon, bh * k):
+        t = (y - horizon) / (bh * k - horizon)
+        d.line([(0, y), (bw * k, y)], fill=(int(30 + 20 * t), int(70 + 30 * t), int(110 + 30 * t)))  # sea
+    x0, x1, top = int(bw * k * 0.55), int(bw * k * 0.75), int(horizon - 70 * k)
+    d.rectangle([x0, top, x1, horizon + 20 * k], fill=(225, 215, 195))  # house
+    d.polygon([(x0 - 6 * k, top), (x1 + 6 * k, top), ((x0 + x1) // 2, top - 35 * k)], fill=(150, 60, 45))
+    for i in range(3):
+        for j in range(2):
+            wx, wy = x0 + (10 + i * 22) * k, top + (12 + j * 28) * k
+            d.rectangle([wx, wy, wx + 12 * k, wy + 16 * k], fill=(50, 60, 80))
+    px = int(bw * k * 0.35)
+    d.rectangle([px, horizon - 100 * k, px + 3 * k, horizon + 25 * k], fill=(70, 55, 45))  # pole
+    img = img.rotate(-tilt, resample=Image.BICUBIC)  # PIL turns counter-clockwise
+    cx, cy = img.width // 2, img.height // 2
+    img = img.crop((cx - w * k // 2, cy - h * k // 2, cx + w * k // 2, cy + h * k // 2))
+    return img.resize((w, h), Image.LANCZOS)
+
+
+# straighten/: horizon.jpg, a harbour turned 3.4° clockwise (straightening it is −3.4°).
+(out / "straighten").mkdir(exist_ok=True)
+tilted().save(out / "straighten" / "horizon.jpg", quality=95, subsampling=0)
 
 from PIL import ImageCms
 

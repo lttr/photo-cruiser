@@ -1122,7 +1122,11 @@ fn i_is_info_shift_e_edits() {
 fn q_does_not_quit() {
     use crate::crop_overlay::key_message;
     let q = Key::Character("q".into());
-    assert!(key_message(&q, &q, iced::keyboard::Modifiers::empty(), Modes::default()).is_none());
+    // It opens Straighten; nothing quits on a single key.
+    assert!(matches!(
+        key_message(&q, &q, iced::keyboard::Modifiers::empty(), Modes::default()),
+        Some(Message::Action(Action::OpenTool { tool: photo_cruiser_core::Tool::Straighten }))
+    ));
 }
 
 // ---------------------------------------------------------------------------------------
@@ -2010,6 +2014,73 @@ fn update_vignette_opens_at_minus_half() {
 }
 
 #[test]
+fn update_straighten_opens_level_and_keeps_the_crop() {
+    use photo_cruiser_core::straighten::fit_scale;
+    use photo_cruiser_core::{EditStack, Op, Rect, Tool};
+    let size = |h: &iced::widget::image::Handle| match h {
+        iced::widget::image::Handle::Rgba { width, height, .. } => (*width, *height),
+        _ => panic!("not rgba"),
+    };
+    let mut s = opened(&fixtures().join("straighten")); // horizon.jpg, turned 3.4° clockwise
+    s.apply(&Action::ShowPhoto { index: Some(0) });
+    settle(&mut s);
+    // A crop made before straightening.
+    let house = Rect::new(170.0, 10.0, 130.0, 150.0);
+    s.apply(&Action::SetCrop(house));
+    s.apply(&Action::ApplyCrop);
+    settle(&mut s);
+    let cropped = EditStack::default().with(Op::Crop(house));
+    assert_eq!(s.stack(), cropped);
+
+    s.apply(&Action::OpenTool { tool: Tool::Straighten });
+    settle(&mut s);
+    let opening = s.tool.as_ref().unwrap().opening.unwrap();
+    assert!((opening + 3.4).abs() <= 0.5, "opens at {opening}");
+    assert_eq!((s.stack().adjust(Tool::Straighten), s.dirty()), (Some(opening), true));
+    // While it's open, the whole photo shows, turned and cut in the preview.
+    assert_eq!(s.picture().unwrap().source, (320, 240), "the whole photo");
+    let preview = size(&s.preview.as_ref().unwrap().handle);
+    let k = fit_scale(320.0, 240.0, opening);
+    assert_eq!(preview, ((320.0 * k).round() as u32, (240.0 * k).round() as u32));
+    s.apply(&Action::Undo);
+    assert_eq!(s.stack(), cropped, "opening is one step");
+    s.apply(&Action::Redo);
+    s.apply(&Action::SetAdjust { value: 12.0 });
+    s.apply(&Action::AutoAdjust);
+    assert_eq!(s.stack().adjust(Tool::Straighten), Some(opening), "double-click: auto");
+    s.apply(&Action::NeutralAdjust);
+    assert_eq!(s.stack(), cropped, "0° is no step");
+    s.apply(&Action::SetAdjust { value: 30.0 });
+    s.apply(&Action::CancelTool);
+    assert!(s.tool.is_none() && s.stack() == cropped, "Esc: as before the tool opened");
+    settle(&mut s);
+    assert_eq!(s.picture().unwrap().source, (130, 150), "the crop is back");
+
+    // Done: the crop shows straightened, at the photo's resolution.
+    s.apply(&Action::OpenTool { tool: Tool::Straighten });
+    settle(&mut s);
+    s.apply(&Action::CloseTool);
+    settle(&mut s);
+    let p = s.picture().unwrap();
+    assert_eq!(p.source, (130, 150));
+    assert_eq!(size(&p.handle), ((130.0 * k).round() as u32, (150.0 * k).round() as u32));
+
+    // A crop made after: on the straightened photo, which crop mode shows whole.
+    s.apply(&Action::ToggleCrop);
+    settle(&mut s);
+    assert_eq!(s.picture().unwrap().source, (320, 240));
+    let (w, h) = size(&s.picture().unwrap().handle);
+    assert_eq!((w, h), ((320.0 * k).round() as u32, (240.0 * k).round() as u32), "straightened");
+    s.apply(&Action::SetCrop(Rect::new(0.0, 100.0, 320.0, 140.0)));
+    s.apply(&Action::ApplyCrop);
+    settle(&mut s);
+    assert_eq!(s.stack().crop(), Some(Rect::new(0.0, 100.0, 320.0, 140.0)));
+    assert_eq!(s.stack().adjust(Tool::Straighten), Some(opening));
+    assert_eq!(size(&s.picture().unwrap().handle), ((320.0 * k).round() as u32, (140.0 * k).round() as u32));
+    assert!(s.errors.is_empty(), "{:?}", s.errors);
+}
+
+#[test]
 fn tool_keys() {
     use crate::crop_overlay::key_message;
     use iced::keyboard::Modifiers;
@@ -2048,15 +2119,19 @@ fn tool_keys() {
         Action::OpenTool { tool: Tool::Vignette }
     );
     assert_eq!(
+        action(Key::Character("q".into()), Modes::default()),
+        Action::OpenTool { tool: Tool::Straighten }
+    );
+    assert_eq!(
         key_message(
-            &Key::Character("q".into()),
-            &Key::Character("q".into()),
+            &Key::Character("y".into()),
+            &Key::Character("y".into()),
             Modifiers::empty(),
             Modes::default()
         )
         .map(|_| ()),
         None,
-        "Q is free"
+        "Y is free"
     );
     assert_eq!(action(Key::Named(Named::Escape), tool), Action::CancelTool);
     let shift_a =

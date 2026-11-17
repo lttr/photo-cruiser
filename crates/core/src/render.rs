@@ -1,8 +1,9 @@
 //! CPU reference pipeline: decoded pixels + edit stack → output pixels. This
-//! implementation defines correctness; a GPU preview must match it. The geometry (crop,
-//! rotation) comes first, in stack order, then the adjustments ([`crate::adjust`]), then
-//! the downscale to `max_side`.
+//! implementation defines correctness; a GPU preview must match it. The geometry
+//! (straightening, crop, rotation) comes first, the crop and the rotation in stack order,
+//! then the adjustments ([`crate::adjust`]), then the downscale to `max_side`.
 
+use crate::adjust::Tool;
 use crate::decode::Decoded;
 use crate::edit::{EditStack, Op};
 use crate::{Error, Result};
@@ -19,13 +20,22 @@ pub struct RenderOpts {
 /// image is [`Error::EmptyCrop`]; a partial overlap is clamped.
 pub fn render(src: &Decoded, edits: &EditStack, opts: RenderOpts) -> Result<RgbaImage> {
     let k = 1.0 / src.source_scale();
-    let mut img = src.image.clone();
+    // Straightening keeps the photo's frame, and the crop is a part of it
+    // ([`crate::straighten`]): one resampling for both.
+    let angle = edits.adjust(Tool::Straighten).unwrap_or(0.0);
+    let mut img = match angle != 0.0 && edits.crop().is_none() {
+        true => crate::straighten::apply(&src.image, angle),
+        false => src.image.clone(),
+    };
     for op in &edits.ops {
         match op {
             Op::Crop(r) => {
                 let scaled = crate::Rect::new(r.x * k, r.y * k, r.w * k, r.h * k);
                 let p = scaled.to_pixels(img.dimensions()).ok_or(Error::EmptyCrop(*r))?;
-                img = image::imageops::crop_imm(&img, p.x, p.y, p.w, p.h).to_image();
+                img = match angle == 0.0 {
+                    true => image::imageops::crop_imm(&img, p.x, p.y, p.w, p.h).to_image(),
+                    false => crate::straighten::render(&img, angle, p.into()),
+                };
             }
             Op::Rotate { quarters } => {
                 img = match quarters % 4 {
@@ -100,6 +110,38 @@ mod tests {
         Tool::Exposure.apply(&mut expected, 1.0);
         assert_eq!(out, expected);
         assert_ne!(out.get_pixel(0, 0).0, [10, 20, 0, 255]);
+    }
+
+    #[test]
+    fn straighten_before_the_crop() {
+        use crate::straighten::{self, fit_scale};
+        let mut stack = EditStack::default();
+        stack.set_adjust(Tool::Straighten, Some(-6.0));
+        let whole = render(&gradient(100, 100), &stack, RenderOpts::default()).unwrap();
+        assert_eq!(whole, straighten::apply(&gradient(100, 100).image, -6.0));
+        // A crop of the straightened frame, made before or after: its part of it.
+        let s = fit_scale(100.0, 100.0, -6.0);
+        for r in [Rect::new(0.0, 0.0, 30.0, 40.0), Rect::new(60.0, 50.0, 40.0, 50.0)] {
+            stack.set_crop(Some(r));
+            let out = render(&gradient(100, 100), &stack, RenderOpts::default()).unwrap();
+            assert_eq!(out.dimensions(), ((r.w * s).round() as u32, (r.h * s).round() as u32));
+            assert_eq!(out, straighten::render(&gradient(100, 100).image, -6.0, r));
+        }
+        // The turn comes after: a quarter turn of the straightened crop.
+        stack.rotate(1);
+        let turned = render(&gradient(100, 100), &stack, RenderOpts::default()).unwrap();
+        let r = Rect::new(60.0, 50.0, 40.0, 50.0);
+        assert_eq!(
+            turned,
+            image::imageops::rotate90(&straighten::render(&gradient(100, 100).image, -6.0, r))
+        );
+        // On a downscaled source, the crop is mapped like without straightening.
+        stack.rotate(-1);
+        let d = gradient(200, 200).downscale(100);
+        assert_eq!(render(&d, &stack, RenderOpts::default()).unwrap().dimensions(), {
+            let half = Rect::new(30.0, 25.0, 20.0, 25.0);
+            ((half.w * s).round() as u32, (half.h * s).round() as u32)
+        });
     }
 
     #[test]

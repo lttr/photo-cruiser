@@ -17,6 +17,10 @@ use std::sync::OnceLock;
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum Tool {
+    /// Turns the photo by a small angle, −45…45° (clockwise positive), and cuts off the
+    /// empty corners ([`crate::straighten`]). Geometry: [`render`](crate::render::render)
+    /// does it before the crop, not [`apply_all`].
+    Straighten,
     /// Auto levels at a strength, 0–2: per channel, the darkest and brightest pixels
     /// become black and white. For photos of documents.
     Levels,
@@ -55,7 +59,8 @@ pub enum Tool {
 pub const MIDDLE_GREY: f32 = 0.1842;
 
 impl Tool {
-    /// Every tool, in the order they are applied (the enum's order). Levels comes before
+    /// Every tool, in the order they are applied (the enum's order). Straighten is part of
+    /// the geometry, so it comes first. Levels comes before
     /// exposure: it stretches each channel to the full range, so it would undo an exposure
     /// done before it. Warmth comes after levels, which would neutralise it per channel.
     /// Dehaze comes before exposure: it measures the haze against the brightest haze.
@@ -64,7 +69,8 @@ impl Tool {
     /// Contrast comes after both, as darktable's sigmoid does: it shapes the finished tones.
     /// Colour comes after them: its masks go by brightness. Sharpen comes next, on the
     /// finished tones. Vignette comes last, on the finished picture.
-    pub const ALL: [Tool; 10] = [
+    pub const ALL: [Tool; 11] = [
+        Tool::Straighten,
         Tool::Levels,
         Tool::Warmth,
         Tool::Dehaze,
@@ -79,6 +85,7 @@ impl Tool {
 
     pub fn label(self) -> &'static str {
         match self {
+            Tool::Straighten => "Straighten",
             Tool::Levels => "Auto levels",
             Tool::Warmth => "Warmth",
             Tool::Dehaze => "Dehaze",
@@ -99,6 +106,7 @@ impl Tool {
             Tool::ShadowsHighlights | Tool::Dehaze | Tool::Sharpen => 0.0..=1.0,
             Tool::LocalContrast | Tool::Contrast => 1.0..=2.0,
             Tool::Vignette => -1.0..=1.0,
+            Tool::Straighten => -45.0..=45.0,
             Tool::Exposure | Tool::Warmth => -2.0..=2.0,
         }
     }
@@ -106,7 +114,8 @@ impl Tool {
     /// The value that changes nothing.
     pub fn neutral(self) -> f32 {
         match self {
-            Tool::Levels
+            Tool::Straighten
+            | Tool::Levels
             | Tool::Warmth
             | Tool::Dehaze
             | Tool::Exposure
@@ -128,6 +137,7 @@ impl Tool {
             Tool::Warmth | Tool::Vignette => format!("{value:+.2}"),
             Tool::Colour => format!("{value:.2}×"),
             Tool::LocalContrast => format!("{:.0}%", value * 100.0),
+            Tool::Straighten => format!("{value:+.2}°"),
         }
     }
 
@@ -150,7 +160,8 @@ impl Tool {
     /// "medium"; dehaze at 0.2, darktable's default; local contrast at 1.25, darktable's
     /// default detail; contrast at 1.2, near sigmoid's "neutral gray" preset (1.22); colour
     /// at 1, the preset as darktable has it. Sharpen at 0.5, darktable's default amount;
-    /// vignette at −0.5, darktable's default.
+    /// vignette at −0.5, darktable's default; straighten at the angle that levels the
+    /// photo's lines.
     /// Rounded to 0.01.
     pub fn opening(self, img: &RgbaImage) -> f32 {
         let v = match self {
@@ -163,12 +174,14 @@ impl Tool {
             Tool::Contrast => 1.2,
             Tool::Sharpen => 0.5,
             Tool::Vignette => -0.5,
+            Tool::Straighten => crate::straighten::detect(img),
         };
         // `+ 0.0`: no "-0.00".
         (self.clamp(v) * 100.0).round() / 100.0 + 0.0
     }
 
     /// Apply the tool at `value` (clamped to its range) to `img`, a full-size render, in place.
+    /// Straighten replaces it with the straightened image, which is smaller.
     pub fn apply(self, img: &mut RgbaImage, value: f32) {
         self.apply_at(img, value, 1.0)
     }
@@ -194,6 +207,7 @@ impl Tool {
             Tool::Colour => crate::colour::apply(img, value),
             Tool::Sharpen => crate::sharpen::apply(img, value, scale),
             Tool::Vignette => crate::vignette::apply(img, value),
+            Tool::Straighten => *img = crate::straighten::apply(img, value),
         }
     }
 }
@@ -210,16 +224,30 @@ impl std::str::FromStr for Tool {
     }
 }
 
-/// `tool`'s opening value for `src` with `stack`'s geometry, as the app measures it.
+/// `tool`'s opening value for `src` with `stack`'s geometry, as the app measures it (on
+/// [`EditStack::geometry_for`]).
 pub fn opening(src: &crate::Decoded, stack: &EditStack, tool: Tool) -> crate::Result<f32> {
-    let img = crate::render::render(src, &stack.geometry(), Default::default())?;
+    let img = crate::render::render(src, &stack.geometry_for(tool), Default::default())?;
     Ok(tool.opening(&img))
 }
 
+/// `stack` applied to `base`, the photo with [`EditStack::geometry_for`] `tool`, rendered
+/// at `scale` of the full-size photo: what the geometry left out (the straightening, for
+/// Straighten), then the adjustments.
+pub fn preview(base: &RgbaImage, stack: &EditStack, tool: Tool, scale: f32) -> RgbaImage {
+    let mut img = base.clone();
+    if let (Tool::Straighten, Some(v)) = (tool, stack.adjust(Tool::Straighten)) {
+        Tool::Straighten.apply(&mut img, v);
+    }
+    apply_all(&mut img, stack, scale);
+    img
+}
+
 /// Apply every adjustment of `stack` to `img`, rendered at `scale` of the full-size photo
-/// (1: full size), in [`Tool::ALL`] order.
+/// (1: full size), in [`Tool::ALL`] order. Straighten isn't one: it's done with the
+/// geometry.
 pub fn apply_all(img: &mut RgbaImage, stack: &EditStack, scale: f32) {
-    for tool in Tool::ALL {
+    for tool in Tool::ALL.into_iter().filter(|t| *t != Tool::Straighten) {
         if let Some(v) = stack.adjust(tool) {
             tool.apply_at(img, v, scale);
         }
@@ -381,10 +409,24 @@ impl EditStack {
         })
     }
 
-    /// The stack without its adjustments: what decides the photo's shape.
+    /// The stack without its adjustments, except Straighten: what decides the photo's
+    /// shape.
     pub fn geometry(&self) -> EditStack {
-        let ops = self.ops.iter().filter(|op| !matches!(op, Op::Adjust { .. })).cloned().collect();
+        let shape = |op: &&Op| !matches!(op, Op::Adjust { tool, .. } if *tool != Tool::Straighten);
+        let ops = self.ops.iter().filter(shape).cloned().collect();
         EditStack { ops, ..self.clone() }
+    }
+
+    /// The geometry `tool` opens on, measures its opening value on and previews from:
+    /// [`EditStack::geometry`], but for Straighten without the straightening and the crop
+    /// (it shows the whole photo, levelled as it turns).
+    pub fn geometry_for(&self, tool: Tool) -> EditStack {
+        let mut g = self.geometry();
+        if tool == Tool::Straighten {
+            g.set_crop(None);
+            g.set_adjust(Tool::Straighten, None);
+        }
+        g
     }
 }
 
@@ -540,7 +582,7 @@ mod tests {
         assert_eq!((s.adjust(Tool::Exposure), s.ops.len()), (None, 2), "neutral is no step");
         assert_eq!("exposure".parse::<Tool>(), Ok(Tool::Exposure));
         assert!("blur".parse::<Tool>().unwrap_err().contains(
-            "one of levels, warmth, dehaze, exposure, shadows_highlights, local_contrast, contrast, colour, sharpen, vignette"
+            "one of straighten, levels, warmth, dehaze, exposure, shadows_highlights, local_contrast, contrast, colour, sharpen, vignette"
         ));
         assert_eq!("color".parse::<Tool>(), Ok(Tool::Colour));
         // Levels goes before exposure, whatever order they're set in.
