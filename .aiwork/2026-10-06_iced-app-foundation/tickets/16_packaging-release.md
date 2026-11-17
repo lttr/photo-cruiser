@@ -13,4 +13,4 @@ references:
 
 - [ ] A tagged release produces installable artifacts for Linux, Windows and macOS
 - [ ] Each artifact opens HEIC and AVIF on a clean machine
-- [ ] Licence decided and included (open question in the spec; MIT OR Apache-2.0 is the current placeholder)
+- [x] Licence decided and included (open question in the spec; MIT OR Apache-2.0 is the current placeholder)

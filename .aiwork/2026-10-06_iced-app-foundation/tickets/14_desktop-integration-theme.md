@@ -11,6 +11,6 @@ references:
 
 ## Acceptance criteria
 
-- [ ] A documented install step puts the `.desktop` file and icon in place; the running window is associated with it
+- [x] A documented install step puts the `.desktop` file and icon in place; the running window is associated with it
 - [ ] Switching COSMIC dark/light or accent updates the open app without restart
 - [ ] `just verify` green

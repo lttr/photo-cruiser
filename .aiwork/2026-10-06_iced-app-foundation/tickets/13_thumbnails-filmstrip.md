@@ -11,7 +11,7 @@ references:
 
 ## Acceptance criteria
 
-- [ ] Clicking a thumbnail goes to that photo; the current photo is highlighted
+- [x] Clicking a thumbnail goes to that photo; the current photo is highlighted
 - [ ] Cache location and invalidation (file size/mtime) are documented; a second visit to a folder skips regeneration
 - [ ] Holding → still feels instant on a 50+ photo folder
 - [ ] `just verify` green

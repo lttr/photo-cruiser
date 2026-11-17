@@ -1,9 +1,14 @@
 ---
-status: ready
+status: abandoned
+superseded_by:
+  - ../../2026-10-12_adjust-tools/tickets/10_contrast.md
+  - ../../2026-10-12_adjust-tools/tickets/08_sharpen.md
 blocked_by: [03]
 references:
   - "Spec: ../spec.md"
 ---
+
+Superseded by the one-slider tools Contrast (adjust-tools 10) and Sharpen (adjust-tools 08).
 
 # 04 — Contrast and sharpen
 

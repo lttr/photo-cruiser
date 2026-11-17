@@ -11,7 +11,7 @@ references:
 
 ## Acceptance criteria
 
-- [ ] Decode goes through `Source`; all existing tests still pass
+- [x] Decode goes through `Source`; all existing tests still pass
 - [ ] `pcr list smb://…` and `photo-cruiser smb://…` work on a reachable share; an unreachable share gives a clear error
-- [ ] Browsing a share stays responsive (one decode in flight still holds)
+- [x] Browsing a share stays responsive (one decode in flight still holds)
 - [ ] `just verify` green

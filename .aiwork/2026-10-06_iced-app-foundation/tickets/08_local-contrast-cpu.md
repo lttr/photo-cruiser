@@ -1,9 +1,12 @@
 ---
-status: ready
+status: abandoned
+superseded_by: ../../2026-10-12_adjust-tools/tickets/03_local-contrast.md
 blocked_by: [03]
 references:
   - "Spec: ../spec.md"
 ---
+
+Superseded by ../../2026-10-12_adjust-tools/tickets/03_local-contrast.md.
 
 # 08 — Local contrast (CPU)
 
