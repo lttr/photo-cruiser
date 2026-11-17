@@ -1,5 +1,6 @@
 ---
 status: done
+verified: [behaviour]
 blocked_by: [01, 03]
 references:
   - "Research: ../research.md"
@@ -16,6 +17,13 @@ references:
 - [x] Available from the command palette; works the same through `pcr` (edits JSON, render, save)
 - [x] Unit test in core for the pixel math; a render golden image
 - [x] `just verify` passes; headless shot shows the effect
+
+## Verification (behaviour)
+
+- `just verify` passed on e4dc4cc: `verify ok`, including `verify-shadows-highlights.png` (state: 0.45 = opening after Auto).
+- Headless real window, palette query "shadows": one row, "Shadows & highlights" with key `T`. Activating it opens the tool at 0.45, and the state is dirty with no errors.
+- Measured in the shots before and after (`adjust/window.jpg`): the wall at (160,100) goes from sRGB ~32 to ~60, and the wall next to the window (195,100) is ~58. That's within 3 levels of the far wall, so no halo. The sky goes from (214,231,247) to (190,205,220).
+- Undo, Esc, Auto and No change: `update_shadows_highlights_opens_at_medium`. `T` key: `tool_keys`. No halos: `tones::lifts_shadows_without_halos` and the golden test `shadows_highlights_on_a_backlit_room`.
 
 ## Notes
 

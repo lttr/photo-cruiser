@@ -1,5 +1,6 @@
 ---
 status: done
+verified: [behaviour]
 blocked_by: [01]
 references:
   - "Research: ../research.md"
@@ -16,6 +17,13 @@ references:
 - [x] Available from the command palette; works the same through `pcr` (edits JSON, render, save)
 - [x] Unit test in core for the pixel math; a render golden image
 - [x] `just verify` passes; headless shot shows the effect
+
+## Verification (behaviour)
+
+- `just verify` passed on 2fa143f/e4dc4cc: `verify ok`, including `verify-warmth.png` (state: warmth step < −0.5, value == opening after Auto).
+- Headless real window, palette (`toggle_palette`, query "warmth", activate) on `adjust/warm-cast.jpg`: the state shows the warmth step at −0.60 = opening, dirty, no errors. In the shot, the wall at fixture (40,10) measured (110,112,112), from (122,111,93) in the original: neutral.
+- The app (script and palette), a direct run and `pcr render --adjust warmth` all open at −0.60.
+- Undo, Esc, Auto and No change: `update_warmth_opens_at_grey_world` (app state test). `W` key: `tool_keys`.
 
 ## Notes
 
